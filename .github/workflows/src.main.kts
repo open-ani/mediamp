@@ -205,7 +205,7 @@ val matrixInstances = listOf(
         runsOn = listOf("self-hosted", "Windows", "X64"),
         os = OS.WINDOWS,
         arch = Arch.X64,
-        selfHosted = true,
+        selfHosted = false,
         uploadApk = false,
         buildAnitorrent = true,
         buildAnitorrentSeparately = false, // windows 单线程构建 anitorrent, 要一起跑节约时间
@@ -257,7 +257,7 @@ val matrixInstances = listOf(
         runsOn = listOf("self-hosted", "macOS", "ARM64"),
         os = OS.MACOS,
         arch = Arch.AARCH64,
-        selfHosted = true,
+        selfHosted = false,
         uploadApk = true, // upload arm64-v8a once finished
         buildAnitorrent = true,
         buildAnitorrentSeparately = true,
@@ -298,7 +298,7 @@ workflow(
     ) {
         uses(action = Checkout(submodules_Untyped = "recursive"))
 
-        freeSpace()
+//        freeSpace()
         installJbr21()
         installNativeDeps()
         chmod777()
