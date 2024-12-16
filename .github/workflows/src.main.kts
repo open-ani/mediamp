@@ -637,12 +637,6 @@ fun JobBuilder<*>.setupGradle() {
 }
 
 fun JobBuilder<*>.compileAndAssemble() {
-    // 备注: 这个可能已经不需要了, Compose 可能已经修复了这个 bug
-    runGradle(
-        name = "Explicitly generate Compose resources",
-        tasks = ["updateDevVersionNameFromGit"],
-    )
-
     runGradle(
         name = "Compile Kotlin",
         tasks = [

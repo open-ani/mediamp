@@ -200,12 +200,9 @@ jobs:
           max_attempts: '3'
           command: './gradlew ${{ matrix.gradleArgs }}'
       - id: 'step-13'
-        name: 'Explicitly generate Compose resources'
-        run: './gradlew updateDevVersionNameFromGit ${{ matrix.gradleArgs }}'
-      - id: 'step-14'
         name: 'Compile Kotlin'
         run: './gradlew compileKotlin compileCommonMainKotlinMetadata compileDebugKotlinAndroid compileReleaseKotlinAndroid compileJvmMainKotlinMetadata compileKotlinDesktop compileKotlinMetadata ${{ matrix.gradleArgs }}'
-      - id: 'step-15'
+      - id: 'step-14'
         name: 'Check'
         uses: 'nick-fields/retry@v2'
         with:
