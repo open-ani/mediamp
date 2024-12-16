@@ -11,7 +11,7 @@ plugins {
 kotlin {
     explicitApi()
     sourceSets.commonMain.dependencies {
-        implementation(libs.kotlinx.io.core)
+        implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
         implementation(libs.kotlinx.coroutines.core)
     }
     sourceSets.commonTest.dependencies {

@@ -6,7 +6,7 @@ import java.io.RandomAccessFile
 
 
 /**
- * Adapts this [RandomAccessFile] to a [SeekableInput].
+ * Opens this file as [SeekableInput].
  *
  * File reads are buffered.
  *

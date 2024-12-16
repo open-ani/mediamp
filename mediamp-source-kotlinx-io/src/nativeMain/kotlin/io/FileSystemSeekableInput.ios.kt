@@ -1,8 +1,6 @@
 package org.openani.mediamp.io
 
 import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
-import java.io.File
 
 /**
  * Opens a [SeekableInput] for the specified [path] using the [kotlinx.io.files.SystemFileSystem].
@@ -13,5 +11,6 @@ public actual fun SystemFileSeekableInput(
     path: Path,
     bufferSize: Int,
     onFillBuffer: (() -> Unit)?,
-): SeekableInput = File(SystemFileSystem.resolve(path).toString())
-    .toSeekableInput(bufferSize, onFillBuffer)
+): SeekableInput {
+    TODO("SystemFileSeekableInput for ios")
+}

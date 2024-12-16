@@ -7,19 +7,18 @@
  * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
-package org.openani.mediamp
+package org.openani.mediamp.source
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import org.openani.mediamp.MediampInternalApi
 import org.openani.mediamp.io.SeekableInput
-import org.openani.mediamp.source.MediaExtraFiles
-import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoSource
 import kotlin.coroutines.CoroutineContext
 
 public open class HttpStreamingVideoSource(
     override val uri: String,
     private val filename: String,
+    public val headers: Map<String, String> = emptyMap(),
     override val extraFiles: MediaExtraFiles,
 ) : VideoSource<HttpStreamingVideoData> {
     override suspend fun open(): HttpStreamingVideoData {
@@ -38,7 +37,8 @@ public class HttpStreamingVideoData(
 ) : VideoData {
     override fun fileLength(): Long? = null
 
-    override val networkStats: Flow<VideoData.Stats> = flowOf(VideoData.Stats.Unspecified)
+    @OptIn(MediampInternalApi::class)
+    override val networkStats: Flow<NetStats> = flowOf(NetStats(0, 0))
 
     override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput {
         throw UnsupportedOperationException()

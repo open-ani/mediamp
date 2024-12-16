@@ -7,13 +7,17 @@
  * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
+@file:kotlin.OptIn(MediampInternalApi::class)
+
 package org.openani.mediamp
 
+import android.content.Context
 import android.net.Uri
 import android.util.Pair
 import androidx.annotation.MainThread
 import androidx.annotation.OptIn
 import androidx.annotation.UiThread
+import androidx.compose.runtime.Stable
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -30,50 +34,55 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.trackselection.TrackSelection
-import kotlinx.collections.immutable.persistentListOf
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.him188.ani.app.platform.Context
-import me.him188.ani.app.tools.MonoTasker
-import me.him188.ani.utils.logging.error
+import org.openani.mediamp.core.metadata.MutableTrackGroup
 import org.openani.mediamp.core.state.AbstractPlayerState
+import org.openani.mediamp.core.state.MediaPlayerAudioController
 import org.openani.mediamp.core.state.PlaybackState
 import org.openani.mediamp.core.state.PlayerState
 import org.openani.mediamp.core.state.PlayerStateFactory
 import org.openani.mediamp.media.VideoDataDataSource
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
-import org.openani.mediamp.metadata.MutableTrackGroup
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
+import org.openani.mediamp.metadata.VideoProperties
+import org.openani.mediamp.source.HttpStreamingVideoSource
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoProperties
 import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration.Companion.seconds
 
-
-class ExoPlayerStateFactory : PlayerStateFactory {
+class ExoPlayerStateFactory : PlayerStateFactory<Context> {
     @OptIn(UnstableApi::class)
     override fun create(context: Context, parentCoroutineContext: CoroutineContext): PlayerState =
         ExoPlayerState(context, parentCoroutineContext)
 }
 
 
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, MediampInternalApi::class)
 internal class ExoPlayerState @UiThread constructor(
     context: Context,
-    parentCoroutineContext: CoroutineContext
+    parentCoroutineContext: CoroutineContext,
 ) : AbstractPlayerState<ExoPlayerState.ExoPlayerData>(parentCoroutineContext),
     AutoCloseable {
     class ExoPlayerData(
@@ -105,7 +114,7 @@ internal class ExoPlayerState @UiThread constructor(
                 emptyVideoData(),
                 releaseResource = {},
                 setMedia = {
-                    val headers = source.webVideo.headers
+                    val headers = source.headers
                     val item = MediaItem.Builder().apply {
                         setUri(source.uri)
                         setSubtitleConfigurations(
@@ -253,7 +262,8 @@ internal class ExoPlayerState @UiThread constructor(
 
                     override fun onPlayerError(error: PlaybackException) {
                         state.value = PlaybackState.ERROR
-                        logger.warn("ExoPlayer error: ${error.errorCodeName}", error)
+                        println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
+                        error.printStackTrace()
                     }
 
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -370,14 +380,15 @@ internal class ExoPlayerState @UiThread constructor(
     }
 
     override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
-
     override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
+    override val audioController: MediaPlayerAudioController?
+        get() = TODO("Not yet implemented")
 
     override fun saveScreenshotFile(filename: String) {
         TODO("Not yet implemented")
     }
 
-    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(persistentListOf())
+    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
     override fun getExactCurrentPositionMillis(): Long = player.currentPosition
@@ -414,13 +425,12 @@ internal class ExoPlayerState @UiThread constructor(
 
     override fun closeImpl() {
         @kotlin.OptIn(DelicateCoroutinesApi::class)
-        GlobalScope.launch(Dispatchers.Main) {
+        GlobalScope.launch(Dispatchers.Main + NonCancellable) {
             try {
                 player.stop()
                 player.release()
-                logger.info("ExoPlayer $player released")
             } catch (e: Throwable) {
-                logger.error(e) { "Failed to release ExoPlayer $player, ignoring" }
+                e.printStackTrace() // TODO: 2024/12/16
             }
         }
     }
@@ -429,3 +439,119 @@ internal class ExoPlayerState @UiThread constructor(
         player.setPlaybackSpeed(speed)
     }
 }
+
+@Stable
+private interface MonoTasker {
+    val isRunning: StateFlow<Boolean>
+
+    fun launch(
+        context: CoroutineContext = EmptyCoroutineContext,
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        block: suspend CoroutineScope.() -> Unit
+    ): Job
+
+    fun <R> async(
+        context: CoroutineContext = EmptyCoroutineContext,
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        block: suspend CoroutineScope.() -> R,
+    ): Deferred<R>
+
+    /**
+     * 等待上一个任务完成后再执行
+     */
+    fun launchNext(
+        context: CoroutineContext = EmptyCoroutineContext,
+        start: CoroutineStart = CoroutineStart.DEFAULT,
+        block: suspend CoroutineScope.() -> Unit
+    )
+
+    fun cancel(cause: CancellationException? = null)
+
+    suspend fun cancelAndJoin()
+
+    suspend fun join()
+}
+
+private fun MonoTasker(
+    scope: CoroutineScope
+): MonoTasker = object : MonoTasker {
+    var job: Job? = null
+
+    private val _isRunning = MutableStateFlow(false)
+    override val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+
+    override fun launch(
+        context: CoroutineContext,
+        start: CoroutineStart,
+        block: suspend CoroutineScope.() -> Unit
+    ): Job {
+        job?.cancel()
+        val newJob = scope.launch(context, start, block).apply {
+            invokeOnCompletion {
+                if (job === this) {
+                    _isRunning.value = false
+                }
+            }
+        }.also { job = it }
+        _isRunning.value = true
+
+        return newJob
+    }
+
+    override fun <R> async(
+        context: CoroutineContext,
+        start: CoroutineStart,
+        block: suspend CoroutineScope.() -> R
+    ): Deferred<R> {
+        job?.cancel()
+        val deferred = scope.async(context, start, block).apply {
+            invokeOnCompletion {
+                if (job === this) {
+                    _isRunning.value = false
+                }
+            }
+        }
+        job = deferred
+        _isRunning.value = true
+        return deferred
+    }
+
+    override fun launchNext(
+        context: CoroutineContext,
+        start: CoroutineStart,
+        block: suspend CoroutineScope.() -> Unit
+    ) {
+        val existingJob = job
+        job = scope.launch(context, start) {
+            try {
+                existingJob?.join()
+                block()
+            } catch (e: CancellationException) {
+                existingJob?.cancel()
+                throw e
+            }
+        }.apply {
+            invokeOnCompletion {
+                if (job === this) {
+                    _isRunning.value = false
+                }
+            }
+        }
+        _isRunning.value = true
+    }
+
+    override fun cancel(cause: CancellationException?) {
+        job?.cancel(cause) // use completion handler to set _isRunning to false
+    }
+
+    override suspend fun cancelAndJoin() {
+        job?.run {
+            join()
+        }
+    }
+
+    override suspend fun join() {
+        job?.join()
+    }
+}
+

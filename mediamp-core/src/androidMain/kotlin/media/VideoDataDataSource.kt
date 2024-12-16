@@ -80,7 +80,7 @@ class VideoDataDataSource(
             opened = true
         }
 
-        val torrentLength = videoData.fileLength
+        val torrentLength = videoData.fileLength() ?: 0
 
         if (ENABLE_TRACE_LOG) log { "torrentLength = $torrentLength" }
 

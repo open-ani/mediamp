@@ -7,6 +7,8 @@
  * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
+@file:OptIn(MediampInternalApi::class)
+
 package org.openani.mediamp.core
 
 import androidx.compose.foundation.Canvas
@@ -22,7 +24,6 @@ import androidx.compose.ui.unit.IntSize
 import com.sun.jna.platform.win32.KnownFolders
 import com.sun.jna.platform.win32.Shell32
 import com.sun.jna.ptr.PointerByReference
-import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -30,6 +31,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -37,8 +39,9 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.openani.mediamp.HttpStreamingVideoSource
+import org.openani.mediamp.MediampInternalApi
 import org.openani.mediamp.core.VlcjVideoPlayerState.VlcjData
+import org.openani.mediamp.core.metadata.MutableTrackGroup
 import org.openani.mediamp.core.state.AbstractPlayerState
 import org.openani.mediamp.core.state.MediaPlayerAudioController
 import org.openani.mediamp.core.state.PlaybackState
@@ -46,11 +49,12 @@ import org.openani.mediamp.core.state.PlayerState
 import org.openani.mediamp.io.SeekableInputCallbackMedia
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
-import org.openani.mediamp.metadata.MutableTrackGroup
 import org.openani.mediamp.metadata.SubtitleTrack
+import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
+import org.openani.mediamp.metadata.VideoProperties
+import org.openani.mediamp.source.HttpStreamingVideoSource
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoProperties
 import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.emptyVideoData
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
@@ -67,6 +71,7 @@ import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.locks.ReentrantLock
+import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
 import kotlin.contracts.contract
 import kotlin.coroutines.CoroutineContext
@@ -76,7 +81,7 @@ import kotlin.math.roundToInt
 
 @Stable
 class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerState,
-    AbstractPlayerState<VlcjData>(parentCoroutineContext), MediaPlayerAudioController {
+    AbstractPlayerState<VlcjData>(parentCoroutineContext) {
     companion object {
         private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
         fun prepareLibraries() {
@@ -85,6 +90,8 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 CallbackMediaPlayerComponent().release()
             }
         }
+
+        private val logger = Logger
     }
 
     //    val mediaPlayerFactory = MediaPlayerFactory(
@@ -139,7 +146,8 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         }
     }
 
-    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
+    private val _chapters = MutableStateFlow<List<Chapter>>(emptyList())
+    override val chapters: StateFlow<List<Chapter>> = _chapters.asStateFlow()
 
     class VlcjData(
         override val videoSource: VideoSource<*>,
@@ -158,8 +166,8 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                     player.media().play(
                         source.uri,
                         *buildList {
-                            add("http-user-agent=${source.webVideo.headers["User-Agent"] ?: "Mozilla/5.0"}")
-                            val referer = source.webVideo.headers["Referer"]
+                            add("http-user-agent=${source.headers["User-Agent"] ?: "Mozilla/5.0"}")
+                            val referer = source.headers["Referer"]
                             if (referer != null) {
                                 add("http-referrer=${referer}")
                             }
@@ -248,32 +256,38 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
     }
 
     override val playbackSpeed: MutableStateFlow<Float> = MutableStateFlow(1.0f)
-    override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
-    override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
 
-    override val volume: MutableStateFlow<Float> = MutableStateFlow(1f)
-    override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
-    override val maxValue: Float = 2f
+    private val _subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
+    override val subtitleTracks: TrackGroup<SubtitleTrack> = _subtitleTracks
 
-    override fun toggleMute(mute: Boolean?) {
-        if (player.audio().isMute == mute) {
-            return
+    private val _audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
+    override val audioTracks: TrackGroup<AudioTrack> = _audioTracks
+
+    override val audioController: MediaPlayerAudioController = object : MediaPlayerAudioController {
+        override val volume: MutableStateFlow<Float> = MutableStateFlow(1f)
+        override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
+        override val maxValue: Float = 2f
+
+        override fun toggleMute(mute: Boolean?) {
+            if (player.audio().isMute == mute) {
+                return
+            }
+            isMute.value = mute ?: !isMute.value
+            player.audio().mute()
         }
-        isMute.value = mute ?: !isMute.value
-        player.audio().mute()
-    }
 
-    override fun setVolume(volume: Float) {
-        this.volume.value = volume.coerceIn(0f, maxValue)
-        player.audio().setVolume(volume.times(100).roundToInt())
-    }
+        override fun setVolume(volume: Float) {
+            this.volume.value = volume.coerceIn(0f, maxValue)
+            player.audio().setVolume(volume.times(100).roundToInt())
+        }
 
-    override fun volumeUp(value: Float) {
-        setVolume(volume.value + value)
-    }
+        override fun volumeUp(value: Float) {
+            setVolume(volume.value + value)
+        }
 
-    override fun volumeDown(value: Float) {
-        setVolume(volume.value - value)
+        override fun volumeDown(value: Float) {
+            setVolume(volume.value - value)
+        }
     }
 
     init {
@@ -321,11 +335,11 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
 
                 override fun mediaPlayerReady(mediaPlayer: MediaPlayer?) {
                     player.submit {
-                        setVolume(volume.value)
-                        toggleMute(isMute.value)
+                        audioController.setVolume(audioController.volume.value)
+                        audioController.toggleMute(audioController.isMute.value)
                     }
 
-                    chapters.value = player.chapters().allDescriptions().flatMap { title ->
+                    _chapters.value = player.chapters().allDescriptions().flatMap { title ->
                         title.map {
                             Chapter(
                                 name = it.name(),
@@ -333,7 +347,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                                 offsetMillis = it.offset(),
                             )
                         }
-                    }.toImmutableList()
+                    }
                 }
 
                 override fun playing(mediaPlayer: MediaPlayer) {
@@ -467,14 +481,14 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 )
             }
         // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
-        if (subtitleTracks.candidates.value != newSubtitleTracks) {
-            subtitleTracks.candidates.value = newSubtitleTracks
-            subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
+        if (_audioTracks.candidates.value != newSubtitleTracks) {
+            _subtitleTracks.candidates.value = newSubtitleTracks
+            _subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
         }
     }
 
     private fun reloadAudioTracks() {
-        audioTracks.candidates.value = player.audio().trackDescriptions()
+        _audioTracks.candidates.value = player.audio().trackDescriptions()
             .filterNot { it.id() == -1 } // "Disable"
             .map {
                 AudioTrack(
@@ -517,7 +531,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 player.controls().setTime(positionMillis)
             }
         }
-        surface.allowedDrawFrames.value = 2 // 多渲染一帧, 防止 race 问题
+        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
     }
 
     override fun skip(deltaMillis: Long) {
@@ -532,7 +546,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 player.controls().skipTime(deltaMillis) // 采用当前 player 时间
             }
         }
-        surface.allowedDrawFrames.value = 2 // 多渲染一帧, 防止 race 问题
+        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
     }
 }
 
@@ -634,6 +648,7 @@ private class FrameSizeCalculator {
 }
 
 // add contract
+@OptIn(ExperimentalContracts::class)
 private inline fun <T> ReentrantLock.withLock(block: () -> T): T {
     contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
     lock()
@@ -641,5 +656,38 @@ private inline fun <T> ReentrantLock.withLock(block: () -> T): T {
         return block()
     } finally {
         unlock()
+    }
+}
+
+private object Logger {
+    inline fun trace(message: () -> String) {
+        println("INFO: ${message()}")
+    }
+
+    inline fun info(message: () -> String) {
+        println("INFO: ${message()}")
+    }
+
+    inline fun warn(message: () -> String) {
+        println("WARN: ${message()}")
+    }
+
+    fun warn(message: String, throwable: Throwable?) {
+        println("WARN: $message")
+        throwable?.printStackTrace()
+    }
+
+    inline fun warn(throwable: Throwable?, message: () -> String) {
+        println("WARN: ${message()}")
+        throwable?.printStackTrace()
+    }
+
+    inline fun error(message: () -> String) {
+        println("ERROR: ${message()}")
+    }
+
+    inline fun error(throwable: Throwable?, message: () -> String) {
+        println("ERROR: ${message()}")
+        throwable?.printStackTrace()
     }
 }

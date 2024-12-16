@@ -7,6 +7,8 @@
  * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
+@file:OptIn(MediampInternalApi::class)
+
 package org.openani.mediamp.core.state
 
 import androidx.annotation.UiThread
@@ -14,7 +16,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,22 +32,22 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import org.openani.mediamp.MediampInternalApi
 import org.openani.mediamp.core.MediaPlayer
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
+import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
-import org.openani.mediamp.source.FileVideoData
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoProperties
 import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.VideoSourceOpenException
-import kotlin.concurrent.Volatile
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -201,17 +202,15 @@ object CacheProgressStateFactoryManager {
     private val factories: MutableMap<KClass<*>, CacheProgressStateFactory<*>> =
         mutableMapOf()
 
-    fun <T : VideoData> register(kClass: KClass<T>, factory: CacheProgressStateFactory<T>) = synchronized(this) {
+    fun <T : VideoData> register(kClass: KClass<T>, factory: CacheProgressStateFactory<T>) {
         factories[kClass] = factory
     }
 
     fun create(videoData: VideoData, isCacheFinished: State<Boolean>): UpdatableMediaCacheProgressState? =
-        synchronized(this) {
-            return factories[videoData::class]?.let { factory ->
-                @Suppress("UNCHECKED_CAST")
-                factory as CacheProgressStateFactory<VideoData>
-                factory(videoData, isCacheFinished)
-            }
+        factories[videoData::class]?.let { factory ->
+            @Suppress("UNCHECKED_CAST")
+            factory as CacheProgressStateFactory<VideoData>
+            factory(videoData, isCacheFinished)
         }
 }
 
@@ -258,7 +257,7 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
         when (it) {
             null -> staticMediaCacheProgressState(ChunkState.NONE)
 
-            is FileVideoData -> staticMediaCacheProgressState(ChunkState.DONE)
+//            is FileVideoData -> staticMediaCacheProgressState(ChunkState.DONE)
 
             else ->
                 CacheProgressStateFactoryManager.create(it, isCacheFinishedState)
@@ -329,11 +328,10 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
     }
 
     fun closeVideoSource() {
-        synchronized(this) {
-            val value = openResource.value
-            openResource.value = null
-            value?.releaseResource?.invoke()
-        }
+        // TODO: 2024/12/16 proper synchronization?
+        val value = openResource.value
+        openResource.value = null
+        value?.releaseResource?.invoke()
     }
 
     final override fun stop() {
@@ -356,18 +354,12 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
     @Throws(VideoSourceOpenException::class, CancellationException::class)
     protected abstract suspend fun openSource(source: VideoSource<*>): D
 
-    @Volatile
-    private var closed = false
+    private val closed = MutableStateFlow(false)
     fun close() {
-        if (closed) return
-        synchronized(this) {
-            if (closed) return
-            closed = true
-
-            closeImpl()
-            closeVideoSource()
-            backgroundScope.cancel()
-        }
+        if (closed.getAndUpdate { true }) return // already closed
+        closeImpl()
+        closeVideoSource()
+        backgroundScope.cancel()
     }
 
     protected abstract fun closeImpl()

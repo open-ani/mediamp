@@ -1,4 +1,4 @@
-package org.openani.mediamp.core.gesture
+package gesture
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.PreviewLightDark

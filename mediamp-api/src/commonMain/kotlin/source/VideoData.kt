@@ -11,6 +11,8 @@ package org.openani.mediamp.source
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.io.IOException
+import org.openani.mediamp.MediampInternalApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.emptySeekableInput
 import kotlin.coroutines.CoroutineContext
@@ -20,37 +22,20 @@ import kotlin.coroutines.EmptyCoroutineContext
  * Holds information about a video file.
  */
 public interface VideoData {
-    public val filename: String // 会显示在 UI
+    public val filename: String
 
     /**
-     * Returns the length of the video file in bytes.
+     * Returns the length of the video file in bytes, or `null` if not known.
      */
+    @Throws(IOException::class)
     public fun fileLength(): Long?
 
-    public data class Stats(
-        /**
-         * The download speed in bytes per second.
-         *
-         * If the video data is not being downloaded, i.e. it is a local file,
-         * [downloadSpeed] will be  -1.
-         */
-        val downloadSpeed: Long,
+    /**
+     * Subscribe to network stats updates of this video data, if known.
+     */
+    public val networkStats: Flow<NetStats> // todo: remove networkStats
 
-        /**
-         * The upload speed in bytes per second.
-         *
-         * If this video data is not being uploaded, i.e. it is a local file,
-         * the flow emits [FileSize.Unspecified].
-         */
-        val uploadRate: Long,
-    ) {
-        public companion object {
-            public val Unspecified: Stats = Stats(-1, -1)
-        }
-    }
-
-    public val networkStats: Flow<Stats>
-
+    // TODO: 2024/12/16 remove isCacheFinished
     public val isCacheFinished: Flow<Boolean> get() = flowOf(false)
 
     /**
@@ -62,8 +47,27 @@ public interface VideoData {
      */
     public suspend fun createInput(coroutineContext: CoroutineContext = EmptyCoroutineContext): SeekableInput
 
-    public suspend fun close()
+    /**
+     * Closes the video data. // TODO: 2024/12/16 documentation
+     */
+    public suspend fun close() // TODO: 2024/12/16 make non-suspend?
 }
+
+public class NetStats @MediampInternalApi public constructor(
+    /**
+     * The download speed in bytes per second.
+     *
+     * May return `-1` if it is not known.
+     */
+    public val downloadSpeed: Long,
+
+    /**
+     * The upload speed in bytes per second.
+     *
+     * May return `-1` if it is not known.
+     */
+    public val uploadRate: Long,
+)
 
 public fun emptyVideoData(): VideoData = EmptyVideoData
 
@@ -71,8 +75,8 @@ private object EmptyVideoData : VideoData {
     override val filename: String get() = ""
     override fun fileLength(): Long? = null
 
-    override val networkStats: Flow<VideoData.Stats> =
-        flowOf(VideoData.Stats.Unspecified)
+    @OptIn(MediampInternalApi::class)
+    override val networkStats: Flow<NetStats> = flowOf(NetStats(0, 0))
 
     override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput = emptySeekableInput()
     override suspend fun close() {}

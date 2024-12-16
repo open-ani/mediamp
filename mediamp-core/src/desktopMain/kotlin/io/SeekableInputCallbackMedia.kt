@@ -9,9 +9,6 @@
 
 package org.openani.mediamp.io
 
-import me.him188.ani.utils.logging.debug
-import me.him188.ani.utils.logging.error
-import org.openani.mediamp.io.SeekableInputCallbackMedia.Companion.logger
 import uk.co.caprica.vlcj.media.callback.DefaultCallbackMedia
 
 class SeekableInputCallbackMedia(
@@ -20,37 +17,24 @@ class SeekableInputCallbackMedia(
 ) : DefaultCallbackMedia(true) {
     override fun onGetSize(): Long = input.size
     override fun onOpen(): Boolean {
-        if (ENABLE_LOGS) logger.debug { "open" }
         onSeek(0L)
         return true
     }
 
     override fun onRead(buffer: ByteArray, bufferSize: Int): Int {
-        if (ENABLE_LOGS) logger.debug { "reading max $bufferSize" }
         return try {
-            input.read(buffer, 0, bufferSize).also {
-                if (ENABLE_LOGS) logger.debug { "read $it" }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "SeekableInputCallbackMedia failed to read. See cause." }
+            input.read(buffer, 0, bufferSize)
+        } catch (_: Exception) {
             -1
         }
     }
 
     override fun onSeek(offset: Long): Boolean {
-        if (ENABLE_LOGS) logger.debug { "seeking to $offset" }
         input.seek(offset)
-        if (ENABLE_LOGS) logger.debug { "seeking to $offset: ok" }
         return true
     }
 
     public override fun onClose() {
-        logger.debug { "Closing CallbackMedia $this" }
         this.onClose.invoke()
-    }
-
-    private companion object {
-        private const val ENABLE_LOGS = false
-        private val logger = logger<SeekableInputCallbackMedia>()
     }
 }
