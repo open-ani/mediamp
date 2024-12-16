@@ -233,7 +233,7 @@ internal class ExoPlayerState @UiThread constructor(
             addListener(
                 object : Player.Listener {
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        state.value = PlaybackState.READY
+                        playbackState.value = PlaybackState.READY
                         isBuffering.value = false
                     }
 
@@ -261,7 +261,7 @@ internal class ExoPlayerState @UiThread constructor(
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        state.value = PlaybackState.ERROR
+                        playbackState.value = PlaybackState.ERROR
                         println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
                         error.printStackTrace()
                     }
@@ -305,7 +305,7 @@ internal class ExoPlayerState @UiThread constructor(
                             }
 
                             Player.STATE_ENDED -> {
-                                state.value = PlaybackState.FINISHED
+                                playbackState.value = PlaybackState.FINISHED
                                 isBuffering.value = false
                             }
 
@@ -318,10 +318,10 @@ internal class ExoPlayerState @UiThread constructor(
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         if (isPlaying) {
-                            state.value = PlaybackState.PLAYING
+                            playbackState.value = PlaybackState.PLAYING
                             isBuffering.value = false
                         } else {
-                            state.value = PlaybackState.PAUSED
+                            playbackState.value = PlaybackState.PAUSED
                         }
                     }
 

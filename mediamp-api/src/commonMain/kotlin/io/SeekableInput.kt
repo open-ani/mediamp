@@ -56,8 +56,6 @@ public interface SeekableInput : AutoCloseable {
         position: @Range(from = 0L, to = Long.MAX_VALUE) Long,
     )
 
-    public fun prepareBuffer() {}
-
     /**
      * Reads up to [length] bytes from the input source into [buffer] starting at [offset].
      *

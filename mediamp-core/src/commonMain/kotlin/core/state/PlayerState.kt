@@ -63,7 +63,7 @@ interface PlayerState {
      *
      * State can be changed internally e.g. buffer exhausted or externally by e.g. [pause], [resume].
      */
-    val state: StateFlow<PlaybackState>
+    val playbackState: StateFlow<PlaybackState>
 
     /**
      * The video source that is currently being played.
@@ -188,7 +188,7 @@ interface PlayerState {
 }
 
 fun PlayerState.togglePause() {
-    if (state.value.isPlaying) {
+    if (playbackState.value.isPlaying) {
         pause()
     } else {
         resume()
@@ -227,7 +227,7 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
 
     override val videoSource: MutableStateFlow<VideoSource<*>?> = MutableStateFlow(null)
 
-    override val state: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
+    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
 
     /**
      * Currently playing resource that should be closed when the controller is closed.
@@ -242,7 +242,7 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
     )
 
     override val isBuffering: Flow<Boolean> by lazy {
-        state.map { it == PlaybackState.PAUSED_BUFFERING }
+        playbackState.map { it == PlaybackState.PAUSED_BUFFERING }
     }
 
     final override val videoData: Flow<VideoData?> = openResource.map {
@@ -308,7 +308,7 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
         }
 
         try {
-            state.value = PlaybackState.PAUSED_BUFFERING
+            playbackState.value = PlaybackState.PAUSED_BUFFERING
             startPlayer(opened)
         } catch (e: CancellationException) {
             opened.releaseResource()
@@ -398,7 +398,7 @@ enum class PlaybackState(
 class DummyPlayerState(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
 ) : AbstractPlayerState<AbstractPlayerState.Data>(parentCoroutineContext) {
-    override val state: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
+    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
     override fun stopImpl() {
 
     }
@@ -448,11 +448,11 @@ class DummyPlayerState(
     override val bufferedPercentage: StateFlow<Int> = MutableStateFlow(50)
 
     override fun pause() {
-        state.value = PlaybackState.PAUSED
+        playbackState.value = PlaybackState.PAUSED
     }
 
     override fun resume() {
-        state.value = PlaybackState.PLAYING
+        playbackState.value = PlaybackState.PLAYING
     }
 
     override val playbackSpeed: MutableStateFlow<Float> = MutableStateFlow(1.0f)

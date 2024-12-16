@@ -139,7 +139,7 @@ public abstract class BufferedSeekableInput(
         check(read == length) { "readFileToBufferExact: Expected to read $length bytes, but read $read bytes, fileOffset=$fileOffset" }
     }
 
-    override fun prepareBuffer() {
+    internal fun prepareBuffer() {
         checkClosed()
         fillBuffer()
     }

@@ -113,11 +113,11 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         attach(player)
     }
 
-    override val state: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
+    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
 
     init {
         backgroundScope.launch {
-            state.collect {
+            playbackState.collect {
                 surface.enableRendering.value = it == PlaybackState.PLAYING
             }
         }
@@ -299,7 +299,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                         createVideoProperties()?.let {
                             videoProperties.value = it
                         }
-                        state.value = PlaybackState.READY
+                        playbackState.value = PlaybackState.READY
                     }
                 }
             },
@@ -351,7 +351,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 }
 
                 override fun playing(mediaPlayer: MediaPlayer) {
-                    state.value = PlaybackState.PLAYING
+                    playbackState.value = PlaybackState.PLAYING
                     player.submit { player.media().parsing().parse() }
 
                     reloadSubtitleTracks()
@@ -360,16 +360,16 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 }
 
                 override fun paused(mediaPlayer: MediaPlayer) {
-                    state.value = PlaybackState.PAUSED
+                    playbackState.value = PlaybackState.PAUSED
                 }
 
                 override fun finished(mediaPlayer: MediaPlayer) {
-                    state.value = PlaybackState.FINISHED
+                    playbackState.value = PlaybackState.FINISHED
                 }
 
                 override fun error(mediaPlayer: MediaPlayer) {
                     logger.error { "vlcj player error" }
-                    state.value = PlaybackState.ERROR
+                    playbackState.value = PlaybackState.ERROR
                 }
 
                 override fun positionChanged(mediaPlayer: MediaPlayer?, newPosition: Float) {
@@ -385,7 +385,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
             var lastPosition = currentPositionMillis.value
             while (true) {
                 delay(1500)
-                if (state.value == PlaybackState.PLAYING) {
+                if (playbackState.value == PlaybackState.PLAYING) {
                     isBuffering.value = lastPosition == currentPositionMillis.value
                     lastPosition = currentPositionMillis.value
                 }
@@ -395,7 +395,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         backgroundScope.launch {
             subtitleTracks.current.collect { track ->
                 try {
-                    if (state.value == PlaybackState.READY) {
+                    if (playbackState.value == PlaybackState.READY) {
                         return@collect
                     }
                     if (track == null) {
@@ -425,7 +425,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         backgroundScope.launch {
             audioTracks.current.collect { track ->
                 try {
-                    if (state.value == PlaybackState.READY) {
+                    if (playbackState.value == PlaybackState.READY) {
                         return@collect
                     }
                     if (track == null) {
@@ -535,7 +535,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
     }
 
     override fun skip(deltaMillis: Long) {
-        if (state.value == PlaybackState.PAUSED) {
+        if (playbackState.value == PlaybackState.PAUSED) {
             // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
             // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
             currentPositionMillis.value = (currentPositionMillis.value + deltaMillis)
