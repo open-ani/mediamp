@@ -24,5 +24,7 @@ plugins {
 
 include(":mediamp-api")
 include(":mediamp-core")
+include(":mediamp-preview")
+include(":mediamp-source-kotlinx-io")
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")

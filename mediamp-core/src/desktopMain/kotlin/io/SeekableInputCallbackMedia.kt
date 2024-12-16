@@ -9,7 +9,6 @@
 
 package org.openani.mediamp.io
 
-import me.him188.ani.utils.io.SeekableInput
 import me.him188.ani.utils.logging.debug
 import me.him188.ani.utils.logging.error
 import org.openani.mediamp.io.SeekableInputCallbackMedia.Companion.logger

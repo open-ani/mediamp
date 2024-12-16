@@ -7,6 +7,11 @@
  * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
+import com.android.build.api.dsl.CommonExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+
 buildscript {
     repositories {
         gradlePluginPortal()
@@ -50,10 +55,31 @@ extensions.findByName("buildScan")?.withGroovyBuilder {
 
 subprojects {
     afterEvaluate {
-//        configureKotlinOptIns()
-//        configureKotlinTestSettings()
-//        configureEncoding()
-//        configureJvmTarget()
+        val jdkVersion = project.findProperty("jvm.toolchain.version")?.toString() ?: "1.8"
+
+        val javaVersion = JavaVersion.toVersion(jdkVersion)
+        extensions.findByType<KotlinMultiplatformExtension>()?.apply {
+            compilerOptions {
+                jvmToolchain {
+                    languageVersion = JavaLanguageVersion.of(jdkVersion)
+                }
+            }
+        }
+        tasks.withType<KotlinJvmCompile> {
+            compilerOptions {
+                jvmTarget = JvmTarget.fromTarget(jdkVersion.toString())
+            }
+        }
+        extensions.findByType(JavaPluginExtension::class.java)?.run {
+            sourceCompatibility = javaVersion
+            targetCompatibility = javaVersion
+        }
+        extensions.findByType(CommonExtension::class)?.apply {
+            compileOptions {
+                sourceCompatibility = javaVersion
+                targetCompatibility = javaVersion
+            }
+        }
     }
 }
 

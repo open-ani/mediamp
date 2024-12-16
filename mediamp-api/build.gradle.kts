@@ -9,17 +9,21 @@ plugins {
 }
 
 kotlin {
+    explicitApi()
     sourceSets.commonMain.dependencies {
+        implementation(libs.kotlinx.io.core)
+        implementation(libs.kotlinx.coroutines.core)
     }
     sourceSets.commonTest.dependencies {
-        api(libs.kotlinx.coroutines.core)
-        api(libs.kotlinx.coroutines.test)
+        implementation(libs.kotlinx.coroutines.test)
     }
     sourceSets.androidMain.dependencies {
         implementation(libs.androidx.compose.ui.tooling.preview)
         implementation(libs.androidx.compose.ui.tooling)
     }
     sourceSets.desktopMain.dependencies {
+    }
+    sourceSets.iosMain.dependencies {
     }
 }
 

@@ -30,7 +30,6 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.trackselection.TrackSelection
-import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -46,20 +45,20 @@ import kotlinx.coroutines.withContext
 import me.him188.ani.app.platform.Context
 import me.him188.ani.app.tools.MonoTasker
 import me.him188.ani.utils.logging.error
-import org.openani.mediamp.data.VideoData
-import org.openani.mediamp.data.VideoProperties
-import org.openani.mediamp.data.VideoSource
-import org.openani.mediamp.data.emptyVideoData
+import org.openani.mediamp.core.state.AbstractPlayerState
+import org.openani.mediamp.core.state.PlaybackState
+import org.openani.mediamp.core.state.PlayerState
+import org.openani.mediamp.core.state.PlayerStateFactory
 import org.openani.mediamp.media.VideoDataDataSource
-import org.openani.mediamp.ui.state.AbstractPlayerState
-import org.openani.mediamp.ui.state.AudioTrack
-import org.openani.mediamp.ui.state.Chapter
-import org.openani.mediamp.ui.state.Label
-import org.openani.mediamp.ui.state.MutableTrackGroup
-import org.openani.mediamp.ui.state.PlaybackState
-import org.openani.mediamp.ui.state.PlayerState
-import org.openani.mediamp.ui.state.PlayerStateFactory
-import org.openani.mediamp.ui.state.SubtitleTrack
+import org.openani.mediamp.metadata.AudioTrack
+import org.openani.mediamp.metadata.Chapter
+import org.openani.mediamp.metadata.MutableTrackGroup
+import org.openani.mediamp.metadata.SubtitleTrack
+import org.openani.mediamp.metadata.TrackLabel
+import org.openani.mediamp.source.VideoData
+import org.openani.mediamp.source.VideoProperties
+import org.openani.mediamp.source.VideoSource
+import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 
@@ -335,7 +334,7 @@ internal class ExoPlayerState @UiThread constructor(
                     "${openResource.value?.videoData?.filename}-${mediaTrackGroup.id}-$index",
                     mediaTrackGroup.id,
                     firstLabel ?: mediaTrackGroup.id,
-                    format.labels.map { Label(it.language, it.value) },
+                    format.labels.map { TrackLabel(it.language, it.value) },
                 ),
             )
         }
@@ -351,7 +350,7 @@ internal class ExoPlayerState @UiThread constructor(
                     "${openResource.value?.videoData?.filename}-${mediaTrackGroup.id}-$index",
                     mediaTrackGroup.id,
                     firstLabel ?: mediaTrackGroup.id,
-                    format.labels.map { Label(it.language, it.value) },
+                    format.labels.map { TrackLabel(it.language, it.value) },
                 ),
             )
         }
@@ -378,7 +377,7 @@ internal class ExoPlayerState @UiThread constructor(
         TODO("Not yet implemented")
     }
 
-    override val chapters: StateFlow<ImmutableList<Chapter>> = MutableStateFlow(persistentListOf())
+    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(persistentListOf())
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
     override fun getExactCurrentPositionMillis(): Long = player.currentPosition
