@@ -11,7 +11,7 @@ package org.openani.mediamp.io
 
 import uk.co.caprica.vlcj.media.callback.DefaultCallbackMedia
 
-class SeekableInputCallbackMedia(
+internal class SeekableInputCallbackMedia(
     private val input: SeekableInput,
     private val onClose: () -> Unit,
 ) : DefaultCallbackMedia(true) {

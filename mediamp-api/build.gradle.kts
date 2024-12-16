@@ -15,16 +15,25 @@ kotlin {
         implementation(libs.kotlinx.coroutines.core)
     }
     sourceSets.commonTest.dependencies {
-        implementation(libs.kotlinx.coroutines.test)
+        api(kotlin("test"))
+        api(libs.kotlinx.coroutines.test)
     }
     sourceSets.androidMain.dependencies {
         implementation(libs.androidx.compose.ui.tooling.preview)
         implementation(libs.androidx.compose.ui.tooling)
     }
+    sourceSets.getByName("jvmTest").dependencies {
+        api(libs.junit.jupiter.api)
+        runtimeOnly(libs.junit.jupiter.engine)
+    }
     sourceSets.desktopMain.dependencies {
     }
     sourceSets.iosMain.dependencies {
     }
+}
+
+tasks.withType<Test> {
+    useJUnitPlatform()
 }
 
 android {

@@ -11,24 +11,14 @@ kotlinx-collections-immutable = "0.3.8" # https://github.com/Kotlin/kotlinx.coll
 jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
 
 android-gradle-plugin = "8.5.2"
-ksp = "2.1.0-1.0.29" # https://github.com/google/ksp/releases
-room = "2.7.0-alpha12" # https://developer.android.com/jetpack/androidx/releases/room#declaring_dependencies
-snakeyaml = "2.2"
-sqlite = "2.5.0-alpha12"
-constraintlayout-compose = "0.4.0"
-antlr-kotlin = "1.0.0"
-oshai-kotlin-logging = "7.0.0" # Only for native. On JVM we use slf4j directly.
-ipaddress-parser = "5.5.1"
 androidx-annotation = "1.9.1"
 androidx-media3 = "1.4.1"
 androidx-lifecycle = "2.8.7"
-paging = "3.3.5" # https://developer.android.com/jetpack/androidx/releases/paging
+
+jupiter = "5.10.1"
 
 mockito = "5.12.0"
 mockito-kotlin = "5.4.0"
-
-# CI helper
-aws = "2.25.49"
 
 # Compose
 # https://developer.android.com/jetpack/androidx/releases/compose-material3
@@ -57,15 +47,15 @@ kotlinx-atomicfu = { id = "org.jetbrains.kotlinx.atomicfu", version.ref = "atomi
 compose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 android-library = { id = "com.android.library", version.ref = "android-gradle-plugin" }
 android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
-room = { id = "androidx.room", version.ref = "room" }
-antlr-kotlin = { id = "com.strumenta.antlr-kotlin", version.ref = "antlr-kotlin" }
 
 [libraries]
 # Build
 android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "android-gradle-plugin" }
 android-library-gradle-plugin = { module = "com.android.library:com.android.library.gradle.plugin", version.ref = "android-gradle-plugin" }
 android-application-gradle-plugin = { module = "com.android.application:com.android.application.gradle.plugin", version.ref = "android-gradle-plugin" }
+
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "jupiter" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "jupiter" }
 
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 atomicfu-gradle-plugin = { module = "org.jetbrains.kotlinx:atomicfu-gradle-plugin", version.ref = "atomicfu" }
@@ -110,15 +100,11 @@ androidx-activity-ktx = { module = "androidx.activity:activity-ktx", version = "
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version = "1.7.0" }
 androidx-material = { module = "com.google.android.material:material", version = "1.12.0" }
 androidx-material3-window-size-class0 = { module = "androidx.compose.material3:material3-window-size-class", version = "1.2.1" }
-androidx-browser = { module = "androidx.browser:browser", version = "1.8.0" }
 androidx-media = { module = "androidx.media:media", version = "1.7.0" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-service = { module = "androidx.lifecycle:lifecycle-service", version.ref = "androidx-lifecycle" }
 androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "androidx-lifecycle" }
 androidx-collection = { module = "androidx.collection:collection", version = "1.4.5" }
-
-#androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version = "2.7.6" }
-slf4j-android = { module = "uk.uuid.slf4j:slf4j-android", version = "2.0.7-0" }
 
 # Android unit test
 mockito = { module = "org.mockito:mockito-core", version.ref = "mockito" }
@@ -131,7 +117,6 @@ androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls
 
 androidx-compose-ui = { module = "androidx.compose.ui:ui", version.ref = "jetpack-compose" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "jetpack-compose" }
-androidx-compose-ui-viewbinding = { module = "androidx.compose.ui:ui-viewbinding", version.ref = "jetpack-compose" }
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation", version.ref = "jetpack-compose" }
 androidx-compose-material = { module = "androidx.compose.material:material", version.ref = "jetpack-compose" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "compose-material3" }
