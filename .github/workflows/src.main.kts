@@ -210,16 +210,13 @@ val matrixInstances = listOf(
         buildAnitorrent = true,
         buildAnitorrentSeparately = false, // windows 单线程构建 anitorrent, 要一起跑节约时间
         composeResourceTriple = "windows-x64",
-        gradleHeap = "6g",
-        kotlinCompilerHeap = "6g",
+        gradleHeap = "4g",
+        kotlinCompilerHeap = "4g",
         gradleParallel = true,
-        extraGradleArgs = listOf(
-            "-Pani.android.abis=x86_64",
-        ),
     ),
     MatrixInstance(
         id = "ubuntu-x64",
-        name = "Ubuntu x86_64 (Compile only)",
+        name = "Ubuntu x86_64",
         runsOn = listOf("ubuntu-20.04"),
         os = OS.UBUNTU,
         arch = Arch.X64,
@@ -248,7 +245,6 @@ val matrixInstances = listOf(
         buildIosFramework = false,
         gradleHeap = "4g",
         kotlinCompilerHeap = "4g",
-        extraGradleArgs = listOf(),
         // build all android ABI
     ),
     MatrixInstance(
@@ -262,11 +258,8 @@ val matrixInstances = listOf(
         buildAnitorrent = true,
         buildAnitorrentSeparately = true,
         composeResourceTriple = "macos-arm64",
-        extraGradleArgs = listOf(
-            "-Pani.android.abis=arm64-v8a",
-        ),
         buildIosFramework = false,
-        gradleHeap = "6g",
+        gradleHeap = "4g",
         kotlinCompilerHeap = "4g",
         gradleParallel = true,
     ),
@@ -640,13 +633,7 @@ fun JobBuilder<*>.compileAndAssemble() {
     runGradle(
         name = "Compile Kotlin",
         tasks = [
-            "compileKotlin",
-            "compileCommonMainKotlinMetadata",
-            "compileDebugKotlinAndroid",
-            "compileReleaseKotlinAndroid",
-            "compileJvmMainKotlinMetadata",
-            "compileKotlinDesktop",
-            "compileKotlinMetadata",
+            "assemble",
         ],
     )
 }
