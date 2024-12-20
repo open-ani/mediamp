@@ -233,7 +233,7 @@ internal class ExoPlayerState @UiThread constructor(
             addListener(
                 object : Player.Listener {
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        playbackState.value = PlaybackState.READY
+                        this@ExoPlayerState.playbackState.value = PlaybackState.READY
                         isBuffering.value = false
                     }
 
@@ -261,7 +261,7 @@ internal class ExoPlayerState @UiThread constructor(
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        playbackState.value = PlaybackState.ERROR
+                        this@ExoPlayerState.playbackState.value = PlaybackState.ERROR
                         println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
                         error.printStackTrace()
                     }
@@ -305,7 +305,7 @@ internal class ExoPlayerState @UiThread constructor(
                             }
 
                             Player.STATE_ENDED -> {
-                                playbackState.value = PlaybackState.FINISHED
+                                this@ExoPlayerState.playbackState.value = PlaybackState.FINISHED
                                 isBuffering.value = false
                             }
 
@@ -318,10 +318,10 @@ internal class ExoPlayerState @UiThread constructor(
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         if (isPlaying) {
-                            playbackState.value = PlaybackState.PLAYING
+                            this@ExoPlayerState.playbackState.value = PlaybackState.PLAYING
                             isBuffering.value = false
                         } else {
-                            playbackState.value = PlaybackState.PAUSED
+                            this@ExoPlayerState.playbackState.value = PlaybackState.PAUSED
                         }
                     }
 
