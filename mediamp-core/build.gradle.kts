@@ -16,6 +16,7 @@ plugins {
     `mpp-lib-targets`
     kotlin("plugin.serialization")
 //    id("org.jetbrains.kotlinx.atomicfu")
+    `maven-publish`
 }
 
 kotlin {
@@ -52,4 +53,44 @@ kotlin {
 
 android {
     namespace = "org.openani.mediamp.core"
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mediampCore") {
+            from(components["kotlin"])
+            
+            pom {
+                name = "Mediamp Core"
+                description = "Core library for Mediamp"
+                url = "https://github.com/open-ani/mediamp"
+                
+                licenses { 
+                    name = ""
+                    url = ""
+                }
+                
+                developers { 
+                    developer {
+                        id = "open-ani"
+                        name = "The OpenAni Team and contributors"
+                        email = ""
+                    }
+                }
+                
+                scm {
+                    connection = "scm:git:https://github.com/open-ani/mediamp.git"
+                    developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
+                    url = "https://github.com/open-ani/mediamp"
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "myRepo"
+            url = uri(layout.buildDirectory.dir("repo"))
+        }
+    }
 }
