@@ -11,8 +11,12 @@ package org.openani.mediamp.compose
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.RememberObserver
+import androidx.compose.runtime.Stable
 import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * Displays the media content (e.g. a video) of [org.openani.mediamp.MediampPlayer].
@@ -29,3 +33,24 @@ expect fun MediaPlayerSurface(
     mediampPlayer: MediampPlayer,
     modifier: Modifier = Modifier, // no default value because we require a size modifier
 )
+
+/**
+ * Remembers a [MediampPlayer] instance that will be stopped when the composable is no longer in the composition.
+ */
+@Composable
+expect fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineContext = { EmptyCoroutineContext }): MediampPlayer
+
+
+@Stable
+internal class RememberedMediampPlayer(val player: MediampPlayer) : RememberObserver {
+    override fun onAbandoned() {
+        player.stop()
+    }
+
+    override fun onForgotten() {
+        player.stop()
+    }
+
+    override fun onRemembered() {
+    }
+}
