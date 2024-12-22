@@ -31,15 +31,13 @@ jobs:
           extraGradleArgs: []
           gradleArgs: '"--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dani.enable.anitorrent=true" "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel"'
           id: 'windows'
-          installNativeDeps: false
+          installNativeDeps: true
           name: 'Windows x86_64'
           os: 'windows'
           runTests: true
           runsOn:
-          - 'self-hosted'
-          - 'Windows'
-          - 'X64'
-          selfHosted: true
+            - 'windows-2019'
+          selfHosted: false
           uploadApk: false
           uploadDesktopInstallers: true
         - arch: 'x64'
@@ -84,15 +82,13 @@ jobs:
           extraGradleArgs: []
           gradleArgs: '"--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dani.enable.anitorrent=true" "-DCMAKE_BUILD_TYPE=Release" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel"'
           id: 'macos-aarch64'
-          installNativeDeps: false
+          installNativeDeps: true
           name: 'macOS AArch64'
           os: 'macos'
           runTests: true
           runsOn:
-          - 'self-hosted'
-          - 'macOS'
-          - 'ARM64'
-          selfHosted: true
+            - 'macos-14'
+          selfHosted: false
           uploadApk: true
           uploadDesktopInstallers: true
     steps:
