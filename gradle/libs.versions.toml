@@ -15,7 +15,7 @@ androidx-annotation = "1.9.1"
 androidx-media3 = "1.4.1"
 androidx-lifecycle = "2.8.7"
 
-jupiter = "5.10.1"
+junit4 = "4.13.2"
 
 mockito = "5.12.0"
 mockito-kotlin = "5.4.0"
@@ -55,8 +55,7 @@ android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref
 android-library-gradle-plugin = { module = "com.android.library:com.android.library.gradle.plugin", version.ref = "android-gradle-plugin" }
 android-application-gradle-plugin = { module = "com.android.application:com.android.application.gradle.plugin", version.ref = "android-gradle-plugin" }
 
-junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "jupiter" }
-junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "jupiter" }
+junit = { module = "junit:junit", version.ref = "junit4" }
 
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 atomicfu-gradle-plugin = { module = "org.jetbrains.kotlinx:atomicfu-gradle-plugin", version.ref = "atomicfu" }

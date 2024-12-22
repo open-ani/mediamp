@@ -1,22 +1,37 @@
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 @file:OptIn(TestOnly::class)
 
 package org.openani.mediamp.io
 
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.io.TempDir
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import org.openani.mediamp.internal.TestOnly
 import java.io.File
 import kotlin.math.absoluteValue
 import kotlin.random.Random
 import kotlin.random.nextLong
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
+
 class BufferedFileInputTest {
-    @TempDir
-    private lateinit var tempDir: File
+    @JvmField
+    @Rule
+    var tempFolder: TemporaryFolder = TemporaryFolder()
+
+    private val tempDir: File
+        get() = tempFolder.newFolder()
 
     private lateinit var file: File
     private val bufferSize = 20
@@ -24,14 +39,14 @@ class BufferedFileInputTest {
     private val sampleText =
         "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum."
 
-    @BeforeEach
+    @BeforeTest
     fun init() {
         val f = File(tempDir, "test")
         f.writeText(sampleText)
         file = f
     }
 
-    @AfterEach
+    @AfterTest
     fun cleanup() {
         input.close()
     }

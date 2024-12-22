@@ -2,9 +2,9 @@
  * Copyright (C) 2024 OpenAni and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 import com.android.build.api.dsl.CommonExtension
@@ -52,63 +52,6 @@ fun Project.sharedAndroidProguardRules(): Array<File> {
     }.toTypedArray()
 }
 
-val testOptInAnnotations = arrayOf(
-    "kotlin.ExperimentalUnsignedTypes",
-    "kotlin.time.ExperimentalTime",
-    "io.ktor.util.KtorExperimentalAPI",
-    "kotlin.io.path.ExperimentalPathApi",
-    "kotlinx.coroutines.ExperimentalCoroutinesApi",
-    "kotlinx.serialization.ExperimentalSerializationApi",
-    "me.him188.ani.utils.platform.annotations.TestOnly",
-    "androidx.compose.ui.test.ExperimentalTestApi",
-)
-
-val optInAnnotations = arrayOf(
-    "kotlin.contracts.ExperimentalContracts",
-    "kotlin.experimental.ExperimentalTypeInference",
-    "kotlinx.serialization.ExperimentalSerializationApi",
-    "kotlinx.coroutines.ExperimentalCoroutinesApi",
-    "kotlinx.coroutines.FlowPreview",
-    "androidx.compose.foundation.layout.ExperimentalLayoutApi",
-    "androidx.compose.foundation.ExperimentalFoundationApi",
-    "androidx.compose.material3.ExperimentalMaterial3Api",
-    "androidx.compose.ui.ExperimentalComposeUiApi",
-    "org.jetbrains.compose.resources.ExperimentalResourceApi",
-    "kotlin.ExperimentalStdlibApi",
-    "androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi",
-    "androidx.compose.animation.ExperimentalSharedTransitionApi",
-    "androidx.paging.ExperimentalPagingApi",
-)
-
-val testLanguageFeatures: List<String> = listOf(
-//    "ContextReceivers" // causes segfault on ios
-)
-
-fun Project.configureKotlinOptIns() {
-    val sourceSets = kotlinSourceSets ?: return
-    sourceSets.all {
-        configureKotlinOptIns()
-    }
-
-    val libs = versionCatalogLibs()
-    val (major, minor) = libs["kotlin"].split('.')
-    val kotlinVersion = KotlinVersion.valueOf("KOTLIN_${major}_${minor}")
-
-    val options = kotlinCommonCompilerOptions()
-    options.apply {
-        languageVersion.set(kotlinVersion)
-    }
-    // ksp task extends KotlinCompile
-    project.tasks.withType(KotlinCompile::class.java) {
-        @Suppress("MISSING_DEPENDENCY_SUPERCLASS_IN_TYPE_ARGUMENT")
-        compilerOptions.languageVersion.set(kotlinVersion)
-    }
-
-    for (name in testLanguageFeatures) {
-        enableLanguageFeatureForTestSourceSets(name)
-    }
-}
-
 private fun Project.versionCatalogLibs(): VersionCatalog =
     project.extensions.getByType<VersionCatalogsExtension>().named("libs")
 
@@ -119,18 +62,6 @@ private fun Project.kotlinCommonCompilerOptions(): KotlinCommonCompilerOptions =
     is KotlinAndroidProjectExtension -> ext.compilerOptions
     is KotlinMultiplatformExtension -> ext.compilerOptions
     else -> error("Unsupported kotlinExtension: ${ext::class}")
-}
-
-fun KotlinSourceSet.configureKotlinOptIns() {
-    languageSettings.progressiveMode = true
-    optInAnnotations.forEach { a ->
-        languageSettings.optIn(a)
-    }
-    if (name.contains("test", ignoreCase = true)) {
-        testOptInAnnotations.forEach { a ->
-            languageSettings.optIn(a)
-        }
-    }
 }
 
 val Project.DEFAULT_JVM_TOOLCHAIN_VENDOR
@@ -205,79 +136,6 @@ fun Project.configureJvmTarget() {
         }
     }
 }
-
-fun Project.configureEncoding() {
-    tasks.withType(JavaCompile::class.java) {
-        options.encoding = "UTF8"
-    }
-}
-
-const val JUNIT_VERSION = "5.7.2"
-
-fun Project.configureKotlinTestSettings() {
-    tasks.withType(Test::class) {
-        useJUnitPlatform()
-    }
-
-    allKotlinTargets().all {
-        if (this !is KotlinJvmTarget) return@all
-        this.testRuns["test"].executionTask.configure { useJUnitPlatform() }
-    }
-
-    val b = "Auto-set for project '${project.path}'. (configureKotlinTestSettings)"
-    when {
-        isKotlinJvmProject -> {
-            dependencies {
-                "testImplementation"(kotlin("test-junit5"))?.because(b)
-
-                "testApi"("org.junit.jupiter:junit-jupiter-api:$JUNIT_VERSION")?.because(b)
-                "testRuntimeOnly"("org.junit.jupiter:junit-jupiter-engine:${JUNIT_VERSION}")?.because(b)
-            }
-        }
-
-        isKotlinMpp -> {
-            kotlinSourceSets?.all {
-                val sourceSet = this
-
-                val target = allKotlinTargets()
-                    .find { it.name == sourceSet.name.substringBeforeLast("Main").substringBeforeLast("Test") }
-
-                if (sourceSet.name.contains("test", ignoreCase = true)) {
-                    when {
-                        target?.platformType == KotlinPlatformType.jvm -> {
-                            // For android, this should be done differently. See Android.kt
-                            sourceSet.configureJvmTest(b)
-                        }
-
-                        sourceSet.name == "commonTest" -> {
-                            sourceSet.dependencies {
-                                implementation(kotlin("test"))?.because(b)
-                                implementation(kotlin("test-annotations-common"))?.because(b)
-                            }
-                        }
-
-                        target?.platformType == KotlinPlatformType.androidJvm -> {
-                            // Android uses JUnit4
-                            sourceSet.dependencies {
-                                implementation("junit:junit:4.13")?.because(b)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fun KotlinSourceSet.configureJvmTest(because: String) {
-    dependencies {
-        implementation(kotlin("test-junit5"))?.because(because)
-
-        implementation("org.junit.jupiter:junit-jupiter-api:${JUNIT_VERSION}")?.because(because)
-        runtimeOnly("org.junit.jupiter:junit-jupiter-engine:${JUNIT_VERSION}")?.because(because)
-    }
-}
-
 
 fun Project.withKotlinTargets(fn: (KotlinTarget) -> Unit) {
     extensions.findByType(KotlinTargetsContainer::class.java)?.let { kotlinExtension ->
