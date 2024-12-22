@@ -11,24 +11,13 @@
 
 package org.openani.mediamp.core
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
-import com.sun.jna.platform.win32.KnownFolders
-import com.sun.jna.platform.win32.Shell32
-import com.sun.jna.ptr.PointerByReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,16 +25,22 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.MediampInternalApi
-import org.openani.mediamp.core.VlcjVideoPlayerState.VlcjData
+import org.openani.mediamp.core.VlcjVideoMediampPlayer.VlcjData
+import org.openani.mediamp.core.features.AudioLevelController
+import org.openani.mediamp.core.features.Buffering
+import org.openani.mediamp.core.features.PlaybackSpeed
+import org.openani.mediamp.core.features.PlayerFeatures
+import org.openani.mediamp.core.features.Screenshots
+import org.openani.mediamp.core.features.buildPlayerFeatures
 import org.openani.mediamp.core.internal.MutableTrackGroup
-import org.openani.mediamp.core.state.AbstractPlayerState
-import org.openani.mediamp.core.state.MediaPlayerAudioController
+import org.openani.mediamp.core.state.AbstractMediampPlayer
+import org.openani.mediamp.core.state.MediampPlayer
 import org.openani.mediamp.core.state.PlaybackState
-import org.openani.mediamp.core.state.PlayerState
 import org.openani.mediamp.io.SeekableInputCallbackMedia
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
@@ -53,9 +48,9 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
-import org.openani.mediamp.source.HttpStreamingVideoSource
+import org.openani.mediamp.source.HttpStreamingMediaSource
+import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.emptyVideoData
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
@@ -68,20 +63,20 @@ import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent
 import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
-import java.io.IOException
-import java.nio.file.Path
+import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
 import kotlin.contracts.contract
 import kotlin.coroutines.CoroutineContext
-import kotlin.io.path.createDirectories
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
 
 @Stable
-class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerState,
-    AbstractPlayerState<VlcjData>(parentCoroutineContext) {
+class VlcjVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer,
+    AbstractMediampPlayer<VlcjData>(parentCoroutineContext) {
     companion object {
         private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
         fun prepareLibraries() {
@@ -101,10 +96,8 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
 //        "-v"
 //    )
 
-    private val factory = MediaPlayerFactory("-v")
-
     val player: EmbeddedMediaPlayer = createPlayerLock.withLock {
-        factory
+        MediaPlayerFactory("-v")
             .mediaPlayers()
             .newEmbeddedMediaPlayer()
     }
@@ -114,6 +107,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
     }
 
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
+    private val buffering = VlcBuffering()
 
     init {
         backgroundScope.launch {
@@ -130,34 +124,18 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         }
     }
 
-    override fun saveScreenshotFile(filename: String) {
-        player.submit {
-            val ppszPath = PointerByReference()
-            Shell32.INSTANCE.SHGetKnownFolderPath(KnownFolders.FOLDERID_Pictures, 0, null, ppszPath)
-            val picturesPath = ppszPath.value.getWideString(0)
-            val screenshotPath: Path = Path.of(picturesPath).resolve("Ani")
-            try {
-                screenshotPath.createDirectories()
-            } catch (ex: IOException) {
-                logger.warn("Create ani pictures dir fail", ex)
-            }
-            val filePath = screenshotPath.resolve(filename)
-            player.snapshots().save(filePath.toFile())
-        }
-    }
-
     private val _chapters = MutableStateFlow<List<Chapter>>(emptyList())
     override val chapters: StateFlow<List<Chapter>> = _chapters.asStateFlow()
 
     class VlcjData(
-        override val videoSource: VideoSource<*>,
+        override val mediaSource: MediaSource<*>,
         override val videoData: VideoData,
         val setPlay: () -> Unit,
         releaseResource: () -> Unit
-    ) : Data(videoSource, videoData, releaseResource)
+    ) : Data(mediaSource, videoData, releaseResource)
 
-    override suspend fun openSource(source: VideoSource<*>): VlcjData {
-        if (source is HttpStreamingVideoSource) {
+    override suspend fun openSource(source: MediaSource<*>): VlcjData {
+        if (source is HttpStreamingMediaSource) {
             return VlcjData(
                 source,
                 emptyVideoData(),
@@ -240,9 +218,6 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
 
     override fun getExactCurrentPositionMillis(): Long = player.status().time()
 
-    override val bufferedPercentage = MutableStateFlow(0)
-    override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
-
     override fun pause() {
         player.submit {
             player.controls().pause()
@@ -255,39 +230,21 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         }
     }
 
-    override val playbackSpeed: MutableStateFlow<Float> = MutableStateFlow(1.0f)
-
     private val _subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
     override val subtitleTracks: TrackGroup<SubtitleTrack> = _subtitleTracks
 
     private val _audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
     override val audioTracks: TrackGroup<AudioTrack> = _audioTracks
 
-    override val audioController: MediaPlayerAudioController = object : MediaPlayerAudioController {
-        override val volume: MutableStateFlow<Float> = MutableStateFlow(1f)
-        override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
-        override val maxValue: Float = 2f
+    private val screenshots = VlcScreenshots()
+    private val playbackSpeed = VlcPlaybackSpeed()
+    private val audioLevelController = VlcAudioLevelController()
 
-        override fun toggleMute(mute: Boolean?) {
-            if (player.audio().isMute == mute) {
-                return
-            }
-            isMute.value = mute ?: !isMute.value
-            player.audio().mute()
-        }
-
-        override fun setVolume(volume: Float) {
-            this.volume.value = volume.coerceIn(0f, maxValue)
-            player.audio().setVolume(volume.times(100).roundToInt())
-        }
-
-        override fun volumeUp(value: Float) {
-            setVolume(volume.value + value)
-        }
-
-        override fun volumeDown(value: Float) {
-            setVolume(volume.value - value)
-        }
+    override val features: PlayerFeatures = buildPlayerFeatures {
+        add(Screenshots, screenshots)
+        add(Buffering, buffering)
+        add(AudioLevelController, audioLevelController)
+        add(PlaybackSpeed, playbackSpeed)
     }
 
     init {
@@ -335,8 +292,8 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
 
                 override fun mediaPlayerReady(mediaPlayer: MediaPlayer?) {
                     player.submit {
-                        audioController.setVolume(audioController.volume.value)
-                        audioController.toggleMute(audioController.isMute.value)
+                        audioLevelController.setVolume(audioLevelController.volume.value)
+                        audioLevelController.setMute(audioLevelController.isMute.value)
                     }
 
                     _chapters.value = player.chapters().allDescriptions().flatMap { title ->
@@ -380,17 +337,6 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
                 }
             },
         )
-
-        backgroundScope.launch {
-            var lastPosition = currentPositionMillis.value
-            while (true) {
-                delay(1500)
-                if (playbackState.value == PlaybackState.PLAYING) {
-                    isBuffering.value = lastPosition == currentPositionMillis.value
-                    lastPosition = currentPositionMillis.value
-                }
-            }
-        }
 
         backgroundScope.launch {
             subtitleTracks.current.collect { track ->
@@ -455,7 +401,7 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         }
 
         backgroundScope.launch {
-            openResource.filterNotNull().map { it.videoSource.extraFiles.subtitles }
+            openResource.filterNotNull().map { it.mediaSource.extraFiles.subtitles }
                 .distinctUntilChanged()
                 .debounce(1000)
                 .collectLatest { urls ->
@@ -509,13 +455,6 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         )
     }
 
-    override fun setPlaybackSpeed(speed: Float) {
-        player.submit {
-            player.controls().setRate(speed)
-        }
-        playbackSpeed.value = speed
-    }
-
     private val setTimeLock = ReentrantLock()
 
     override fun seekTo(positionMillis: Long) {
@@ -548,114 +487,80 @@ class VlcjVideoPlayerState(parentCoroutineContext: CoroutineContext) : PlayerSta
         }
         surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
     }
-}
 
-@Composable
-actual fun MediaPlayer(
-    playerState: PlayerState,
-    modifier: Modifier,
-) {
-    check(playerState is VlcjVideoPlayerState)
 
-    val mediaPlayer = playerState.player
-    val isFullscreen = false
-    LaunchedEffect(isFullscreen) {
-        /*
-         * To be able to access window in the commented code below,
-         * extend the player composable function from WindowScope.
-         * See https://github.com/JetBrains/compose-jb/issues/176#issuecomment-812514936
-         * and its subsequent comments.
-         *
-         * We could also just fullscreen the whole window:
-         * `window.placement = WindowPlacement.Fullscreen`
-         * See https://github.com/JetBrains/compose-multiplatform/issues/1489
-         */
-        // mediaPlayer.fullScreen().strategy(ExclusiveModeFullScreenStrategy(window))
-        mediaPlayer.fullScreen().toggle()
+    private inner class VlcPlaybackSpeed : PlaybackSpeed {
+        override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1.0f)
+        override val value: Float get() = valueFlow.value
+
+        override fun set(speed: Float) {
+            player.submit {
+                player.controls().setRate(speed)
+            }
+            valueFlow.value = speed
+        }
     }
-//    DisposableEffect(Unit) { onDispose(mediaPlayer::release) }
 
-    val frameSizeCalculator = remember {
-        FrameSizeCalculator()
-    }
-    Canvas(modifier) {
-        val bitmap = playerState.surface.bitmap ?: return@Canvas
-        frameSizeCalculator.calculate(
-            IntSize(bitmap.width, bitmap.height),
-            Size(size.width, size.height),
-        )
-        drawImage(
-            bitmap,
-            dstSize = frameSizeCalculator.dstSize,
-            dstOffset = frameSizeCalculator.dstOffset,
-            filterQuality = FilterQuality.High,
-        )
-    }
-}
+    private inner class VlcAudioLevelController : AudioLevelController {
+        override val volume: MutableStateFlow<Float> = MutableStateFlow(1f)
+        override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
+        override val maxVolume: Float = 2f
 
-private class FrameSizeCalculator {
-    private var lastImageSize: IntSize = IntSize.Zero
-    private var lastFrameSize: Size = Size.Zero
-
-    // no boxing
-    var dstSize: IntSize = IntSize.Zero
-    var dstOffset: IntOffset = IntOffset.Zero
-
-    private fun calculateImageSizeAndOffsetToFillFrame(
-        imageWidth: Int,
-        imageHeight: Int,
-        frameWidth: Float,
-        frameHeight: Float
-    ) {
-        // 计算图片和画框的宽高比
-        val imageAspectRatio = imageWidth.toFloat() / imageHeight.toFloat()
-
-        // 初始化最终的宽度和高度
-        val finalWidth = frameWidth
-        val finalHeight = frameWidth / imageAspectRatio
-        if (finalHeight > frameHeight) {
-            // 如果高度超出了画框的高度，那么就使用高度来计算宽度
-            val finalHeight2 = frameHeight
-            val finalWidth2 = frameHeight * imageAspectRatio
-            dstSize = IntSize(finalWidth2.roundToInt(), finalHeight2.roundToInt())
-            dstOffset = IntOffset(((frameWidth - finalWidth2) / 2).roundToInt(), 0)
-            return
+        override fun setMute(mute: Boolean) {
+            if (player.audio().isMute == mute) {
+                return
+            }
+            isMute.value = mute
+            player.audio().mute()
         }
 
-        // 计算左上角的偏移量
-        val offsetX = 0
-        val offsetY = (frameHeight - finalHeight) / 2
-
-        dstSize = IntSize(finalWidth.roundToInt(), finalHeight.roundToInt())
-        dstOffset = IntOffset(offsetX, offsetY.roundToInt())
-    }
-
-    fun calculate(
-        imageSize: IntSize,
-        frameSize: Size,
-    ) {
-        // 缓存上次计算结果, 因为这个函数会每帧绘制都调用
-        if (lastImageSize == imageSize && lastFrameSize == frameSize) {
-            return
+        override fun setVolume(volume: Float) {
+            this.volume.value = volume.coerceIn(0f, maxVolume)
+            player.audio().setVolume(volume.times(100).roundToInt())
         }
-        calculateImageSizeAndOffsetToFillFrame(
-            imageWidth = imageSize.width, imageHeight = imageSize.height,
-            frameWidth = frameSize.width, frameHeight = frameSize.height,
-        )
-        lastImageSize = imageSize
-        lastFrameSize = frameSize
-    }
-}
 
-// add contract
-@OptIn(ExperimentalContracts::class)
-private inline fun <T> ReentrantLock.withLock(block: () -> T): T {
-    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
-    lock()
-    try {
-        return block()
-    } finally {
-        unlock()
+        override fun volumeUp(value: Float) {
+            setVolume(volume.value + value)
+        }
+
+        override fun volumeDown(value: Float) {
+            setVolume(volume.value - value)
+        }
+    }
+
+    inner class VlcScreenshots : Screenshots {
+        override suspend fun takeScreenshot(destinationFile: String) {
+            suspendCoroutine { cont ->
+                player.submit {
+//                    val ppszPath = PointerByReference()
+//                    Shell32.INSTANCE.SHGetKnownFolderPath(KnownFolders.FOLDERID_Pictures, 0, null, ppszPath)
+//                    val picturesPath = ppszPath.value.getWideString(0)
+//                    val screenshotPath: Path = Path.of(picturesPath).resolve("Ani")
+//                    try {
+//                        screenshotPath.createDirectories()
+//                    } catch (ex: IOException) {
+//                        logger.warn("Create ani pictures dir fail", ex)
+//                    }
+//                    val filePath = screenshotPath.resolve(destinationFile)
+                    player.snapshots().save(File(destinationFile))
+                    cont.resume(null)
+                }
+            }
+        }
+    }
+
+    inner class VlcBuffering : Buffering {
+        override val bufferedPercentage = MutableStateFlow(0)
+        override val isBuffering: Flow<Boolean> = flow {
+            var lastPosition = currentPositionMillis.value
+            while (true) {
+                if (playbackState.value == PlaybackState.PLAYING) {
+                    emit(lastPosition == currentPositionMillis.value)
+                    lastPosition = currentPositionMillis.value
+                }
+                delay(1500)
+            }
+        }.distinctUntilChanged()
     }
 }
 
@@ -689,5 +594,17 @@ private object Logger {
     inline fun error(throwable: Throwable?, message: () -> String) {
         println("ERROR: ${message()}")
         throwable?.printStackTrace()
+    }
+}
+
+// add contract
+@OptIn(ExperimentalContracts::class)
+private inline fun <T> ReentrantLock.withLock(block: () -> T): T {
+    contract { callsInPlace(block, InvocationKind.EXACTLY_ONCE) }
+    lock()
+    try {
+        return block()
+    } finally {
+        unlock()
     }
 }

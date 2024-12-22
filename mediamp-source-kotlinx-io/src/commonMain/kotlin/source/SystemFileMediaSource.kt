@@ -2,9 +2,9 @@
  * Copyright (C) 2024 OpenAni and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 package org.openani.mediamp.source
@@ -42,11 +42,11 @@ public class SystemFileVideoData(
     }
 }
 
-public class SystemFileVideoSource internal constructor(
+public class SystemFileMediaSource internal constructor(
     public val path: Path,
     override val extraFiles: MediaExtraFiles,
     override val uri: String,
-) : VideoSource<SystemFileVideoData> {
+) : MediaSource<SystemFileVideoData> {
     override suspend fun open(): SystemFileVideoData = SystemFileVideoData(path)
     override fun toString(): String = "SystemFileVideoSource(uri=$uri)"
 }
@@ -55,9 +55,9 @@ public class SystemFileVideoSource internal constructor(
 public fun SystemFileVideoSource(
     path: Path,
     extraFiles: MediaExtraFiles = MediaExtraFiles.Empty,
-): SystemFileVideoSource {
+): SystemFileMediaSource {
     check(SystemFileSystem.exists(path)) { "File does not exist: $path" }
-    return SystemFileVideoSource(
+    return SystemFileMediaSource(
         path,
         extraFiles,
         "file://${SystemFileSystem.resolve(path)}",

@@ -22,7 +22,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
-import androidx.media3.common.Player
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
@@ -52,11 +51,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openani.mediamp.core.features.Buffering
+import org.openani.mediamp.core.features.PlaybackSpeed
+import org.openani.mediamp.core.features.PlayerFeatures
+import org.openani.mediamp.core.features.buildPlayerFeatures
 import org.openani.mediamp.core.internal.MutableTrackGroup
-import org.openani.mediamp.core.state.AbstractPlayerState
-import org.openani.mediamp.core.state.MediaPlayerAudioController
+import org.openani.mediamp.core.state.AbstractMediampPlayer
 import org.openani.mediamp.core.state.PlaybackState
-import org.openani.mediamp.core.state.PlayerState
 import org.openani.mediamp.core.state.PlayerStateFactory
 import org.openani.mediamp.media.VideoDataDataSource
 import org.openani.mediamp.metadata.AudioTrack
@@ -64,52 +65,56 @@ import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
-import org.openani.mediamp.source.HttpStreamingVideoSource
+import org.openani.mediamp.source.HttpStreamingMediaSource
+import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration.Companion.seconds
+import androidx.media3.common.Player as Media3Player
 
 class ExoPlayerStateFactory : PlayerStateFactory<Context> {
     @OptIn(UnstableApi::class)
-    override fun create(context: Context, parentCoroutineContext: CoroutineContext): PlayerState =
-        ExoPlayerState(context, parentCoroutineContext)
+    override fun create(
+        context: Context,
+        parentCoroutineContext: CoroutineContext
+    ): org.openani.mediamp.core.state.MediampPlayer =
+        ExoPlayerMediampPlayer(context, parentCoroutineContext)
 }
 
 
 @OptIn(UnstableApi::class)
 @kotlin.OptIn(MediampInternalApi::class)
-internal class ExoPlayerState @UiThread constructor(
+internal class ExoPlayerMediampPlayer @UiThread constructor(
     context: Context,
     parentCoroutineContext: CoroutineContext,
-) : AbstractPlayerState<ExoPlayerState.ExoPlayerData>(parentCoroutineContext),
+) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(parentCoroutineContext),
     AutoCloseable {
     class ExoPlayerData(
-        videoSource: VideoSource<*>,
+        mediaSource: MediaSource<*>,
         videoData: VideoData,
         releaseResource: () -> Unit,
         val setMedia: () -> Unit,
-    ) : Data(videoSource, videoData, releaseResource)
+    ) : Data(mediaSource, videoData, releaseResource)
 
     override suspend fun startPlayer(data: ExoPlayerData) {
         withContext(Dispatchers.Main.immediate) {
             data.setMedia()
-            player.prepare()
-            player.play()
+            exoPlayer.prepare()
+            exoPlayer.play()
         }
     }
 
     override suspend fun cleanupPlayer() {
         withContext(Dispatchers.Main.immediate) {
-            player.stop()
-            player.clearMediaItems()
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
         }
     }
 
-    override suspend fun openSource(source: VideoSource<*>): ExoPlayerData {
-        if (source is HttpStreamingVideoSource) {
+    override suspend fun openSource(source: MediaSource<*>): ExoPlayerData {
+        if (source is HttpStreamingMediaSource) {
             return ExoPlayerData(
                 source,
                 emptyVideoData(),
@@ -129,7 +134,7 @@ internal class ExoPlayerState @UiThread constructor(
                             },
                         )
                     }.build()
-                    player.setMediaSource(
+                    exoPlayer.setMediaSource(
                         DefaultMediaSourceFactory(
                             DefaultHttpDataSource.Factory()
                                 .setUserAgent(
@@ -160,14 +165,14 @@ internal class ExoPlayerState @UiThread constructor(
                 }
             },
             setMedia = {
-                player.setMediaSource(factory.createMediaSource(MediaItem.fromUri(source.uri)))
+                exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(source.uri)))
             },
         )
     }
 
     private val updateVideoPropertiesTasker = MonoTasker(backgroundScope)
 
-    val player = kotlin.run {
+    val exoPlayer = kotlin.run {
         ExoPlayer.Builder(context).apply {
             setTrackSelector(
                 object : DefaultTrackSelector(context) {
@@ -232,10 +237,10 @@ internal class ExoPlayerState @UiThread constructor(
         }.build().apply {
             playWhenReady = true
             addListener(
-                object : Player.Listener {
+                object : Media3Player.Listener {
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        this@ExoPlayerState.playbackState.value = PlaybackState.READY
-                        isBuffering.value = false
+                        this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.READY
+                        buffering.isBuffering.value = false
                     }
 
                     override fun onTracksChanged(tracks: Tracks) {
@@ -262,7 +267,7 @@ internal class ExoPlayerState @UiThread constructor(
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        this@ExoPlayerState.playbackState.value = PlaybackState.ERROR
+                        this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.ERROR
                         println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
                         error.printStackTrace()
                     }
@@ -301,17 +306,17 @@ internal class ExoPlayerState @UiThread constructor(
                      */
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         when (playbackState) {
-                            Player.STATE_BUFFERING -> {
-                                isBuffering.value = true
+                            Media3Player.STATE_BUFFERING -> {
+                                buffering.isBuffering.value = true
                             }
 
-                            Player.STATE_ENDED -> {
-                                this@ExoPlayerState.playbackState.value = PlaybackState.FINISHED
-                                isBuffering.value = false
+                            Media3Player.STATE_ENDED -> {
+                                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.FINISHED
+                                buffering.isBuffering.value = false
                             }
 
-                            Player.STATE_READY -> {
-                                isBuffering.value = false
+                            Media3Player.STATE_READY -> {
+                                buffering.isBuffering.value = false
                             }
                         }
                         updateVideoProperties()
@@ -319,20 +324,87 @@ internal class ExoPlayerState @UiThread constructor(
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         if (isPlaying) {
-                            this@ExoPlayerState.playbackState.value = PlaybackState.PLAYING
-                            isBuffering.value = false
+                            this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PLAYING
+                            buffering.isBuffering.value = false
                         } else {
-                            this@ExoPlayerState.playbackState.value = PlaybackState.PAUSED
+                            this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PAUSED
                         }
                     }
 
                     override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                         super.onPlaybackParametersChanged(playbackParameters)
-                        playbackSpeed.value = playbackParameters.speed
+                        playbackSpeed.valueFlow.value = playbackParameters.speed
                     }
                 },
             )
         }
+    }
+
+    override val videoProperties = MutableStateFlow<VideoProperties?>(null)
+
+    val buffering = BufferingImpl()
+
+    inner class BufferingImpl : Buffering {
+        override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
+        override val bufferedPercentage = MutableStateFlow(0)
+    }
+
+    override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
+    override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
+
+    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
+    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
+
+    private val playbackSpeed = PlaybackSpeedImpl()
+
+    private inner class PlaybackSpeedImpl : PlaybackSpeed {
+        override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
+        override val value: Float get() = playbackSpeed.value
+
+        override fun set(speed: Float) {
+            valueFlow.value = speed.coerceAtLeast(0f)
+            exoPlayer.setPlaybackSpeed(speed)
+        }
+    }
+
+    override val features: PlayerFeatures = buildPlayerFeatures {
+        add(PlaybackSpeed, playbackSpeed)
+        add(Buffering, buffering)
+    }
+
+    init {
+        backgroundScope.launch(Dispatchers.Main) {
+            while (currentCoroutineContext().isActive) {
+                currentPositionMillis.value = exoPlayer.currentPosition
+                buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
+                delay(0.1.seconds) // 10 fps
+            }
+        }
+        backgroundScope.launch(Dispatchers.Main) {
+            subtitleTracks.current.collect {
+                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().apply {
+                    setPreferredTextLanguage(it?.internalId) // dummy value to trigger a select, we have custom selector
+                    setTrackTypeDisabled(C.TRACK_TYPE_TEXT, it == null) // disable subtitle track
+                }.build()
+            }
+        }
+    }
+
+    override fun seekTo(positionMillis: Long) {
+        currentPositionMillis.value = positionMillis
+        exoPlayer.seekTo(positionMillis)
+    }
+
+    override fun getExactCurrentPositionMillis(): Long = exoPlayer.currentPosition
+
+    override fun pause() {
+        exoPlayer.playWhenReady = false
+        exoPlayer.pause()
+    }
+
+    override fun resume() {
+        exoPlayer.playWhenReady = true
+        exoPlayer.play()
     }
 
     private fun Tracks.Group.getSubtitleTracks() = sequence {
@@ -367,77 +439,21 @@ internal class ExoPlayerState @UiThread constructor(
         }
     }
 
-    override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false) // 需要单独状态, 因为要用户可能会覆盖 [state] 
     override fun stopImpl() {
-        player.stop()
+        exoPlayer.stop()
     }
 
-    override val videoProperties = MutableStateFlow<VideoProperties?>(null)
-    override val bufferedPercentage = MutableStateFlow(0)
-
-    override fun seekTo(positionMillis: Long) {
-        currentPositionMillis.value = positionMillis
-        player.seekTo(positionMillis)
-    }
-
-    override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
-    override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
-    override val audioController: MediaPlayerAudioController?
-        get() = TODO("Not yet implemented")
-
-    override fun saveScreenshotFile(filename: String) {
-        TODO("Not yet implemented")
-    }
-
-    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
-
-    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
-    override fun getExactCurrentPositionMillis(): Long = player.currentPosition
-
-    init {
-        backgroundScope.launch(Dispatchers.Main) {
-            while (currentCoroutineContext().isActive) {
-                currentPositionMillis.value = player.currentPosition
-                bufferedPercentage.value = player.bufferedPercentage
-                delay(0.1.seconds) // 10 fps
-            }
-        }
-        backgroundScope.launch(Dispatchers.Main) {
-            subtitleTracks.current.collect {
-                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().apply {
-                    setPreferredTextLanguage(it?.internalId) // dummy value to trigger a select, we have custom selector
-                    setTrackTypeDisabled(C.TRACK_TYPE_TEXT, it == null) // disable subtitle track
-                }.build()
-            }
-        }
-    }
-
-    override fun pause() {
-        player.playWhenReady = false
-        player.pause()
-    }
-
-    override fun resume() {
-        player.playWhenReady = true
-        player.play()
-    }
-
-    override val playbackSpeed: MutableStateFlow<Float> = MutableStateFlow(1f)
 
     override fun closeImpl() {
         @kotlin.OptIn(DelicateCoroutinesApi::class)
         GlobalScope.launch(Dispatchers.Main + NonCancellable) {
             try {
-                player.stop()
-                player.release()
+                exoPlayer.stop()
+                exoPlayer.release()
             } catch (e: Throwable) {
                 e.printStackTrace() // TODO: 2024/12/16
             }
         }
-    }
-
-    override fun setPlaybackSpeed(speed: Float) {
-        player.setPlaybackSpeed(speed)
     }
 }
 

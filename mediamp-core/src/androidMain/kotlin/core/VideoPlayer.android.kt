@@ -1,3 +1,12 @@
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 @file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 
 package org.openani.mediamp.core
@@ -11,13 +20,20 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.PlayerView.ControllerVisibilityListener
-import org.openani.mediamp.ExoPlayerState
-import org.openani.mediamp.core.state.PlayerState
+import org.openani.mediamp.ExoPlayerMediampPlayer
+import org.openani.mediamp.core.state.MediampPlayer
 
 @Composable
-actual fun MediaPlayer(
-    playerState: PlayerState,
+actual fun MediaPlayerSurface(
+    mediampPlayer: MediampPlayer,
     modifier: Modifier
+) = MediaPlayerSurface(mediampPlayer, modifier, configuration = {})
+
+@Composable
+fun MediaPlayerSurface(
+    mediampPlayer: MediampPlayer,
+    modifier: Modifier = Modifier,
+    configuration: PlayerView.() -> Unit = {},
 ) {
     AndroidView(
         factory = { context ->
@@ -38,8 +54,8 @@ actual fun MediaPlayer(
                         ),
                     )
                 }
-                (playerState as? ExoPlayerState)?.let {
-                    player = it.player
+                (mediampPlayer as? ExoPlayerMediampPlayer)?.let {
+                    this.player = it.exoPlayer
                     setControllerVisibilityListener(
                         ControllerVisibilityListener { visibility ->
                             if (visibility == View.VISIBLE) {
@@ -48,14 +64,16 @@ actual fun MediaPlayer(
                         },
                     )
                 }
+                configuration()
             }
         },
         modifier,
         onRelease = {
+            // TODO: 2024/12/22 release player 
         },
         update = { view ->
-            (playerState as? ExoPlayerState)?.let {
-                view.player = it.player
+            (mediampPlayer as? ExoPlayerMediampPlayer)?.let {
+                view.player = it.exoPlayer
             }
         },
     )

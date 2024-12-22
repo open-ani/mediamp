@@ -1,3 +1,12 @@
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 package org.openani.mediamp.source
 
 import kotlin.coroutines.cancellation.CancellationException
@@ -5,7 +14,7 @@ import kotlin.coroutines.cancellation.CancellationException
 /**
  * A source of the video data [S].
  *
- * [VideoSource]s are stateless: They only represent a location of the resource, not holding file descriptors or network connections, etc.
+ * [MediaSource]s are stateless: They only represent a location of the resource, not holding file descriptors or network connections, etc.
  *
  * ## Obtaining data stream
  *
@@ -15,14 +24,14 @@ import kotlin.coroutines.cancellation.CancellationException
  *
  * Note that both [VideoData] and [SeekableInput] are [AutoCloseable] and needs to be properly closed.
  *
- * In the BitTorrent scenario, [VideoSource.open] is to resolve magnet links, and to download the torrent metadata file.
+ * In the BitTorrent scenario, [MediaSource.open] is to resolve magnet links, and to download the torrent metadata file.
  * [VideoData.createInput] is to start downloading the actual video file.
- * Though the actual implementation might start downloading very soon (e.g. when [VideoSource] is just created), so that
+ * Though the actual implementation might start downloading very soon (e.g. when [MediaSource] is just created), so that
  * the video buffers more soon.
  *
  * @param S type of the stream
  */
-public interface VideoSource<S : VideoData> {
+public interface MediaSource<S : VideoData> {
     public val uri: String
 
     public val extraFiles: MediaExtraFiles

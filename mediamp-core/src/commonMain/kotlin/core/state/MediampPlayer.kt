@@ -12,56 +12,70 @@
 package org.openani.mediamp.core.state
 
 import androidx.annotation.UiThread
-import androidx.compose.runtime.Stable
-import androidx.compose.runtime.State
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import org.openani.mediamp.MediampInternalApi
-import org.openani.mediamp.core.MediaPlayer
+import org.openani.mediamp.core.features.PlayerFeatures
+import org.openani.mediamp.core.features.playerFeaturesOf
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
+import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.VideoData
-import org.openani.mediamp.source.VideoSource
 import org.openani.mediamp.source.VideoSourceOpenException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.reflect.KClass
 
 /**
- * A controller for the [MediaPlayer].
+ * An extensible media player that plays [MediaSource]s.
+ *
+ * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
+ * - Playback State: [playbackState], [videoData], [videoProperties], [currentPositionMillis], [playbackProgress]
+ * - Playback Control: [pause], [resume], [stop], [seekTo], [skip]
+ *
+ * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
+ *
+ * ## Additional Features
+ *
+ * - [org.openani.mediamp.core.features.AudioLevelController]: Controls the audio volume and mute state.
+ * - [org.openani.mediamp.core.features.Buffering]: Monitors the buffering progress.
+ * - [org.openani.mediamp.core.features.PlaybackSpeed]: Controls the playback speed.
+ * - [org.openani.mediamp.core.features.Screenshots]: Captures screenshots of the video.
+ *
+ * To obtain a feature, use the [PlayerFeatures.get] on [features].
+ *
+ * ## Threading Model
+ *
+ * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
+ * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
+ *
+ * All functions in this interface are expected to be called from the **main thread** on Android.
+ * Calls from illegal threads will cause an exception.
+ *
+ * On other platforms, calls are not required to be on the main thread but should still be called from a single thread.
+ * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the main thread in common code.
  */
-@Stable
-interface PlayerState {
+interface MediampPlayer {
     /**
-     * Current state of the player.
+     * A hot flow of the current playback state. Collect on this flow to receive state updates.
      *
-     * State can be changed internally e.g. buffer exhausted or externally by e.g. [pause], [resume].
+     * States might be changed either by user interaction ([resume]) or by the player itself (e.g. decoder errors).
      */
     val playbackState: StateFlow<PlaybackState>
 
@@ -71,30 +85,20 @@ interface PlayerState {
     val videoData: Flow<VideoData?>
 
     /**
-     * 视频数据缓存进度
-     */
-    val cacheProgress: MediaCacheProgressState
-
-    /**
-     * Sets the video source to play, by [opening][VideoSource.open] the [source],
-     * updating [videoSource], and resetting the progress to 0.
+     * Sets the video source to play, by [opening][MediaSource.open] the [source],
+     * updating [videoData], and calling the underlying player implementation to start playing.
      *
-     * Suspends until the new source has been updated.
+     * If this function failed to [start video streaming][MediaSource.open], it will throw an exception.
      *
-     * If this function failed to [start video streaming][VideoSource.open], it will throw an exception.
+     * This function must not be called on the main thread as it will call [MediaSource.open].
      *
-     * This function must not be called on the main thread as it will call [VideoSource.open].
+     * @param source the media source to play.
+     * @throws VideoSourceOpenException when failed to open the video source.
      *
-     * @param source the video source to play. `null` to stop playing.
-     * @throws VideoSourceOpenException 当打开失败时抛出, 包含原因
-     */
+     * @see stop
+     */ // TODO: 2024/12/22 mention cancellation support, thread safety, errors
     @Throws(VideoSourceOpenException::class, CancellationException::class)
-    suspend fun setVideoSource(source: VideoSource<*>)
-
-    /**
-     * 停止播放并清除上次[设置][setVideoSource]的视频源. 之后还可以通过 [setVideoSource] 恢复播放.
-     */
-    suspend fun clearVideoSource()
+    suspend fun setVideoSource(source: MediaSource<*>)
 
     /**
      * Properties of the video being played.
@@ -105,84 +109,80 @@ interface PlayerState {
     val videoProperties: StateFlow<VideoProperties?>
 
     /**
-     * 是否正在 buffer (暂停视频中)
-     */
-    val isBuffering: Flow<Boolean>
-
-    /**
-     * Current position of the video being played.
+     * Current playback position of the video being played in millis seconds, ranged from `0` to [VideoProperties.durationMillis].
      *
-     * `0` if no video is being played.
+     * `0` if no video is being played ([videoData] is null).
      */
     val currentPositionMillis: StateFlow<Long>
 
+    /**
+     * Obtains the exact current playback position of the video in milliseconds.
+     */
     @UiThread
     fun getExactCurrentPositionMillis(): Long
 
-    /**
-     * `0..100`
-     */
-    val bufferedPercentage: StateFlow<Int>
 
     /**
-     * 当前播放进度比例 `0..1`
+     * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
+     *
+     * There is no guarantee on the frequency of updates, but it should normally be updated at once per second.
      */
-    val playProgress: Flow<Float>
+    val playbackProgress: Flow<Float>
 
     /**
-     * 暂停播放, 直到 [pause]
+     * Resumes playback.
+     *
+     * If there is no video source set, this function will do nothing.
      */
-    @UiThread
-    fun pause()
-
-    /**
-     * 恢复播放
-     */
-    @UiThread
     fun resume()
 
     /**
-     * 停止播放, 之后不能恢复, 必须 [setVideoSource]
+     * Pauses playback.
+     *
+     * If there is no video source set, this function will do nothing.
      */
-    @UiThread
+    fun pause()
+
+    /**
+     * Stops playback, releasing all resources and setting [videoData] to `null`.
+     * Subsequent calls to [resume] will do nothing.
+     *
+     * To play again, call [setVideoSource].
+     */
     fun stop()
 
     /**
-     * 视频播放速度 (倍速)
+     * Jumps playback to the specified position.
      *
-     * 1.0 为原速度, 2.0 为两倍速度, 0.5 为一半速度, etc.
+     * // TODO argument errors?
      */
-    val playbackSpeed: StateFlow<Float>
-
-    @UiThread
-    fun setPlaybackSpeed(speed: Float)
-
-    /**
-     * 跳转到指定位置
-     */
-    @UiThread
     fun seekTo(positionMillis: Long)
 
     /**
-     * 快进或快退一段时间. 正数为快进, 负数为快退.
+     * Skips the current playback position by [deltaMillis].
+     * Positive [deltaMillis] will skip forward, and negative [deltaMillis] will skip backward.
+     *
+     * If the player is paused, it will remain paused, but it is guaranteed that the new frame will be displayed.
+     * If there is no video source set, this function will do nothing.
+     *
+     * // TODO argument errors?
      */
-    @UiThread
     fun skip(deltaMillis: Long) {
         seekTo(currentPositionMillis.value + deltaMillis)
     }
 
+    // TODO: 2024/12/22 extract to feature 
     val subtitleTracks: TrackGroup<SubtitleTrack>
-
     val audioTracks: TrackGroup<AudioTrack>
-
-    val audioController: MediaPlayerAudioController?
-
-    fun saveScreenshotFile(filename: String)
-
     val chapters: StateFlow<List<Chapter>>
+
+    /**
+     * Additional features that are supported by the underlying player implementation.
+     */
+    val features: PlayerFeatures
 }
 
-fun PlayerState.togglePause() {
+fun MediampPlayer.togglePause() {
     if (playbackState.value.isPlaying) {
         pause()
     } else {
@@ -190,28 +190,10 @@ fun PlayerState.togglePause() {
     }
 }
 
-typealias CacheProgressStateFactory<T> = (T, State<Boolean>) -> UpdatableMediaCacheProgressState?
-
-// TODO: 这可能不是很好, 但这是最不入侵现有代码的修改方案了
-object CacheProgressStateFactoryManager {
-    private val factories: MutableMap<KClass<*>, CacheProgressStateFactory<*>> =
-        mutableMapOf()
-
-    fun <T : VideoData> register(kClass: KClass<T>, factory: CacheProgressStateFactory<T>) {
-        factories[kClass] = factory
-    }
-
-    fun create(videoData: VideoData, isCacheFinished: State<Boolean>): UpdatableMediaCacheProgressState? =
-        factories[videoData::class]?.let { factory ->
-            @Suppress("UNCHECKED_CAST")
-            factory as CacheProgressStateFactory<VideoData>
-            factory(videoData, isCacheFinished)
-        }
-}
-
-abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
+@MediampInternalApi
+abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     parentCoroutineContext: CoroutineContext,
-) : PlayerState {
+) : MediampPlayer {
     protected val backgroundScope = CoroutineScope(
         parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job]),
     ).apply {
@@ -229,63 +211,26 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
     protected val openResource = MutableStateFlow<D?>(null)
 
     open class Data(
-        open val videoSource: VideoSource<*>,
+        open val mediaSource: MediaSource<*>,
         open val videoData: VideoData,
         open val releaseResource: () -> Unit,
     )
-
-    override val isBuffering: Flow<Boolean> by lazy {
-        playbackState.map { it == PlaybackState.PAUSED_BUFFERING }
-    }
 
     final override val videoData: Flow<VideoData?> = openResource.map {
         it?.videoData
     }
 
-    private val isCacheFinishedState = videoData.flatMapLatest {
-        it?.isCacheFinished ?: flowOf(false)
-    }.produceState(false, backgroundScope)
-
-    private val cacheProgressFlow = videoData.map {
-        when (it) {
-            null -> staticMediaCacheProgressState(ChunkState.NONE)
-
-//            is FileVideoData -> staticMediaCacheProgressState(ChunkState.DONE)
-
-            else ->
-                CacheProgressStateFactoryManager.create(it, isCacheFinishedState)
-                    ?: staticMediaCacheProgressState(ChunkState.NONE)
-        }
-    }.stateIn(backgroundScope, SharingStarted.WhileSubscribed(), staticMediaCacheProgressState(ChunkState.NONE))
-
-    protected open suspend fun cacheProgressLoop() {
-        while (true) {
-            cacheProgressFlow.value.update()
-            delay(1000)
-        }
-    }
-
-    init {
-        backgroundScope.launch {
-            cacheProgressLoop()
-        }
-    }
-
-    override val cacheProgress: UpdatableMediaCacheProgressState by
-    cacheProgressFlow.produceState(staticMediaCacheProgressState(ChunkState.NONE), backgroundScope)
-
-    final override val playProgress: Flow<Float> by lazy {
-        combine(videoProperties.filterNotNull(), currentPositionMillis) { properties, duration ->
+    final override val playbackProgress: Flow<Float>
+        get() = combine(videoProperties.filterNotNull(), currentPositionMillis) { properties, duration ->
             if (properties.durationMillis == 0L) {
                 return@combine 0f
             }
             (duration / properties.durationMillis).toFloat().coerceIn(0f, 1f)
         }
-    }
 
-    final override suspend fun setVideoSource(source: VideoSource<*>) {
+    final override suspend fun setVideoSource(source: MediaSource<*>) {
         val previousResource = openResource.value
-        if (source == previousResource?.videoSource) {
+        if (source == previousResource?.mediaSource) {
             return
         }
 
@@ -314,10 +259,6 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
         this.openResource.value = opened
     }
 
-    final override suspend fun clearVideoSource() {
-        cleanupPlayer()
-        this.openResource.value = null
-    }
 
     fun closeVideoSource() {
         // TODO: 2024/12/16 proper synchronization?
@@ -344,7 +285,7 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
     protected abstract suspend fun cleanupPlayer()
 
     @Throws(VideoSourceOpenException::class, CancellationException::class)
-    protected abstract suspend fun openSource(source: VideoSource<*>): D
+    protected abstract suspend fun openSource(source: MediaSource<*>): D
 
     private val closed = MutableStateFlow(false)
     fun close() {
@@ -387,9 +328,10 @@ enum class PlaybackState(
 /**
  * For previewing
  */
-class DummyPlayerState(
+class DummyMediampPlayer(
+    // TODO: 2024/12/22 move to preview package
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
-) : AbstractPlayerState<AbstractPlayerState.Data>(parentCoroutineContext) {
+) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(parentCoroutineContext) {
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
     override fun stopImpl() {
 
@@ -399,7 +341,7 @@ class DummyPlayerState(
         // no-op
     }
 
-    override suspend fun openSource(source: VideoSource<*>): Data {
+    override suspend fun openSource(source: MediaSource<*>): Data {
         val data = source.open()
         return Data(
             source,
@@ -419,11 +361,6 @@ class DummyPlayerState(
         // no-op
     }
 
-    override suspend fun cacheProgressLoop() {
-        // no-op
-        // 测试的时候 delay 会被直接跳过, 导致死循环
-    }
-
     override val videoProperties: MutableStateFlow<VideoProperties> = MutableStateFlow(
         VideoProperties(
             title = "Test Video",
@@ -435,20 +372,12 @@ class DummyPlayerState(
         return currentPositionMillis.value
     }
 
-    override val bufferedPercentage: StateFlow<Int> = MutableStateFlow(50)
-
     override fun pause() {
         playbackState.value = PlaybackState.PAUSED
     }
 
     override fun resume() {
         playbackState.value = PlaybackState.PLAYING
-    }
-
-    override val playbackSpeed: MutableStateFlow<Float> = MutableStateFlow(1.0f)
-
-    override fun setPlaybackSpeed(speed: Float) {
-        playbackSpeed.value = speed
     }
 
     override fun seekTo(positionMillis: Long) {
@@ -458,54 +387,12 @@ class DummyPlayerState(
     override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
     override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
 
-    override val audioController: MediaPlayerAudioController? = object : MediaPlayerAudioController {
-        override val volume: MutableStateFlow<Float> = MutableStateFlow(0f)
-        override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
-        override val maxValue: Float = 1f
-
-        override fun toggleMute(mute: Boolean?) {
-            isMute.value = mute ?: !isMute.value
-        }
-
-        override fun setVolume(volume: Float) {
-            this.volume.value = volume
-        }
-
-        override fun volumeUp(value: Float) {
-            setVolume(volume.value + value)
-        }
-
-        override fun volumeDown(value: Float) {
-            setVolume(volume.value - value)
-        }
-    }
-
-    override fun saveScreenshotFile(filename: String) {
-    }
-
     override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(
         listOf(
             Chapter("chapter1", durationMillis = 90_000L, 0L),
             Chapter("chapter2", durationMillis = 5_000L, 90_000L),
         ),
     )
-}
 
-/**
- * Collects the flow on the main thread into a [State].
- */
-private fun <T> Flow<T>.produceState(
-    initialValue: T,
-    scope: CoroutineScope,
-    coroutineContext: CoroutineContext = EmptyCoroutineContext,
-): State<T> {
-    val state = mutableStateOf(initialValue)
-    scope.launch(coroutineContext + Dispatchers.Main) {
-        flowOn(Dispatchers.Default) // compute in background
-            .collect {
-                // update state in main
-                state.value = it
-            }
-    }
-    return state
+    override val features: PlayerFeatures = playerFeaturesOf()
 }
