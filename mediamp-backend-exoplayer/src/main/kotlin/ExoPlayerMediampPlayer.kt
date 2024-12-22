@@ -61,8 +61,8 @@ import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
-import org.openani.mediamp.source.HttpStreamingMediaSource
 import org.openani.mediamp.source.MediaSource
+import org.openani.mediamp.source.UriMediaSource
 import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
@@ -134,7 +134,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     }
 
     override suspend fun openSource(source: MediaSource<*>): ExoPlayerData {
-        if (source is HttpStreamingMediaSource) {
+        if (source is UriMediaSource) {
             return ExoPlayerData(
                 source,
                 emptyVideoData(),
@@ -429,7 +429,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             format.metadata
             this.yield(
                 SubtitleTrack(
-                    "${openResource.value?.videoData?.filename}-${mediaTrackGroup.id}-$index",
+                    "${mediaTrackGroup.id}-$index",
                     mediaTrackGroup.id,
                     firstLabel ?: mediaTrackGroup.id,
                     format.labels.map { TrackLabel(it.language, it.value) },
@@ -445,7 +445,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             format.metadata
             this.yield(
                 AudioTrack(
-                    "${openResource.value?.videoData?.filename}-${mediaTrackGroup.id}-$index",
+                    "${mediaTrackGroup.id}-$index",
                     mediaTrackGroup.id,
                     firstLabel ?: mediaTrackGroup.id,
                     format.labels.map { TrackLabel(it.language, it.value) },

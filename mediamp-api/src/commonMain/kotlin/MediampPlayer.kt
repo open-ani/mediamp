@@ -34,7 +34,9 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
+import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.MediaSource
+import org.openani.mediamp.source.UriMediaSource
 import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.VideoSourceOpenException
 import kotlin.coroutines.CoroutineContext
@@ -137,6 +139,7 @@ public interface MediampPlayer {
      * Resumes playback.
      *
      * If there is no video source set, this function will do nothing.
+     * @see togglePause
      */
     public fun resume()
 
@@ -144,6 +147,7 @@ public interface MediampPlayer {
      * Pauses playback.
      *
      * If there is no video source set, this function will do nothing.
+     * @see togglePause
      */
     public fun pause()
 
@@ -186,6 +190,15 @@ public interface MediampPlayer {
     public val features: PlayerFeatures
 }
 
+/**
+ * Plays the video at the specified [uri], e.g. a local file or a remote URL.
+ */
+public suspend fun MediampPlayer.playUri(uri: String): Unit =
+    setVideoSource(UriMediaSource(uri, emptyMap(), MediaExtraFiles()))
+
+/**
+ * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
+ */
 public fun MediampPlayer.togglePause() {
     if (playbackState.value.isPlaying) {
         pause()
@@ -193,6 +206,7 @@ public fun MediampPlayer.togglePause() {
         resume()
     }
 }
+
 
 @MediampInternalApi
 public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(

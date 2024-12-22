@@ -48,8 +48,8 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
-import org.openani.mediamp.source.HttpStreamingMediaSource
 import org.openani.mediamp.source.MediaSource
+import org.openani.mediamp.source.UriMediaSource
 import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.emptyVideoData
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
@@ -135,7 +135,7 @@ class VlcVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampP
     ) : Data(mediaSource, videoData, releaseResource)
 
     override suspend fun openSource(source: MediaSource<*>): VlcjData {
-        if (source is HttpStreamingMediaSource) {
+        if (source is UriMediaSource) {
             return VlcjData(
                 source,
                 emptyVideoData(),
@@ -420,7 +420,7 @@ class VlcVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampP
             .filterNot { it.id() == -1 } // "Disable"
             .map {
                 SubtitleTrack(
-                    openResource.value?.videoData?.filename + "-" + it.id(),
+                    it.id().toString(),
                     it.id().toString(),
                     null,
                     listOf(TrackLabel(null, it.description())),
@@ -438,7 +438,7 @@ class VlcVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampP
             .filterNot { it.id() == -1 } // "Disable"
             .map {
                 AudioTrack(
-                    openResource.value?.videoData?.filename + "-" + it.id(),
+                    it.id().toString(),
                     it.id().toString(),
                     null,
                     listOf(TrackLabel(null, it.description())),

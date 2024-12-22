@@ -26,9 +26,6 @@ public class SystemFileVideoData(
     public val file: Path,
     private val bufferSize: Int = 8 * 1024,
 ) : VideoData {
-    override val filename: String
-        get() = file.name
-
     override fun fileLength(): Long? = SystemFileSystem.metadataOrNull(file)?.size
 
     @OptIn(MediampInternalApi::class)

@@ -15,25 +15,23 @@ import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.io.SeekableInput
 import kotlin.coroutines.CoroutineContext
 
-public open class HttpStreamingMediaSource(
+public open class UriMediaSource(
     override val uri: String,
-    private val filename: String,
     public val headers: Map<String, String> = emptyMap(),
     override val extraFiles: MediaExtraFiles,
-) : MediaSource<HttpStreamingVideoData> {
-    override suspend fun open(): HttpStreamingVideoData {
-        return HttpStreamingVideoData(uri, filename)
+) : MediaSource<UriVideoData> {
+    override suspend fun open(): UriVideoData {
+        return UriVideoData(uri)
     }
 
     override fun toString(): String {
-        return "HttpStreamingVideoSource(filename='$filename')"
+        return "HttpStreamingVideoSource(uri='$uri')"
     }
 }
 
 
-public class HttpStreamingVideoData(
+public class UriVideoData(
     public val url: String,
-    override val filename: String
 ) : VideoData {
     override fun fileLength(): Long? = null
 
