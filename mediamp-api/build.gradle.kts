@@ -6,29 +6,47 @@ plugins {
 
     `mpp-lib-targets`
     kotlin("plugin.serialization")
+    `maven-publish`
 }
+
+
+
+android {
+    namespace = "org.openani.mediamp.api"
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
+}
+
 
 kotlin {
     explicitApi()
-    sourceSets.commonMain.dependencies {
-        implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
-        implementation(libs.kotlinx.coroutines.core)
+    sourceSets {
+        commonMain.dependencies {
+            implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
+            implementation(libs.kotlinx.coroutines.core)
+        }
+        commonTest.dependencies {
+            api(kotlin("test"))
+            api(libs.kotlinx.coroutines.test)
+        }
+        androidMain.dependencies {
+            implementation(libs.androidx.compose.ui.tooling.preview)
+            implementation(libs.androidx.compose.ui.tooling)
+        }
+        getByName("jvmTest").dependencies {
+            api(libs.junit.jupiter.api)
+            runtimeOnly(libs.junit.jupiter.engine)
+        }
+        desktopMain.dependencies {
+        }
+        iosMain.dependencies {
+        }
     }
-    sourceSets.commonTest.dependencies {
-        api(kotlin("test"))
-        api(libs.kotlinx.coroutines.test)
-    }
-    sourceSets.androidMain.dependencies {
-        implementation(libs.androidx.compose.ui.tooling.preview)
-        implementation(libs.androidx.compose.ui.tooling)
-    }
-    sourceSets.getByName("jvmTest").dependencies {
-        api(libs.junit.jupiter.api)
-        runtimeOnly(libs.junit.jupiter.engine)
-    }
-    sourceSets.desktopMain.dependencies {
-    }
-    sourceSets.iosMain.dependencies {
+    androidTarget {
+        publishLibraryVariants("release")
     }
 }
 
@@ -36,6 +54,42 @@ tasks.withType<Test> {
     useJUnitPlatform()
 }
 
-android {
-    namespace = "org.openani.mediamp.api"
+publishing {
+    publications {
+        create<MavenPublication>("mediampSourceKotlinxIO") {
+            from(components["kotlin"])
+
+            pom {
+                name = "Mediamp API"
+                 description = "Core API for Mediamp"
+                url = "https://github.com/open-ani/mediamp"
+
+                licenses {
+                    name = ""
+                    url = ""
+                }
+
+                developers {
+                    developer {
+                        id = "open-ani"
+                        name = "The OpenAni Team and contributors"
+                        email = ""
+                    }
+                }
+
+                scm {
+                    connection = "scm:git:https://github.com/open-ani/mediamp.git"
+                    developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
+                    url = "https://github.com/open-ani/mediamp"
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "BuildDirectory"
+            url = uri(layout.buildDirectory.dir("testPublicationRepo"))
+        }
+    }
 }

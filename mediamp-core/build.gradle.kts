@@ -19,40 +19,50 @@ plugins {
     `maven-publish`
 }
 
-kotlin {
-    sourceSets.commonMain.dependencies {
-        api(projects.mediampApi)
-        api(libs.kotlinx.coroutines.core)
-        implementation(libs.androidx.annotation)
-    }
-    sourceSets.commonTest.dependencies {
-        api(libs.kotlinx.coroutines.test)
-    }
-    sourceSets.androidMain.dependencies {
-        implementation(libs.androidx.compose.ui.tooling.preview)
-        implementation(libs.androidx.compose.ui.tooling)
-        implementation(libs.compose.material3.adaptive.core.get().toString()) {
-            exclude("androidx.window.core", "window-core")
+android {
+    namespace = "org.openani.mediamp.core"
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
         }
-        implementation(libs.androidx.media3.ui)
-        implementation(libs.androidx.media3.exoplayer)
-        implementation(libs.androidx.media3.exoplayer.dash)
-        implementation(libs.androidx.media3.exoplayer.hls)
-    }
-    sourceSets.desktopMain.dependencies {
-        api(compose.desktop.currentOs) {
-            exclude(compose.material) // We use material3
-        }
-
-        api(libs.kotlinx.coroutines.swing)
-        implementation(libs.vlcj)
-        implementation(libs.jna)
-        implementation(libs.jna.platform)
     }
 }
 
-android {
-    namespace = "org.openani.mediamp.core"
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            api(projects.mediampApi)
+            api(libs.kotlinx.coroutines.core)
+            implementation(libs.androidx.annotation)
+        }
+        commonTest.dependencies {
+            api(libs.kotlinx.coroutines.test)
+        }
+        androidMain.dependencies {
+            implementation(libs.androidx.compose.ui.tooling.preview)
+            implementation(libs.androidx.compose.ui.tooling)
+            implementation(libs.compose.material3.adaptive.core.get().toString()) {
+                exclude("androidx.window.core", "window-core")
+            }
+            implementation(libs.androidx.media3.ui)
+            implementation(libs.androidx.media3.exoplayer)
+            implementation(libs.androidx.media3.exoplayer.dash)
+            implementation(libs.androidx.media3.exoplayer.hls)
+        }
+        desktopMain.dependencies {
+            api(compose.desktop.currentOs) {
+                exclude(compose.material) // We use material3
+            }
+
+            api(libs.kotlinx.coroutines.swing)
+            implementation(libs.vlcj)
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
+        }
+    }
+    androidTarget {
+        publishLibraryVariants("release")
+    }
 }
 
 publishing {
@@ -89,8 +99,8 @@ publishing {
 
     repositories {
         maven {
-            name = "myRepo"
-            url = uri(layout.buildDirectory.dir("repo"))
+            name = "BuildDirectory"
+            url = uri(layout.buildDirectory.dir("testPublicationRepo"))
         }
     }
 }

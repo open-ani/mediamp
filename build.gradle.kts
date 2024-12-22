@@ -22,16 +22,16 @@ buildscript {
 }
 
 plugins {
-//    alias(libs.plugins.kotlin.multiplatform) apply false
-//    alias(libs.plugins.kotlin.android) apply false
-//    alias(libs.plugins.kotlin.jvm) apply false
+    id(libs.plugins.kotlin.multiplatform.get().pluginId) apply false
+    id(libs.plugins.kotlin.android.get().pluginId) apply false
+    id(libs.plugins.kotlin.jvm.get().pluginId) apply false
     alias(libs.plugins.kotlin.plugin.serialization) apply false
-//    alias(libs.plugins.kotlin.plugin.compose) apply false
+    id(libs.plugins.kotlin.plugin.compose.get().pluginId) apply false
 //    id("org.jetbrains.kotlinx.atomicfu") version libs.versions.atomicfu apply false
 //    alias(libs.plugins.kotlinx.atomicfu) apply false
-//    alias(libs.plugins.compose) apply false
-//    alias(libs.plugins.android.library) apply false
-//    alias(libs.plugins.android.application) apply false
+    id(libs.plugins.compose.get().pluginId) apply false
+    id(libs.plugins.android.library.get().pluginId) apply false
+    id(libs.plugins.android.application.get().pluginId) apply false
     idea
 }
 
