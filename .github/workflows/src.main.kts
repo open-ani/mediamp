@@ -590,19 +590,6 @@ fun JobBuilder<*>.installNativeDeps() {
             """.trimIndent(),
         ),
     )
-    run(
-        name = "Install Native Dependencies for Windows",
-        `if` = expr { matrix.isWindows and matrix.installNativeDeps },
-        command = "./ci-helper/install-deps-windows.cmd",
-        env = mapOf("VCPKG_BINARY_SOURCES" to "clear;x-gha,readwrite"),
-    )
-
-    // MacOS
-    run(
-        name = "Install Native Dependencies for MacOS",
-        `if` = expr { matrix.isMacOS and matrix.installNativeDeps },
-        command = shell($$"""chmod +x ./ci-helper/install-deps-macos-ci.sh && ./ci-helper/install-deps-macos-ci.sh"""),
-    )
 }
 
 fun JobBuilder<*>.chmod777() {
