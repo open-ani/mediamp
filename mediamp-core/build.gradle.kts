@@ -71,9 +71,9 @@ kotlin {
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("release")))
+    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
     
-    publishToMavenCentral(SonatypeHost.DEFAULT)
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     
     signAllPublications()
 
@@ -82,9 +82,12 @@ mavenPublishing {
         description = "Core library for MediaMP"
         url = "https://github.com/open-ani/mediamp"
 
-        licenses { 
-            name = "GNU General Public License, version 3"
-            url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
+        licenses {
+            license {
+                name = "GNU General Public License, Version 3"
+                url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
+                distribution = "https://www.gnu.org/licenses/gpl-3.0.txt"
+            }
         }
 
         developers {
