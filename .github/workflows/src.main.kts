@@ -1,5 +1,14 @@
 #!/usr/bin/env kotlin
 
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 // 也可以在 IDE 里右键 Run
 
 @file:CompilerOptions("-Xmulti-dollar-interpolation", "-Xdont-warn-on-error-suppression")
@@ -202,10 +211,10 @@ val matrixInstances = listOf(
     MatrixInstance(
         id = "windows",
         name = "Windows x86_64",
-        runsOn = listOf("self-hosted", "Windows", "X64"),
+        runsOn = listOf("windows-2019"),
         os = OS.WINDOWS,
         arch = Arch.X64,
-        selfHosted = true,
+        selfHosted = false,
         uploadApk = false,
         buildAnitorrent = true,
         buildAnitorrentSeparately = false, // windows 单线程构建 anitorrent, 要一起跑节约时间
@@ -250,10 +259,10 @@ val matrixInstances = listOf(
     MatrixInstance(
         id = "macos-aarch64",
         name = "macOS AArch64",
-        runsOn = listOf("self-hosted", "macOS", "ARM64"),
+        runsOn = listOf("macos-14"),
         os = OS.MACOS,
         arch = Arch.AARCH64,
-        selfHosted = true,
+        selfHosted = false,
         uploadApk = true, // upload arm64-v8a once finished
         buildAnitorrent = true,
         buildAnitorrentSeparately = true,
