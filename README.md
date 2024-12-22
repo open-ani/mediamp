@@ -13,7 +13,7 @@ Supported targets and backends:
 
 Platforms that are not listed above are not supported yet.
 
-## Usage
+## Installation
 
 Check the latest
 version: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-core)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-core)
@@ -65,7 +65,16 @@ kotlin {
 }
 ```
 
-# License
+## Usage
+
+```kotlin
+fun main() = singleWindowApplication {
+    val player = rememberMediampPlayer()
+    MediaPlayer(player, Modifier.fillMaxSize())
+}
+```
+
+## License
 
 MediaMP is licensed under the GNU General Public License v3.0. You can find the full license text in
 the `LICENSE` file.
