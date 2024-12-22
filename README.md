@@ -17,7 +17,7 @@ Platforms that are not listed above are not supported yet.
 
 ```
     MediaMP
-    Copyright (C) 2024  The OpenAni Team and contributors
+    Copyright (C) 2024  OpenAni and contributors
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by

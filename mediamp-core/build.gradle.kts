@@ -93,7 +93,7 @@ mavenPublishing {
         developers {
             developer {
                 id = "openani"
-                name = "The OpenAni Team and contributors"
+                name = "OpenAni and contributors"
                 email = "support@openani.org"
             }
         }
