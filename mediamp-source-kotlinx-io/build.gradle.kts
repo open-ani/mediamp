@@ -63,20 +63,20 @@ mavenPublishing {
     signAllPublications()
     
     pom {
-        name = "Mediamp Source - Kotlinx IO"
-        description = "Mediamp data source implementation for Kotlinx IO"
+        name = "MediaMP Source - Kotlinx IO"
+        description = "MediaMP data source implementation for Kotlinx IO"
         url = "https://github.com/open-ani/mediamp"
 
         licenses {
-            name = ""
-            url = ""
+            name = "GNU General Public License, version 3"
+            url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
         }
 
         developers {
             developer {
-                id = "open-ani"
+                id = "openani"
                 name = "The OpenAni Team and contributors"
-                email = ""
+                email = "support@openani.org"
             }
         }
 

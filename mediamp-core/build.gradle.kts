@@ -78,20 +78,20 @@ mavenPublishing {
     signAllPublications()
 
     pom {
-        name = "Mediamp Core"
-        description = "Core library for Mediamp"
+        name = "MediaMP Core"
+        description = "Core library for MediaMP"
         url = "https://github.com/open-ani/mediamp"
 
         licenses { 
-            name = ""
-            url = ""
+            name = "GNU General Public License, version 3"
+            url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
         }
 
-        developers { 
+        developers {
             developer {
-                id = "open-ani"
+                id = "openani"
                 name = "The OpenAni Team and contributors"
-                email = ""
+                email = "support@openani.org"
             }
         }
 

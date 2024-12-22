@@ -1,6 +1,6 @@
-# mediamp
+# MediaMP
 
-Mediamp is a Kotlin-first media player for Jetpack Compose and Compose Multiplatform. It is an
+MediaMP is a Kotlin-first media player for Jetpack Compose and Compose Multiplatform. It is an
 wrapper over popular media player libraries like ExoPlayer on each platform.
 
 Supported targets and backends:
