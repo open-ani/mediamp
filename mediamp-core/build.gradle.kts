@@ -1,3 +1,8 @@
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.SonatypeHost
+
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
@@ -16,7 +21,7 @@ plugins {
     `mpp-lib-targets`
     kotlin("plugin.serialization")
 //    id("org.jetbrains.kotlinx.atomicfu")
-    `maven-publish`
+    alias(libs.plugins.vanniktech.mavenPublish)
 }
 
 android {
@@ -65,42 +70,35 @@ kotlin {
     }
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("mediampCore") {
-            from(components["kotlin"])
-            
-            pom {
-                name = "Mediamp Core"
-                description = "Core library for Mediamp"
-                url = "https://github.com/open-ani/mediamp"
-                
-                licenses { 
-                    name = ""
-                    url = ""
-                }
-                
-                developers { 
-                    developer {
-                        id = "open-ani"
-                        name = "The OpenAni Team and contributors"
-                        email = ""
-                    }
-                }
-                
-                scm {
-                    connection = "scm:git:https://github.com/open-ani/mediamp.git"
-                    developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
-                    url = "https://github.com/open-ani/mediamp"
-                }
+mavenPublishing {
+    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("release")))
+    
+    publishToMavenCentral(SonatypeHost.DEFAULT)
+    
+    signAllPublications()
+
+    pom {
+        name = "Mediamp Core"
+        description = "Core library for Mediamp"
+        url = "https://github.com/open-ani/mediamp"
+
+        licenses { 
+            name = ""
+            url = ""
+        }
+
+        developers { 
+            developer {
+                id = "open-ani"
+                name = "The OpenAni Team and contributors"
+                email = ""
             }
         }
-    }
 
-    repositories {
-        maven {
-            name = "BuildDirectory"
-            url = uri(layout.buildDirectory.dir("testPublicationRepo"))
+        scm {
+            connection = "scm:git:https://github.com/open-ani/mediamp.git"
+            developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
+            url = "https://github.com/open-ani/mediamp"
         }
     }
 }
