@@ -17,7 +17,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.io.IOException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
-import org.openani.mediamp.MediampInternalApi
+import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.SystemFileSeekableInput
 import kotlin.coroutines.CoroutineContext

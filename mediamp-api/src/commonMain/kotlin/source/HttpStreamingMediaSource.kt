@@ -11,7 +11,7 @@ package org.openani.mediamp.source
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import org.openani.mediamp.MediampInternalApi
+import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.io.SeekableInput
 import kotlin.coroutines.CoroutineContext
 

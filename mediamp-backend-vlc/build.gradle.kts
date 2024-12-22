@@ -7,66 +7,36 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
+import com.vanniktech.maven.publish.JavaLibrary
 import com.vanniktech.maven.publish.JavadocJar
-import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
-    kotlin("multiplatform")
-    id("com.android.library")
+    kotlin("jvm")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
-    `mpp-lib-targets`
-    kotlin("plugin.serialization")
     alias(libs.plugins.vanniktech.mavenPublish)
 }
 
-
-
-android {
-    namespace = "org.openani.mediamp.api"
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-        }
-    }
-}
-
-kotlin {
-    explicitApi()
-    sourceSets {
-        commonMain.dependencies {
-            implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
-            implementation(libs.kotlinx.coroutines.core)
-        }
-        commonTest.dependencies {
-            api(kotlin("test"))
-            api(libs.kotlinx.coroutines.test)
-        }
-        getByName("jvmTest").dependencies {
-            api(libs.junit)
-        }
-        desktopMain.dependencies {
-        }
-        iosMain.dependencies {
-        }
-    }
-    androidTarget {
-        publishLibraryVariants("release")
-    }
+dependencies {
+    api(projects.mediampApi)
+    api(projects.mediampCompose)
+    implementation(libs.vlcj)
+    implementation(libs.jna)
+    implementation(libs.jna.platform)
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
+    configure(JavaLibrary(JavadocJar.Empty(), true))
 
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
 
     signAllPublications()
 
     pom {
-        name = "MediaMP API"
-        description = "Core API for MediaMP"
+        name = "MediaMP Core"
+        description = "Core library for MediaMP"
         url = "https://github.com/open-ani/mediamp"
 
         licenses {
