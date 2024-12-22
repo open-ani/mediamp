@@ -5,13 +5,13 @@ wrapper over popular media player libraries like ExoPlayer on each platform.
 
 Supported targets and backends:
 
-|:---:|--------|------|
-|Platform| Architecture(s) | Implementation |
-| Android | x86_64, arm64-v8a, armeabi-v7a | ExoPlayer |
-| Windows | x86_64 | VLC |
-| macOS | x86_64, AArch64 | VLC |
+|    Platform    | Architecture(s)                | Implementation |
+|:--------------:|--------------------------------|----------------|
+|    Android     | x86_64, arm64-v8a, armeabi-v7a | ExoPlayer      |
+| JVM on Windows | x86_64                         | VLC            |
+|  JVM on macOS  | x86_64, AArch64                | VLC            |
 
-Platforms that are not listed above are not supported yet. 
+Platforms that are not listed above are not supported yet.
 
 # License
 
