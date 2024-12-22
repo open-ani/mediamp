@@ -79,7 +79,8 @@ class ExoPlayerStateFactory : PlayerStateFactory<Context> {
 }
 
 
-@OptIn(UnstableApi::class, MediampInternalApi::class)
+@OptIn(UnstableApi::class)
+@kotlin.OptIn(MediampInternalApi::class)
 internal class ExoPlayerState @UiThread constructor(
     context: Context,
     parentCoroutineContext: CoroutineContext,

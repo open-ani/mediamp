@@ -2,9 +2,9 @@
  * Copyright (C) 2024 OpenAni and contributors.
  *
  * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache-2.0 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 @file:OptIn(MediampInternalApi::class)
@@ -64,11 +64,6 @@ interface PlayerState {
      * State can be changed internally e.g. buffer exhausted or externally by e.g. [pause], [resume].
      */
     val playbackState: StateFlow<PlaybackState>
-
-    /**
-     * The video source that is currently being played.
-     */
-    val videoSource: StateFlow<VideoSource<*>?>
 
     /**
      * The video data of the currently playing video.
@@ -225,8 +220,6 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
         }
     }
 
-    override val videoSource: MutableStateFlow<VideoSource<*>?> = MutableStateFlow(null)
-
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
 
     /**
@@ -323,7 +316,6 @@ abstract class AbstractPlayerState<D : AbstractPlayerState.Data>(
 
     final override suspend fun clearVideoSource() {
         cleanupPlayer()
-        this.videoSource.value = null
         this.openResource.value = null
     }
 
@@ -431,8 +423,6 @@ class DummyPlayerState(
         // no-op
         // 测试的时候 delay 会被直接跳过, 导致死循环
     }
-
-    override val videoSource: MutableStateFlow<VideoSource<*>?> = MutableStateFlow(null)
 
     override val videoProperties: MutableStateFlow<VideoProperties> = MutableStateFlow(
         VideoProperties(
