@@ -31,7 +31,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 @Composable
 expect fun MediaPlayerSurface(
     mediampPlayer: MediampPlayer,
-    modifier: Modifier = Modifier, // no default value because we require a size modifier
+    modifier: Modifier = Modifier, 
 )
 
 /**
