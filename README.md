@@ -3,7 +3,7 @@
 MediaMP is a Kotlin-first media player for Compose Multiplatform. It is an
 wrapper over popular media player libraries like ExoPlayer on each platform.
 
-The goal is to provide a media player that is provides both common and backend-specific features, as
+The goal is to provide both common and backend-specific features for `commonMain`, as
 well as supporting direct access with the underlying media player library for advanced use cases.
 
 Supported targets and backends:
