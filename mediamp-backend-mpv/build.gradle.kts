@@ -217,8 +217,17 @@ val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", 
     from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve(buildType).listFiles().orEmpty() })
 }
 
-tasks.named("assemble") {
+val nativeJarsDir = layout.buildDirectory.dir("native-jars")
+val copyNativeJarForCurrentPlatform = tasks.register("copyNativeJarForCurrentPlatform", Copy::class.java) {
     dependsOn(nativeJarForCurrentPlatform)
+    description = "Copy native jar for current platform"
+    group = "mediamp"
+    from(nativeJarForCurrentPlatform.flatMap { it.archiveFile })
+    into(nativeJarsDir)
+}
+
+tasks.named("assemble") {
+    dependsOn(copyNativeJarForCurrentPlatform)
 }
 
 mavenPublishing {
@@ -230,10 +239,29 @@ mavenPublishing {
 
 tasks
     .matching { it.name.startsWith("publishDesktopPublicationTo") }
-    .all { dependsOn(nativeJarForCurrentPlatform) }
+    .all { dependsOn(copyNativeJarForCurrentPlatform) }
 
 tasks.getByName("signDesktopPublication") {
-    dependsOn(nativeJarForCurrentPlatform)
+    dependsOn(copyNativeJarForCurrentPlatform)
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            getByName("desktop", MavenPublication::class) {
+                val platforms = if (getLocalProperty("ani.publishing.onlyHostOS") == "true") {
+                    listOf("macos-aarch64")
+                } else {
+                    supportedOsTriples
+                }
+                platforms.forEach { platform ->
+                    artifact(nativeJarsDir.map { it.file("${project.name}-${project.version}-$platform.jar") }) {
+                        classifier = platform
+                    }
+                }
+            }
+        }
+    }
 }
 
 val cleanNativeBuild = tasks.register("cleanNativeBuild", Delete::class.java) {
