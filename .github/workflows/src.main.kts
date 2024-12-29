@@ -371,6 +371,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         freeSpace()
         installJbr21()
         chmod777()
+        installDependencies()
         setupGradle()
 
         gradleCheck()
@@ -513,6 +514,7 @@ workflow(
                 freeSpace()
                 installJbr21()
                 chmod777()
+                installDependencies()
                 setupGradle()
 
                 runGradle(
@@ -797,6 +799,15 @@ class WithMatrix(
                 command_Untyped = """./gradlew """ + matrix.gradleArgs,
             ),
         )
+    }
+
+    fun JobBuilder<*>.installDependencies() {
+        if (matrix.isMacOS && !matrix.selfHosted) {
+            run(
+                name = "Install dependencies for macOS",
+                command = shell($$"""brew install ninja"""),
+            )
+        }
     }
 
     fun JobBuilder<*>.gradleCheck() {
