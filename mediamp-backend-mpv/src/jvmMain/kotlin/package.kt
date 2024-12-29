@@ -8,10 +8,3 @@
  */
 
 package org.openani.mediamp.backend.mpv
-
-class MPVHandle {
-
-}
-
-external fun nGlobalInit(): Boolean
-external fun nMake(): Boolean

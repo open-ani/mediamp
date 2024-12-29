@@ -29,3 +29,5 @@ out/
 
 ### Mac OS ###
 .DS_Store
+
+**/.cxx/

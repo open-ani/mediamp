@@ -15,6 +15,11 @@ namespace mediampv {
 
 class mpv_handle_t final {
 public:
+    explicit mpv_handle_t(JNIEnv *env, jobject app_context) {
+        create(env, app_context);
+    }
+    ~mpv_handle_t() = default;
+    
     void create(JNIEnv *env, jobject app_context);
     bool initialize();
     bool set_event_listener(JNIEnv *env, jobject listener);
