@@ -214,7 +214,28 @@ val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", 
 
     val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
     archiveClassifier.set(getOsTriple())
-    from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve(buildType).listFiles().orEmpty() })
+    
+    when (getOs()) {
+        Os.MacOS -> {
+            // build-ci/libmediampv.dylib
+            // build-ci/deps/*.dylib
+            from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("libmediampv.dylib") })
+            from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("deps").listFiles().orEmpty() })
+        }
+        Os.Linux -> {
+            // build-ci/libmediampv.so
+            // build-ci/deps/*.so
+            from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("libmediampv.so") })
+            from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("deps").listFiles().orEmpty() })
+        }
+        Os.Windows -> {
+            // build-ci/Debug/mediampv.dll
+            // build-ci/Debug/*.dll
+            from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve(buildType).listFiles().orEmpty() })
+        }
+        else -> { }
+    }
+    
 }
 
 val nativeJarsDir = layout.buildDirectory.dir("native-jars")
