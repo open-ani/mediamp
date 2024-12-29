@@ -43,8 +43,8 @@ public interface MediaSource<S : MediaData> {
      *
      * Repeat calls to this function may return different instances so it may be desirable to store the result.
      *
-     * @throws VideoSourceOpenException 当打开失败时抛出, 包含原因
+     * @throws MediaSourceOpenException 当打开失败时抛出, 包含原因
      */
-    @Throws(VideoSourceOpenException::class, CancellationException::class)
+    @Throws(MediaSourceOpenException::class, CancellationException::class)
     public suspend fun open(): S
 }

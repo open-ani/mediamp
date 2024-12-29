@@ -37,8 +37,8 @@ import org.openani.mediamp.metadata.emptyTrackGroup
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.MediaSource
+import org.openani.mediamp.source.MediaSourceOpenException
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.VideoSourceOpenException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -100,11 +100,11 @@ public interface MediampPlayer {
      * This function must not be called on the main thread as it will call [MediaSource.open].
      *
      * @param source the media source to play.
-     * @throws VideoSourceOpenException when failed to open the video source.
+     * @throws MediaSourceOpenException when failed to open the video source.
      *
      * @see stop
      */ // TODO: 2024/12/22 mention cancellation support, thread safety, errors
-    @Throws(VideoSourceOpenException::class, CancellationException::class)
+    @Throws(MediaSourceOpenException::class, CancellationException::class)
     public suspend fun setVideoSource(source: MediaSource<*>)
 
     /**
@@ -302,7 +302,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
      */
     protected abstract suspend fun cleanupPlayer()
 
-    @Throws(VideoSourceOpenException::class, CancellationException::class)
+    @Throws(MediaSourceOpenException::class, CancellationException::class)
     protected abstract suspend fun openSource(source: MediaSource<*>): D
 
     private val closed = MutableStateFlow(false)

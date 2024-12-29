@@ -11,7 +11,7 @@ package org.openani.mediamp.source
 
 /**
  * @see MediaSource.open
- * @see VideoSourceOpenException
+ * @see MediaSourceOpenException
  */
 public enum class OpenFailures {
     /**
@@ -33,7 +33,7 @@ public enum class OpenFailures {
     ENGINE_DISABLED,
 }
 
-public class VideoSourceOpenException(
+public class MediaSourceOpenException(
     reason: OpenFailures,
     message: String? = null,
     override val cause: Throwable? = null,
