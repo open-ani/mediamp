@@ -370,7 +370,6 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
     with(WithMatrix(matrix)) {
         freeSpace()
         installJbr21()
-        installNativeDeps()
         chmod777()
         setupGradle()
 
@@ -513,7 +512,6 @@ workflow(
 
                 freeSpace()
                 installJbr21()
-                installNativeDeps()
                 chmod777()
                 setupGradle()
 
