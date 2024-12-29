@@ -250,7 +250,7 @@ afterEvaluate {
         publications {
             getByName("desktop", MavenPublication::class) {
                 val platforms = if (getLocalProperty("ani.publishing.onlyHostOS") == "true") {
-                    listOf("macos-aarch64")
+                    listOf(getOsTriple())
                 } else {
                     supportedOsTriples
                 }

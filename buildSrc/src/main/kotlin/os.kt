@@ -35,7 +35,7 @@ fun getArch(): Arch {
 fun getOsTriple(): String {
     return when (getOs()) {
         Os.Windows -> "windows-x64"
-        Os.MacOS -> if (getArch() == Arch.AARCH64) "macos-arm64" else "macos-x64"
+        Os.MacOS -> if (getArch() == Arch.AARCH64) "macos-aarch64" else "macos-x64"
         Os.Linux -> "linux-x64"
         Os.Unknown -> throw UnsupportedOperationException("Unknown OS")
     }
