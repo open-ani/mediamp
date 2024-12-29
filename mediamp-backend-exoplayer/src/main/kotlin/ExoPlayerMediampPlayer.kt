@@ -61,9 +61,9 @@ import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
+import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
@@ -113,10 +113,10 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 ) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(parentCoroutineContext) {
     class ExoPlayerData(
         mediaSource: MediaSource<*>,
-        videoData: VideoData,
+        mediaData: MediaData,
         releaseResource: () -> Unit,
         val setMedia: () -> Unit,
-    ) : Data(mediaSource, videoData, releaseResource)
+    ) : Data(mediaSource, mediaData, releaseResource)
 
     override suspend fun startPlayer(data: ExoPlayerData) {
         withContext(Dispatchers.Main.immediate) {
@@ -299,7 +299,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                     private fun updateVideoProperties(): Boolean {
                         val video = videoFormat ?: return false
                         val audio = audioFormat ?: return false
-                        val data = openResource.value?.videoData ?: return false
+                        val data = openResource.value?.mediaData ?: return false
                         val title = mediaMetadata.title
                         val duration = duration
 

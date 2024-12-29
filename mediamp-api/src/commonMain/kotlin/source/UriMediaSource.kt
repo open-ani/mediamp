@@ -19,9 +19,9 @@ public open class UriMediaSource(
     override val uri: String,
     public val headers: Map<String, String> = emptyMap(),
     override val extraFiles: MediaExtraFiles,
-) : MediaSource<UriVideoData> {
-    override suspend fun open(): UriVideoData {
-        return UriVideoData(uri)
+) : MediaSource<UriMediaData> {
+    override suspend fun open(): UriMediaData {
+        return UriMediaData(uri)
     }
 
     override fun toString(): String {
@@ -30,9 +30,9 @@ public open class UriMediaSource(
 }
 
 
-public class UriVideoData(
+public class UriMediaData(
     public val url: String,
-) : VideoData {
+) : MediaData {
     override fun fileLength(): Long? = null
 
     @OptIn(MediampInternalApi::class)

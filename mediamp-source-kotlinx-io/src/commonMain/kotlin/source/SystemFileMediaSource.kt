@@ -22,10 +22,10 @@ import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.SystemFileSeekableInput
 import kotlin.coroutines.CoroutineContext
 
-public class SystemFileVideoData(
+public class SystemFileMediaData(
     public val file: Path,
     private val bufferSize: Int = 8 * 1024,
-) : VideoData {
+) : MediaData {
     override fun fileLength(): Long? = SystemFileSystem.metadataOrNull(file)?.size
 
     @OptIn(MediampInternalApi::class)
@@ -43,8 +43,8 @@ public class SystemFileMediaSource internal constructor(
     public val path: Path,
     override val extraFiles: MediaExtraFiles,
     override val uri: String,
-) : MediaSource<SystemFileVideoData> {
-    override suspend fun open(): SystemFileVideoData = SystemFileVideoData(path)
+) : MediaSource<SystemFileMediaData> {
+    override suspend fun open(): SystemFileMediaData = SystemFileMediaData(path)
     override fun toString(): String = "SystemFileVideoSource(uri=$uri)"
 }
 

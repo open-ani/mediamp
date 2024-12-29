@@ -19,19 +19,19 @@ import kotlin.coroutines.cancellation.CancellationException
  * ## Obtaining data stream
  *
  * To get the input stream of the video file, two steps are needed:
- * 1. Open a [VideoData] using [open].
- * 2. Use [VideoData.createInput] to get the input stream [SeekableInput].
+ * 1. Open a [MediaData] using [open].
+ * 2. Use [MediaData.createInput] to get the input stream [SeekableInput].
  *
- * Note that both [VideoData] and [SeekableInput] are [AutoCloseable] and needs to be properly closed.
+ * Note that both [MediaData] and [SeekableInput] are [AutoCloseable] and needs to be properly closed.
  *
  * In the BitTorrent scenario, [MediaSource.open] is to resolve magnet links, and to download the torrent metadata file.
- * [VideoData.createInput] is to start downloading the actual video file.
+ * [MediaData.createInput] is to start downloading the actual video file.
  * Though the actual implementation might start downloading very soon (e.g. when [MediaSource] is just created), so that
  * the video buffers more soon.
  *
  * @param S type of the stream
  */
-public interface MediaSource<S : VideoData> {
+public interface MediaSource<S : MediaData> {
     public val uri: String
 
     public val extraFiles: MediaExtraFiles

@@ -21,7 +21,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 /**
  * Holds information about a video file.
  */
-public interface VideoData {
+public interface MediaData {
     /**
      * Returns the length of the video file in bytes, or `null` if not known.
      */
@@ -67,9 +67,9 @@ public class NetStats @MediampInternalApi public constructor(
     public val uploadRate: Long,
 )
 
-public fun emptyVideoData(): VideoData = EmptyVideoData
+public fun emptyVideoData(): MediaData = EmptyMediaData
 
-private object EmptyVideoData : VideoData {
+private object EmptyMediaData : MediaData {
     override fun fileLength(): Long? = null
 
     @OptIn(MediampInternalApi::class)

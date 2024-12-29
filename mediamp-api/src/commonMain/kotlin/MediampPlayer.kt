@@ -34,10 +34,10 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
+import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.VideoSourceOpenException
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -47,7 +47,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * An extensible media player that plays [MediaSource]s. Instances can be obtained from a [MediampPlayerFactory].
  *
  * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
- * - Playback State: [playbackState], [videoData], [videoProperties], [currentPositionMillis], [playbackProgress]
+ * - Playback State: [playbackState], [mediaData], [videoProperties], [currentPositionMillis], [playbackProgress]
  * - Playback Control: [pause], [resume], [stop], [seekTo], [skip]
  *
  * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
@@ -89,11 +89,11 @@ public interface MediampPlayer {
     /**
      * The video data of the currently playing video.
      */
-    public val videoData: Flow<VideoData?>
+    public val mediaData: Flow<MediaData?>
 
     /**
      * Sets the video source to play, by [opening][MediaSource.open] the [source],
-     * updating [videoData], and calling the underlying player implementation to start playing.
+     * updating [mediaData], and calling the underlying player implementation to start playing.
      *
      * If this function failed to [start video streaming][MediaSource.open], it will throw an exception.
      *
@@ -118,7 +118,7 @@ public interface MediampPlayer {
     /**
      * Current playback position of the video being played in millis seconds, ranged from `0` to [VideoProperties.durationMillis].
      *
-     * `0` if no video is being played ([videoData] is null).
+     * `0` if no video is being played ([mediaData] is null).
      */
     public val currentPositionMillis: StateFlow<Long>
 
@@ -152,7 +152,7 @@ public interface MediampPlayer {
     public fun pause()
 
     /**
-     * Stops playback, releasing all resources and setting [videoData] to `null`.
+     * Stops playback, releasing all resources and setting [mediaData] to `null`.
      * Subsequent calls to [resume] will do nothing.
      *
      * To play again, call [setVideoSource].
@@ -230,12 +230,12 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
 
     public open class Data(
         public open val mediaSource: MediaSource<*>,
-        public open val videoData: VideoData,
+        public open val mediaData: MediaData,
         public open val releaseResource: () -> Unit,
     )
 
-    final override val videoData: Flow<VideoData?> = openResource.map {
-        it?.videoData
+    final override val mediaData: Flow<MediaData?> = openResource.map {
+        it?.mediaData
     }
 
     final override val playbackProgress: Flow<Float>

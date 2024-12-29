@@ -48,9 +48,9 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
+import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.VideoData
 import org.openani.mediamp.source.emptyVideoData
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
@@ -129,10 +129,10 @@ class VlcVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampP
 
     class VlcjData(
         override val mediaSource: MediaSource<*>,
-        override val videoData: VideoData,
+        override val mediaData: MediaData,
         val setPlay: () -> Unit,
         releaseResource: () -> Unit
-    ) : Data(mediaSource, videoData, releaseResource)
+    ) : Data(mediaSource, mediaData, releaseResource)
 
     override suspend fun openSource(source: MediaSource<*>): VlcjData {
         if (source is UriMediaSource) {

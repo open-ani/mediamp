@@ -18,7 +18,7 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
 import kotlinx.coroutines.runBlocking
 import org.openani.mediamp.io.SeekableInput
-import org.openani.mediamp.source.VideoData
+import org.openani.mediamp.source.MediaData
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.measureTimedValue
@@ -28,12 +28,12 @@ private const val ENABLE_TRACE_LOG = false
 
 
 /**
- * Wrap of an Ani [org.openani.mediamp.source.VideoData] into a ExoPlayer [androidx.media3.datasource.DataSource].
+ * Wrap of an Ani [org.openani.mediamp.source.MediaData] into a ExoPlayer [androidx.media3.datasource.DataSource].
  *
- * This class will not close [videoData].
+ * This class will not close [mediaData].
  */
 internal class SeekableInputDataSource(
-    private val videoData: VideoData,
+    private val mediaData: MediaData,
     private val file: SeekableInput,
 ) : BaseDataSource(true) {
     private var uri: Uri? = null
@@ -69,7 +69,7 @@ internal class SeekableInputDataSource(
 
     @Throws(IOException::class)
     override fun open(dataSpec: DataSpec): Long {
-        if (ENABLE_TRACE_LOG) log { "Opening dataSpec, offset=${dataSpec.position}, length=${dataSpec.length}, videoData=$videoData" }
+        if (ENABLE_TRACE_LOG) log { "Opening dataSpec, offset=${dataSpec.position}, length=${dataSpec.length}, videoData=$mediaData" }
 
         val uri = dataSpec.uri
         if (opened && dataSpec.uri == this.uri) {
@@ -80,7 +80,7 @@ internal class SeekableInputDataSource(
             opened = true
         }
 
-        val torrentLength = videoData.fileLength() ?: 0
+        val torrentLength = mediaData.fileLength() ?: 0
 
         if (ENABLE_TRACE_LOG) log { "torrentLength = $torrentLength" }
 
