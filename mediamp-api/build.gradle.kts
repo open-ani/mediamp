@@ -30,10 +30,15 @@ android {
             withSourcesJar()
         }
     }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
 }
 
 kotlin {
     explicitApi()
+    jvmToolchain(8)
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 

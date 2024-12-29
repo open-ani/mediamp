@@ -12,6 +12,7 @@ import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SonatypeHost
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 plugins {
@@ -35,9 +36,13 @@ val archs = buildList {
 }
 
 kotlin {
-    jvmToolchain(8)
+    jvmToolchain(11)
     jvm("desktop")
-    androidTarget()
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_1_8)
+        }
+    }
 
     applyDefaultHierarchyTemplate {
         common {
@@ -54,7 +59,7 @@ kotlin {
 //        }
         getByName("jvmMain") {
             dependencies {
-                
+
             }
         }
     }
@@ -90,6 +95,10 @@ android {
         cmake {
             path = projectDir.resolve("CMakeLists.txt")
         }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
 }
 
@@ -143,7 +152,7 @@ val configureCMakeDesktop = tasks.register("configureCMakeDesktop", Exec::class.
     fun String.sanitize(): String {
         return this.replace("\\", "/").trim()
     }
-    
+
     val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
     check(buildType == "Debug" || buildType == "Release" || buildType == "RelWithDebInfo" || buildType == "MinSizeRel") {
         "Invalid build type: '$buildType'. Supported: Debug, Release, RelWithDebInfo, MinSizeRel"
@@ -207,13 +216,13 @@ val supportedOsTriples = listOf("macos-aarch64", "macos-x64", "windows-x64")
 
 val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", Jar::class.java) {
     dependsOn(buildCMakeDesktop)
-    
+
     group = "mediamp"
     description = "Create a jar for the native files for current platform"
 
     val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
     archiveClassifier.set(getOsTriple())
-    
+
     when (getOs()) {
         Os.MacOS -> {
             // build-ci/libmediampv.dylib
@@ -221,20 +230,23 @@ val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", 
             from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("libmediampv.dylib") })
             from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("deps").listFiles().orEmpty() })
         }
+
         Os.Linux -> {
             // build-ci/libmediampv.so
             // build-ci/deps/*.so
             from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("libmediampv.so") })
             from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve("deps").listFiles().orEmpty() })
         }
+
         Os.Windows -> {
             // build-ci/Debug/mediampv.dll
             // build-ci/Debug/*.dll
             from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve(buildType).listFiles().orEmpty() })
         }
-        else -> { }
+
+        else -> {}
     }
-    
+
 }
 
 val nativeJarsDir = layout.buildDirectory.dir("native-jars")

@@ -52,36 +52,6 @@ extensions.findByName("buildScan")?.withGroovyBuilder {
     setProperty("termsOfServiceAgree", "yes")
 }
 
-subprojects {
-    afterEvaluate {
-        val jdkVersion = project.findProperty("jvm.toolchain.version")?.toString() ?: "1.8"
-
-        val javaVersion = JavaVersion.toVersion(jdkVersion)
-        extensions.findByType<KotlinMultiplatformExtension>()?.apply {
-            compilerOptions {
-                jvmToolchain {
-                    languageVersion = JavaLanguageVersion.of(jdkVersion)
-                }
-            }
-        }
-        tasks.withType<KotlinJvmCompile> {
-            compilerOptions {
-                jvmTarget = JvmTarget.fromTarget(jdkVersion.toString())
-            }
-        }
-        extensions.findByType(JavaPluginExtension::class.java)?.run {
-            sourceCompatibility = javaVersion
-            targetCompatibility = javaVersion
-        }
-        extensions.findByType(CommonExtension::class)?.apply {
-            compileOptions {
-                sourceCompatibility = javaVersion
-                targetCompatibility = javaVersion
-            }
-        }
-    }
-}
-
 idea {
     module {
         excludeDirs.add(file(".kotlin"))

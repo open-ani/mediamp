@@ -19,11 +19,7 @@ repositories {
 
 kotlin {
     jvmToolchain {
-        this.languageVersion =
-            JavaLanguageVersion.of(
-                (project.findProperty("jvm.toolchain.version")?.toString() ?: "21").toIntOrNull()
-                    ?: error("jvm.toolchain.version must be an integer, check your configuration!"),
-            )
+        this.languageVersion = JavaLanguageVersion.of(11)
     }
     compilerOptions {
         optIn.add("org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi")
