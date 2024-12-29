@@ -20,7 +20,7 @@ import kotlin.math.roundToInt
 
 @Composable
 fun MediaPlayerSurfaceWithVlc(
-    mediampPlayer: VlcVideoMediampPlayer,
+    mediampPlayer: VlcMediampPlayer,
     modifier: Modifier = Modifier,
 ) {
     val frameSizeCalculator = remember {

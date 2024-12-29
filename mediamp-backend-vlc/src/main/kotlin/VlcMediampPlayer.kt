@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.backend.vlc.VlcVideoMediampPlayer.VlcjData
+import org.openani.mediamp.backend.vlc.VlcMediampPlayer.VlcjData
 import org.openani.mediamp.backend.vlc.internal.io.SeekableInputCallbackMedia
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
@@ -73,7 +73,7 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
 @Stable
-class VlcVideoMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer,
+class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer,
     AbstractMediampPlayer<VlcjData>(parentCoroutineContext) {
     companion object {
         private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
