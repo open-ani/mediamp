@@ -46,5 +46,6 @@ dependencies {
     api(libs.android.library.gradle.plugin)
     api(libs.compose.multiplatfrom.gradle.plugin)
     api(libs.kotlin.compose.compiler.gradle.plugin)
+    api(libs.gradle.maven.publish.plugin)
     implementation(kotlin("script-runtime"))
 }

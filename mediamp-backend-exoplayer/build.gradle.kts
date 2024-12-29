@@ -16,7 +16,7 @@ plugins {
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
-    alias(libs.plugins.vanniktech.mavenPublish)
+    id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
 description = "MediaMP backend using ExoPlayer"
@@ -43,36 +43,7 @@ dependencies {
 
 mavenPublishing {
     configure(AndroidMultiVariantLibrary(true, true, setOf("debug", "release")))
-
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-
     signAllPublications()
-
-    pom {
-        name = "MediaMP Core"
-        description = "Core library for MediaMP"
-        url = "https://github.com/open-ani/mediamp"
-
-        licenses {
-            license {
-                name = "GNU General Public License, Version 3"
-                url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
-                distribution = "https://www.gnu.org/licenses/gpl-3.0.txt"
-            }
-        }
-
-        developers {
-            developer {
-                id = "openani"
-                name = "OpenAni and contributors"
-                email = "support@openani.org"
-            }
-        }
-
-        scm {
-            connection = "scm:git:https://github.com/open-ani/mediamp.git"
-            developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
-            url = "https://github.com/open-ani/mediamp"
-        }
-    }
+    configurePom(project)
 }

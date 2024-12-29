@@ -18,7 +18,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 plugins {
     kotlin("multiplatform")
     id("com.android.library")
-    alias(libs.plugins.vanniktech.mavenPublish)
+    id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
     idea
 }
 
@@ -94,9 +94,159 @@ android {
     }
 }
 
-val nativeBuildDir = projectDir.resolve("build-native")
+val nativeBuildDir = projectDir.resolve("build-ci")
 
-// TODO: configure manual build
+val configureCMakeDesktop = tasks.register("configureCMakeDesktop", Exec::class.java) {
+    group = "mediamp"
+
+    val cmake = getPropertyOrNull("CMAKE") ?: "cmake"
+    val ninja = getPropertyOrNull("NINJA") ?: "ninja"
+
+    // Prefer clang, as the CI is tested with Clang
+    val compilerC = getPropertyOrNull("CMAKE_C_COMPILER") ?: kotlin.run {
+        when (getOs()) {
+            Os.Windows -> {
+                null
+            }
+
+            Os.Unknown,
+            Os.MacOS,
+            Os.Linux -> {
+                File("/usr/bin/clang").takeIf { it.exists() }
+                    ?: File("/usr/bin/gcc").takeIf { it.exists() }
+            }
+        }?.absolutePath?.also {
+            logger.info("Using C compiler: $it")
+        }
+    }
+    val compilerCxx = getPropertyOrNull("CMAKE_CXX_COMPILER") ?: kotlin.run {
+        when (getOs()) {
+            Os.Windows -> {
+                File("C:/Program Files/LLVM/bin/clang++.exe").takeIf { it.exists() }
+                    ?: File("C:/Program Files/LLVM/bin/clang++.exe").takeIf { it.exists() }
+            }
+
+            Os.Unknown,
+            Os.MacOS,
+            Os.Linux -> {
+                File("/usr/bin/clang++").takeIf { it.exists() }
+                    ?: File("/usr/bin/g++").takeIf { it.exists() }
+            }
+        }?.absolutePath?.also {
+            logger.info("Using CXX compiler: $it")
+        }
+    }
+    val isWindows = getOs() == Os.Windows
+
+    inputs.file(projectDir.resolve("CMakeLists.txt"))
+    outputs.dir(nativeBuildDir)
+
+    fun String.sanitize(): String {
+        return this.replace("\\", "/").trim()
+    }
+    
+    val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
+    check(buildType == "Debug" || buildType == "Release" || buildType == "RelWithDebInfo" || buildType == "MinSizeRel") {
+        "Invalid build type: '$buildType'. Supported: Debug, Release, RelWithDebInfo, MinSizeRel"
+    }
+
+    commandLine = buildList {
+        add(cmake)
+        add("-DCMAKE_BUILD_TYPE=$buildType")
+        add("-DCMAKE_C_FLAGS_RELEASE=-O3")
+        if (!isWindows) {
+            compilerC?.let { add("-DCMAKE_C_COMPILER=${compilerC.sanitize()}") }
+            compilerCxx?.let { add("-DCMAKE_CXX_COMPILER=${compilerCxx.sanitize()}") }
+            add("-DCMAKE_MAKE_PROGRAM=${ninja.sanitize()}")
+            add("-G")
+            add("Ninja")
+        } else {
+            getPropertyOrNull("CMAKE_TOOLCHAIN_FILE")?.let { add("-DCMAKE_TOOLCHAIN_FILE=${it.sanitize()}") }
+            if (getPropertyOrNull("USE_NINJA")?.toBooleanStrict() == true) {
+                add("-DCMAKE_MAKE_PROGRAM=${ninja.sanitize()}")
+                add("-G")
+                add("Ninja")
+            }
+        }
+        add("-S")
+        add(projectDir.absolutePath)
+        add("-B")
+        add(nativeBuildDir.absolutePath)
+    }
+    logger.warn(commandLine.joinToString(" "))
+}
+
+val buildCMakeDesktop = tasks.register("buildCMakeDesktop", Exec::class.java) {
+    group = "mediamp"
+    dependsOn(configureCMakeDesktop)
+
+    val cmake = getPropertyOrNull("CMAKE") ?: "cmake"
+    val isWindows = getOs() == Os.Windows
+    val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
+
+    inputs.file(projectDir.resolve("CMakeLists.txt"))
+    inputs.dir(projectDir.resolve("src/cpp/include"))
+    inputs.dir(projectDir.resolve("src/cpp"))
+    outputs.dir(nativeBuildDir)
+
+    commandLine = listOf(
+        cmake,
+        "--build", nativeBuildDir.absolutePath,
+        "--target", "mediampv",
+        *if (isWindows && buildType == "Release") arrayOf("--config", "Release") else emptyArray(),
+        "-j", Runtime.getRuntime().availableProcessors().toString(),
+    )
+    logger.warn(commandLine.joinToString(" "))
+}
+
+tasks.withType(KotlinJvmCompile::class) {
+    dependsOn(buildCMakeDesktop)
+}
+
+
+val supportedOsTriples = listOf("macos-aarch64", "macos-x64", "windows-x64")
+
+val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", Jar::class.java) {
+    dependsOn(buildCMakeDesktop)
+    
+    group = "mediamp"
+    description = "Create a jar for the native files for current platform"
+
+    val buildType = getPropertyOrNull("CMAKE_BUILD_TYPE") ?: "Debug"
+    archiveClassifier.set(getOsTriple())
+    from(buildCMakeDesktop.map { it.outputs.files.singleFile.resolve(buildType).listFiles().orEmpty() })
+}
+
+tasks.named("assemble") {
+    dependsOn(nativeJarForCurrentPlatform)
+}
+
+mavenPublishing {
+    configure(KotlinMultiplatform(JavadocJar.Empty(), true, androidVariantsToPublish = listOf("release", "debug")))
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    signAllPublications()
+    configurePom(project)
+}
+
+tasks
+    .matching { it.name.startsWith("publishDesktopPublicationTo") }
+    .all { dependsOn(nativeJarForCurrentPlatform) }
+
+tasks.getByName("signDesktopPublication") {
+    dependsOn(nativeJarForCurrentPlatform)
+}
+
+val cleanNativeBuild = tasks.register("cleanNativeBuild", Delete::class.java) {
+    group = "mediamp"
+    // desktop and android build
+    delete(nativeBuildDir, projectDir.resolve(".cxx"))
+}
+
+tasks.named("clean") {
+    dependsOn(cleanNativeBuild)
+}
+
+
 
 idea {
     module {

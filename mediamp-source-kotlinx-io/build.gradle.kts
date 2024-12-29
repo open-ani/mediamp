@@ -21,8 +21,10 @@ plugins {
     `mpp-lib-targets`
     kotlin("plugin.serialization")
 //    id("org.jetbrains.kotlinx.atomicfu")
-    alias(libs.plugins.vanniktech.mavenPublish)
+    id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
+
+description = "MediaMP data source implementation for Kotlinx IO"
 
 android {
     namespace = "org.openani.mediamp.source.kotlinx.io"
@@ -57,37 +59,7 @@ kotlin {
 
 mavenPublishing {
     configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
-    
-
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-
     signAllPublications()
-    
-    pom {
-        name = "MediaMP Source - Kotlinx IO"
-        description = "MediaMP data source implementation for Kotlinx IO"
-        url = "https://github.com/open-ani/mediamp"
-
-        licenses {
-            license {
-                name = "GNU General Public License, Version 3"
-                url = "https://github.com/open-ani/mediamp/blob/main/LICENSE"
-                distribution = "https://www.gnu.org/licenses/gpl-3.0.txt"
-            }
-        }
-
-        developers {
-            developer {
-                id = "openani"
-                name = "OpenAni and contributors"
-                email = "support@openani.org"
-            }
-        }
-
-        scm {
-            connection = "scm:git:https://github.com/open-ani/mediamp.git"
-            developerConnection = "scm:git:git@github.com:open-ani/mediamp.git"
-            url = "https://github.com/open-ani/mediamp"
-        }
-    }
+    configurePom(project)
 }

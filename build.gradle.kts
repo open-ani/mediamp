@@ -32,6 +32,7 @@ plugins {
     id(libs.plugins.compose.get().pluginId) apply false
     id(libs.plugins.android.library.get().pluginId) apply false
     id(libs.plugins.android.application.get().pluginId) apply false
+    id(libs.plugins.vanniktech.mavenPublish.get().pluginId) apply false
     idea
 }
 

@@ -31,3 +31,4 @@ out/
 .DS_Store
 
 **/.cxx/
+**/build-ci/

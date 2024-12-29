@@ -1,4 +1,5 @@
 [versions]
+gradle-maven-publish-plugin = "0.28.0"
 kotlin = "2.1.0"
 # kotlinx
 coroutines = "1.9.0" # https://github.com/Kotlin/kotlinx.coroutines/releases
@@ -47,7 +48,7 @@ kotlinx-atomicfu = { id = "org.jetbrains.kotlinx.atomicfu", version.ref = "atomi
 compose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 android-library = { id = "com.android.library", version.ref = "android-gradle-plugin" }
 android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
-vanniktech-mavenPublish = { id = "com.vanniktech.maven.publish", version = "0.29.0" }
+vanniktech-mavenPublish = { id = "com.vanniktech.maven.publish", version = "gradle-maven-publish-plugin" }
 
 [libraries]
 # Build
@@ -55,6 +56,7 @@ android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref
 android-library-gradle-plugin = { module = "com.android.library:com.android.library.gradle.plugin", version.ref = "android-gradle-plugin" }
 android-application-gradle-plugin = { module = "com.android.application:com.android.application.gradle.plugin", version.ref = "android-gradle-plugin" }
 
+gradle-maven-publish-plugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "gradle-maven-publish-plugin" }
 junit = { module = "junit:junit", version.ref = "junit4" }
 
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
