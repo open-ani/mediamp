@@ -17,6 +17,10 @@ UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_FLAG;
 UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_INT64;
 UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_DOUBLE;
 UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_STRING;
+#ifdef __ANDROID__
+UTIL_EXTERN jclass jni_mediamp_clazz_android_Surface;
+#endif
+
 
 static bool jni_class_cached = false;
 void jni_cache_classes(JNIEnv *env);

@@ -69,6 +69,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         return nullptr;
     }
 
+    LOG("[event_loop] event loop is started.");
     while (!event_loop_request_exit) {
         if (!handle_) {
             LOG("[event_loop] mpv handle_ is destroyed, event loop will stop");
@@ -87,12 +88,15 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         switch (event->event_id) {
             case MPV_EVENT_PROPERTY_CHANGE:
                 event_property = (mpv_event_property *) event->data;
-                emit_property_change(env, event_property, &event_listener_);
-                LOG("[event_loop] property change: %s", property->name);
+                emit_property_change(env, event_property, event_listener_);
+                LOG("[event_loop] property change: %s", event_property->name);
                 break;
             case MPV_EVENT_LOG_MESSAGE:
                 log_message = (mpv_event_log_message *) event->data;
                 LOG("[event_loop] [%s:%s] %s", log_message->prefix, log_message->level, log_message->text);
+                break;
+            case MPV_EVENT_IDLE:
+                LOG("[event_loop] idle");
                 break;
             default:
                 LOG("[event_loop] unhandled event: %d", event->event_id);
@@ -100,6 +104,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         }
 
     }
+    LOG("[event_loop] event loop is stopped.");
 
     if (jvm_) jvm_->DetachCurrentThread();
     return nullptr;

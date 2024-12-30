@@ -25,11 +25,25 @@ public:
     bool set_event_listener(JNIEnv *env, jobject listener);
     bool destroy(JNIEnv *env);
     
+    bool command(const char **args);
+    bool set_option(const char *key, const char *value);
+    bool get_property(const char *name, mpv_format format, void *out_result);
+    bool set_property(const char *name, mpv_format format, void *in_value);
+    bool observe_property(const char *property, mpv_format format, uint64_t reply_data);
+    bool unobserve_property(uint64_t reply_data);
+    
+    bool attach_android_surface(JNIEnv *env, jobject surface);
+    bool detach_android_surface(JNIEnv *env);
+    
 private:
     JavaVM *jvm_;
     mpv_handle *handle_;
     
-    jobject event_listener_;
+    jobject *event_listener_ = nullptr;
+
+#ifdef __ANDROID__
+    jobject surface_;
+#endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
     bool event_loop_request_exit = false;
