@@ -13,7 +13,7 @@ import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
 
 @Composable
-actual fun MediaPlayerSurface(
+actual fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
     modifier: Modifier,
 ) {

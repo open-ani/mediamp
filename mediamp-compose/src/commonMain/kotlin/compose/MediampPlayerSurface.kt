@@ -28,7 +28,7 @@ import kotlin.coroutines.EmptyCoroutineContext
  * The surface is center-aligned, fitting the available space while maintaining the aspect ratio.
  */
 @Composable
-expect fun MediaPlayerSurface(
+expect fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
     modifier: Modifier = Modifier, 
 )

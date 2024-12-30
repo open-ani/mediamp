@@ -14,11 +14,9 @@ import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.MediampPlayerFactory
 import org.openani.mediamp.MediampPlayerFactoryLoader
-import org.openani.mediamp.internal.MediampInternalApi
 
-@OptIn(MediampInternalApi::class)
 @Composable
-actual fun MediaPlayerSurface(
+actual fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
     modifier: Modifier
 ) {
