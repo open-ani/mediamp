@@ -19,7 +19,7 @@ repositories {
 
 kotlin {
     jvmToolchain {
-        this.languageVersion = JavaLanguageVersion.of(8)
+        this.languageVersion = JavaLanguageVersion.of(11)
     }
     compilerOptions {
         optIn.add("org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi")
