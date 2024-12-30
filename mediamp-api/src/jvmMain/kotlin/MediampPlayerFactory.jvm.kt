@@ -19,7 +19,14 @@ public actual fun MediampPlayer(
     .create(context, parentCoroutineContext)
 
 public object MediampPlayerFactoryLoader {
-    private val factories = ServiceLoader.load(MediampPlayerFactory::class.java).toList()
+    private var factories = ServiceLoader.load(MediampPlayerFactory::class.java).toList()
+
+    /**
+     * Register a [MediampPlayerFactory] implementation.
+     */
+    public fun register(factory: MediampPlayerFactory<*>) {
+        factories = (factories + factory).distinctBy { it.forClass }
+    }
 
     public fun first(): MediampPlayerFactory<*> = factories.firstOrNull()
         ?: throw IllegalStateException("No MediampPlayerFactory implementation found on the classpath.")
