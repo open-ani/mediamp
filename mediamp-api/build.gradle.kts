@@ -23,11 +23,6 @@ description = "Core API for MediaMP"
 
 android {
     namespace = "org.openani.mediamp.api"
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8

@@ -18,6 +18,8 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 plugins {
     kotlin("multiplatform")
     id("com.android.library")
+
+    `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
     idea
 }
@@ -37,19 +39,9 @@ val archs = buildList {
 
 kotlin {
     jvmToolchain(11)
-    jvm("desktop")
     androidTarget {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_1_8)
-        }
-    }
-
-    applyDefaultHierarchyTemplate {
-        common {
-            group("jvm") {
-                withJvm()
-                withAndroidTarget()
-            }
         }
     }
 
@@ -57,10 +49,8 @@ kotlin {
 //        androidMain {
 //            kotlin.srcDirs(listOf("gen/java"))
 //        }
-        getByName("jvmMain") {
-            dependencies {
-
-            }
+        getByName("jvmMain").dependencies { 
+            
         }
     }
 }

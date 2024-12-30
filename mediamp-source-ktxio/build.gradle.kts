@@ -13,12 +13,7 @@ import com.vanniktech.maven.publish.SonatypeHost
 plugins {
     kotlin("multiplatform")
     id("com.android.library")
-    kotlin("plugin.compose")
-    id("org.jetbrains.compose")
-
     `mpp-lib-targets`
-    kotlin("plugin.serialization")
-//    id("org.jetbrains.kotlinx.atomicfu")
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
@@ -26,11 +21,6 @@ description = "MediaMP data source implementation for Kotlinx IO"
 
 android {
     namespace = "org.openani.mediamp.source.ktxio"
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -49,7 +39,7 @@ kotlin {
             api(projects.mediampApi)
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.io.core)
-            implementation(libs.androidx.annotation)
+            compileOnly(libs.androidx.annotation)
         }
         commonTest.dependencies {
             api(libs.kotlinx.coroutines.test)
@@ -58,9 +48,9 @@ kotlin {
         }
         desktopMain.dependencies {
         }
-    }
-    androidTarget {
-        publishLibraryVariants("release")
+        iosMain.dependencies {
+            implementation(libs.androidx.annotation)
+        }
     }
 }
 
