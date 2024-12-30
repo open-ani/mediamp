@@ -32,5 +32,6 @@ include(":mediamp-backend-mpv")
 include(":mediamp-source-kotlinx-io")
 
 include(":ci-helper")
+include(":catalog")
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
