@@ -18,6 +18,10 @@ plugins {
     kotlin("jvm")
 }
 
+kotlin {
+    jvmToolchain(8)
+}
+
 val hostOS: OS by lazy {
     when {
         Os.isFamily(Os.FAMILY_WINDOWS) -> OS.WINDOWS

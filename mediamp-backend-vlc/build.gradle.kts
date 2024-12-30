@@ -28,6 +28,10 @@ dependencies {
     implementation(libs.jna.platform)
 }
 
+kotlin {
+    jvmToolchain(8)
+}
+
 mavenPublishing {
     configure(JavaLibrary(JavadocJar.Empty(), true))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
