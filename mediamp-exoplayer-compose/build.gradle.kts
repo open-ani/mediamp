@@ -40,7 +40,7 @@ kotlin {
 dependencies {
     api(projects.mediampApi)
     api(projects.mediampCompose)
-    api(projects.mediampBackendExoplayer)
+    api(projects.mediampExoplayer)
 
     api(libs.androidx.media3.ui)
     api(libs.androidx.media3.exoplayer)
