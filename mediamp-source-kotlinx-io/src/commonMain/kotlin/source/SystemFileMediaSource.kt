@@ -44,11 +44,11 @@ public class SystemFileMediaSource internal constructor(
     override val uri: String,
 ) : MediaSource<SystemFileMediaData> {
     override suspend fun open(): SystemFileMediaData = SystemFileMediaData(path)
-    override fun toString(): String = "SystemFileVideoSource(uri=$uri)"
+    override fun toString(): String = "SystemFileMediaSource(uri=$uri)"
 }
 
 @Throws(IOException::class)
-public fun SystemFileVideoSource(
+public fun SystemFileMediaSource(
     path: Path,
     extraFiles: MediaExtraFiles = MediaExtraFiles.Empty,
 ): SystemFileMediaSource {
