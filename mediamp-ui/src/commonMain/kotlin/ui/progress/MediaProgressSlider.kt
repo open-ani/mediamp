@@ -1,3 +1,12 @@
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/ani/blob/main/LICENSE
+ */
+
 package org.openani.mediamp.core.progress
 
 import androidx.compose.animation.animateContentSize
@@ -61,7 +70,7 @@ import org.openani.mediamp.core.state.Chapter
 import org.openani.mediamp.core.state.Chunk
 import org.openani.mediamp.core.state.ChunkState
 import org.openani.mediamp.core.state.MediaCacheProgressState
-import org.openani.mediamp.core.state.PlayerState
+import org.openani.mediamp.core.state.MediampPlayer
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -134,11 +143,11 @@ class MediaProgressSliderState(
 }
 
 /**
- * 便捷方法, 从 [PlayerState.currentPositionMillis] 创建  [MediaProgressSliderState]
+ * 便捷方法, 从 [MediampPlayer.currentPositionMillis] 创建  [MediaProgressSliderState]
  */
 @Composable
 fun rememberMediaProgressSliderState(
-    playerState: PlayerState,
+    playerState: MediampPlayer,
     onPreview: (positionMillis: Long) -> Unit,
     onPreviewFinished: (positionMillis: Long) -> Unit,
 ): MediaProgressSliderState {

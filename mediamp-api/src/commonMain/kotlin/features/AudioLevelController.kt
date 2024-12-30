@@ -1,9 +1,10 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
 package org.openani.mediamp.features
@@ -60,4 +61,11 @@ public interface AudioLevelController : Feature {
     public fun volumeDown(value: Float = 0.05f)
 
     public companion object Key : FeatureKey<AudioLevelController>
+}
+
+/**
+ * Sets the mute state of the audio to the opposite of the current state.
+ */
+public fun AudioLevelController.toggleMute() {
+    setMute(!isMute.value)
 }

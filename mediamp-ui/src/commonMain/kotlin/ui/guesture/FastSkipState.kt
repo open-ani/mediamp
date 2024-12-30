@@ -1,3 +1,12 @@
+/*
+ * Copyright (C) 2024 OpenAni and contributors.
+ *
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/ani/blob/main/LICENSE
+ */
+
 package org.openani.mediamp.core.guesture
 
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -13,11 +22,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.openani.mediamp.core.state.PlayerState
+import org.openani.mediamp.core.state.MediampPlayer
 
 @Composable
 fun rememberPlayerFastSkipState(
-    playerState: PlayerState,
+    playerState: MediampPlayer,
     gestureIndicatorState: GestureIndicatorState,
 ): FastSkipState {
     return remember(playerState) {
@@ -26,7 +35,7 @@ fun rememberPlayerFastSkipState(
 }
 
 class PlayerFastSkipState(
-    private val playerState: PlayerState,
+    private val playerState: MediampPlayer,
     private val gestureIndicatorState: GestureIndicatorState,
 ) {
     private var originalSpeed = 0f

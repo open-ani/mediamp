@@ -103,7 +103,7 @@ import org.openani.mediamp.core.guesture.GestureIndicatorState.State.VOLUME
 import org.openani.mediamp.core.guesture.SwipeSeekerState.Companion.swipeToSeek
 import org.openani.mediamp.core.progress.MediaProgressSliderState
 import org.openani.mediamp.core.rememberAlwaysOnRequester
-import org.openani.mediamp.core.state.PlayerState
+import org.openani.mediamp.core.state.MediampPlayer
 import org.openani.mediamp.core.state.SupportsAudio
 import org.openani.mediamp.core.top.needWorkaroundForFocusManager
 import kotlin.math.absoluteValue
@@ -430,7 +430,7 @@ fun VideoGestureHost(
     progressSliderState: MediaProgressSliderState,
     indicatorState: GestureIndicatorState,
     fastSkipState: FastSkipState,
-    playerState: PlayerState,
+    playerState: MediampPlayer,
     enableSwipeToSeek: Boolean,
     audioController: LevelController,
     brightnessController: LevelController,

@@ -16,10 +16,12 @@ Supported targets and backends:
 
 Platforms that are not listed above are not supported yet.
 
-> [!NOTE]
+> [!WARNING]
 >
-> This is a work in progress. We have a working implementation for the listed platforms
-> in [Animeko,](https://github.com/open-ani/Animeko) and we are working on extracting the core media
+> This is a work in progress. The following steps will not work for desktop JVMs.
+>
+> We have a working implementation for the listed platforms
+> in [Animeko](https://github.com/open-ani/Animeko), and we are working on extracting the core media
 > player logic into this separate library.
 >
 > We are also working on porting libmpv as a more robust and feature-rich backend than VLC.
@@ -27,48 +29,36 @@ Platforms that are not listed above are not supported yet.
 ## Installation
 
 Check the latest
-version: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-core)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-core)
+version: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)
 
-### Kotlin Multiplatform
+### 1. Add Version Catalogs
 
-> [!NOTE]
->
-> This is provisional. We are still working on publishing the library, especially for the backend
+In `settings.gradle.kts`, add:
 
 ```kotlin
-kotlin {
-    val mediampVersion = "0.1.0" // Replace with the latest version
-    sourceSets.commonMain.dependencies {
-        implementation("org.openani.mediamp:mediamp-core:$mediampVersion") // for data-layer, does not depend on Compose
-
-        implementation("org.openani.mediamp:mediamp-compose:$mediampVersion") // for Compose UI
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
     }
-    sourceSets.androidMain.dependencies {
-        implementation("org.openani.mediamp:mediamp-backend-exoplayer:$mediampVersion")
-    }
-    sourceSets.jvmMain.dependencies { // Desktop JVM
-        implementation("org.openani.mediamp:mediamp-backend-vlc:$mediampVersion")
+    versionCatalogs {
+        create("mediampLibs") {
+            from("org.openani.mediamp:catalog:0.0.4") // replace with the latest version
+        }
     }
 }
 ```
 
-### Gradle Version Catalogs
+then reload the project in the IDE.
 
-```toml
-[versions]
-mediamp = "0.1.0" # Replace with the latest version
+### 2. Add Dependencies
 
-[libraries]
-mediamp-core = { group = "org.openani.mediamp", module = "mediamp-core", version.ref = "mediamp" }
-mediamp-compose = { group = "org.openani.mediamp", module = "mediamp-compose", version.ref = "mediamp" }
-mediamp-backend-exoplayer = { group = "org.openani.mediamp", module = "mediamp-backend-exoplayer", version.ref = "mediamp" }
-mediamp-backend-vlc = { group = "org.openani.mediamp", module = "mediamp-backend-vlc", version.ref = "mediamp" }
-```
+You will need to add the `libs.mediamp.api` to your data/domain layer,
+`libs.mediamp.compose` to your UI layer, and choose a backend for each target platform:
 
 ```kotlin
 kotlin {
     sourceSets.commonMain.dependencies {
-        implementation(libs.mediamp.core) // for data-layer, does not depend on Compose
+        implementation(libs.mediamp.api) // for data-layer, does not depend on Compose
         implementation(libs.mediamp.compose) // for Compose UI
     }
     sourceSets.androidMain.dependencies {
@@ -85,7 +75,15 @@ kotlin {
 ```kotlin
 fun main() = singleWindowApplication {
     val player = rememberMediampPlayer()
-    MediaPlayer(player, Modifier.fillMaxSize())
+    Column {
+        Button(onClick = {
+            player.playUrl("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4")
+        }) {
+            Text("Play")
+        }
+
+        MediaPlayer(player, Modifier.fillMaxSize())
+    }
 }
 ```
 

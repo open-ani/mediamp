@@ -1,15 +1,18 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
+ * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
+ * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ * https://github.com/open-ani/ani/blob/main/LICENSE
  */
 
 @file:OptIn(MediampInternalApi::class)
 
 package org.openani.mediamp
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -24,8 +27,9 @@ import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
-import org.openani.mediamp.features.playerFeaturesOf
+import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
@@ -41,6 +45,7 @@ import org.openani.mediamp.source.UriMediaSource
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.reflect.KClass
 
 /**
  * An extensible media player that plays [MediaSource]s. Instances can be obtained from a [MediampPlayerFactory].
@@ -187,6 +192,11 @@ public interface MediampPlayer {
      * Additional features that are supported by the underlying player implementation.
      */
     public val features: PlayerFeatures
+
+    /**
+     * Releases all resources held by the player. The instance will be unusable after this call.
+     */
+    public fun release()
 }
 
 /**
@@ -412,5 +422,31 @@ public class DummyMediampPlayer(
         ),
     )
 
-    override val features: PlayerFeatures = playerFeaturesOf()
+    override val features: PlayerFeatures = buildPlayerFeatures {
+        add(
+            PlaybackSpeed,
+            object : PlaybackSpeed {
+                override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
+                override val value: Float get() = valueFlow.value
+                override fun set(speed: Float) {
+                    valueFlow.value = speed
+                }
+            },
+        )
+    }
+
+    public object Factory : MediampPlayerFactory<DummyMediampPlayer> {
+        override val forClass: KClass<DummyMediampPlayer> = DummyMediampPlayer::class
+
+        override fun create(context: Any, parentCoroutineContext: CoroutineContext): DummyMediampPlayer {
+            return DummyMediampPlayer(parentCoroutineContext)
+        }
+
+        @Composable
+        override fun Surface(mediampPlayer: DummyMediampPlayer, modifier: Modifier) {
+        }
+    }
+
+    override fun release() {
+    }
 }
