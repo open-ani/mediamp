@@ -70,7 +70,7 @@ kotlin {
 //}
 
 android {
-    namespace = "org.openani.mediamp.backend.mpv"
+    namespace = "org.openani.mediamp.mpv"
     compileSdk = property("android.compile.sdk").toString().toInt()
     defaultConfig {
         minSdk = getIntProperty("android.min.sdk")

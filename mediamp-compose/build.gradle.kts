@@ -34,7 +34,7 @@ plugins {
 description = "Compose integration for MediaMP"
 
 android {
-    namespace = "org.openani.mediamp.core"
+    namespace = "org.openani.mediamp.compose"
     publishing {
         singleVariant("release") {
             withSourcesJar()

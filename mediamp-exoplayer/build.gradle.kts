@@ -19,7 +19,7 @@ plugins {
 description = "MediaMP backend using ExoPlayer"
 
 android {
-    namespace = "org.openani.mediamp.backend.exoplayer"
+    namespace = "org.openani.mediamp.exoplayer"
     compileSdk = property("android.compile.sdk").toString().toInt()
     defaultConfig {
         minSdk = getIntProperty("android.min.sdk")
