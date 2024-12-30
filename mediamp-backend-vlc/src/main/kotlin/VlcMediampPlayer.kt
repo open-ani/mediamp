@@ -1,17 +1,15 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 @file:OptIn(MediampInternalApi::class)
 
 package org.openani.mediamp.backend.vlc
 
-import androidx.compose.runtime.Stable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -73,7 +71,6 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
-@Stable
 class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer,
     AbstractMediampPlayer<VlcjData>(parentCoroutineContext) {
     companion object {

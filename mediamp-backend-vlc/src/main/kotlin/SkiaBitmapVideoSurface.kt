@@ -18,6 +18,7 @@ import org.jetbrains.skia.ColorAlphaType
 import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.ImageInfo
 import org.openani.mediamp.backend.vlc.SkiaBitmapVideoSurface.Companion.ALLOWED_DRAW_FRAMES
+import org.openani.mediamp.internal.MediampInternalApi
 import uk.co.caprica.vlcj.player.base.MediaPlayer
 import uk.co.caprica.vlcj.player.embedded.videosurface.CallbackVideoSurface
 import uk.co.caprica.vlcj.player.embedded.videosurface.VideoSurface
@@ -30,6 +31,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import javax.swing.SwingUtilities
 
+@MediampInternalApi
 class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideoSurfaceAdapter()) {
     private val videoSurface = SkiaVideoSurface()
 

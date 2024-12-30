@@ -1,10 +1,9 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 @file:kotlin.OptIn(MediampInternalApi::class)
@@ -17,9 +16,6 @@ import android.util.Pair
 import androidx.annotation.MainThread
 import androidx.annotation.OptIn
 import androidx.annotation.UiThread
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.NonRestartableComposable
-import androidx.compose.ui.Modifier
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -47,7 +43,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.MediampPlayerFactory
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.backend.exoplayer.internal.SeekableInputDataSource
 import org.openani.mediamp.features.Buffering
@@ -66,40 +61,8 @@ import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
 import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
-import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.Player as Media3Player
-
-class ExoPlayerMediampPlayerFactory : MediampPlayerFactory<ExoPlayerMediampPlayer> {
-    override val forClass: KClass<ExoPlayerMediampPlayer> get() = ExoPlayerMediampPlayer::class
-
-    @OptIn(UnstableApi::class)
-    @Deprecated(
-        "Use create(context: Context, parentCoroutineContext: CoroutineContext) instead",
-        level = DeprecationLevel.HIDDEN,
-    )
-    override fun create(
-        context: Any,
-        parentCoroutineContext: CoroutineContext
-    ): ExoPlayerMediampPlayer {
-        require(context is Context) { "The context argument must be android.content.Context on Android" }
-        return create(context, parentCoroutineContext)
-    }
-
-    fun create(
-        context: Context,
-        parentCoroutineContext: CoroutineContext
-    ): ExoPlayerMediampPlayer {
-        return ExoPlayerMediampPlayer(context, parentCoroutineContext)
-    }
-
-    @Composable
-    @NonRestartableComposable
-    override fun Surface(
-        mediampPlayer: ExoPlayerMediampPlayer,
-        modifier: Modifier
-    ): Unit = ExoPlayerSurface(mediampPlayer, modifier)
-}
 
 
 /**

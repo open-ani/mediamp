@@ -8,9 +8,6 @@
 
 package org.openani.mediamp
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.NonRestartableComposable
-import androidx.compose.ui.Modifier
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.reflect.KClass
@@ -32,13 +29,6 @@ public interface MediampPlayerFactory<T : MediampPlayer> { // SPI load on JVM
         context: Any, // Not introducing an expect/actual because this will instead cause complexity
         parentCoroutineContext: CoroutineContext = EmptyCoroutineContext
     ): T
-
-    @Composable
-    @NonRestartableComposable
-    public fun Surface(
-        mediampPlayer: T,
-        modifier: Modifier
-    )
 }
 
 /**

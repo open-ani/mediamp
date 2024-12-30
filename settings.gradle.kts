@@ -25,8 +25,11 @@ include(":mediamp-api")
 include(":mediamp-compose")
 
 include(":mediamp-backend-vlc")
+include(":mediamp-backend-vlc-compose")
 include(":mediamp-backend-exoplayer")
+include(":mediamp-backend-exoplayer-compose")
 include(":mediamp-backend-mpv")
+include(":mediamp-backend-mpv-compose")
 
 //include(":mediamp-preview")
 include(":mediamp-source-kotlinx-io")

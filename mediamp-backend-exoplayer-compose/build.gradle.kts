@@ -12,6 +12,8 @@ import com.vanniktech.maven.publish.SonatypeHost
 plugins {
     kotlin("android")
     id("com.android.library")
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
@@ -37,17 +39,15 @@ kotlin {
 
 dependencies {
     api(projects.mediampApi)
-    implementation(libs.androidx.media3.exoplayer)
+    api(projects.mediampCompose)
+    api(projects.mediampBackendExoplayer)
+
+    api(libs.androidx.media3.ui)
+    api(libs.androidx.media3.exoplayer)
 }
 
 mavenPublishing {
-    configure(
-        AndroidMultiVariantLibrary(
-            sourcesJar = true,
-            publishJavadocJar = true,
-            includedBuildTypeValues = setOf("debug", "release"),
-        ),
-    )
+    configure(AndroidMultiVariantLibrary(true, true, setOf("debug", "release")))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
     configurePom(project)

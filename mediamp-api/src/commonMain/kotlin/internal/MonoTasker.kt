@@ -8,7 +8,6 @@
 
 package org.openani.mediamp.internal
 
-import androidx.compose.runtime.Stable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -23,7 +22,6 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
 
-@Stable
 internal interface MonoTasker {
     val isRunning: StateFlow<Boolean>
 

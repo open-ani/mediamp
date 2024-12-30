@@ -9,19 +9,18 @@
 package org.openani.mediamp.compose
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.NonRestartableComposable
 import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
+import kotlin.reflect.KClass
 
-@Composable
-actual fun MediampPlayerSurface(
-    mediampPlayer: MediampPlayer,
-    modifier: Modifier
-) {
-    val factory = remember(mediampPlayer) {
-        MediampPlayerSurfaceProviderLoader.getByInstance(mediampPlayer)
-    }
+interface MediampPlayerSurfaceProvider<T : MediampPlayer> {
+    val forClass: KClass<T>
 
-    factory.Surface(mediampPlayer, modifier)
+    @Composable
+    @NonRestartableComposable
+    fun Surface(
+        mediampPlayer: T,
+        modifier: Modifier
+    )
 }
-

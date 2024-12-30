@@ -1,18 +1,15 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 @file:OptIn(MediampInternalApi::class)
 
 package org.openani.mediamp
 
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -235,7 +232,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
      * Currently playing resource that should be closed when the controller is closed.
      * @see setVideoSource
      */
-    protected val openResource: MutableStateFlow<D?> = MutableStateFlow<D?>(null)
+    protected val openResource: MutableStateFlow<D?> = MutableStateFlow(null)
 
     public open class Data(
         public open val mediaSource: MediaSource<*>,
@@ -440,10 +437,6 @@ public class DummyMediampPlayer(
 
         override fun create(context: Any, parentCoroutineContext: CoroutineContext): DummyMediampPlayer {
             return DummyMediampPlayer(parentCoroutineContext)
-        }
-
-        @Composable
-        override fun Surface(mediampPlayer: DummyMediampPlayer, modifier: Modifier) {
         }
     }
 

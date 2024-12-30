@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc
+package org.openani.mediamp.backend.vlc.compose.internal
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,7 +33,7 @@ import java.awt.Graphics2D
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 
-open class ComposeMediaPlayerComponent @JvmOverloads constructor(
+private open class ComposeMediaPlayerComponent @JvmOverloads constructor(
     mediaPlayerFactory: MediaPlayerFactory? = null,
     fullScreenStrategy: FullScreenStrategy? = null,
     inputEvents: InputEvents? = null,

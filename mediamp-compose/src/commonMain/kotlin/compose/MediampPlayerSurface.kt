@@ -30,7 +30,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 @Composable
 expect fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
-    modifier: Modifier = Modifier, 
+    modifier: Modifier = Modifier,
 )
 
 /**

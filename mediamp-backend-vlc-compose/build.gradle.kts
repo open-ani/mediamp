@@ -6,8 +6,8 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-import com.vanniktech.maven.publish.JavaLibrary
 import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinJvm
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
@@ -23,9 +23,7 @@ description = "MediaMP backend using VLC"
 dependencies {
     api(projects.mediampApi)
     api(projects.mediampCompose)
-    api(libs.vlcj)
-    implementation(libs.jna)
-    implementation(libs.jna.platform)
+    api(projects.mediampBackendVlc)
 }
 
 kotlin {
@@ -33,7 +31,7 @@ kotlin {
 }
 
 mavenPublishing {
-    configure(JavaLibrary(JavadocJar.Empty(), true))
+    configure(KotlinJvm(JavadocJar.Empty(), true))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
     configurePom(project)

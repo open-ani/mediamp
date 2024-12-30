@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc
+package org.openani.mediamp.backend.vlc.compose.internal
 
 import com.sun.jna.Pointer
 import com.sun.jna.ptr.IntByReference
@@ -27,7 +27,7 @@ import uk.co.caprica.vlcj.player.embedded.videosurface.callback.BufferFormat
 /**
  * Implementation of a video surface that uses native callbacks to receive video frame data for rendering.
  */
-class SkiaVideoSurface(
+private class SkiaVideoSurface(
     private val renderCallback: (Bitmap) -> Unit,
     videoSurfaceAdapter: VideoSurfaceAdapter?
 ) : VideoSurface(videoSurfaceAdapter) {

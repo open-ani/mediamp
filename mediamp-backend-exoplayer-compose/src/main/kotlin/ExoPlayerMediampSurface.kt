@@ -6,15 +6,16 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.exoplayer
+package org.openani.mediamp.backend.exoplayer.compose
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
+import org.openani.mediamp.backend.exoplayer.ExoPlayerMediampPlayer
 
 @Composable
-fun ExoPlayerSurface(
+fun ExoPlayerMediampPlayerSurface(
     mediampPlayer: ExoPlayerMediampPlayer,
     modifier: Modifier = Modifier,
     configuration: PlayerView.() -> Unit = {},
@@ -29,7 +30,6 @@ fun ExoPlayerSurface(
         },
         modifier,
         onRelease = {
-            // TODO: 2024/12/22 release player 
         },
         update = { view ->
             view.player = mediampPlayer.exoPlayer
