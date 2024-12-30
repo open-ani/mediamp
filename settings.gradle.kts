@@ -32,7 +32,7 @@ include(":mediamp-mpv")
 include(":mediamp-mpv-compose")
 
 //include(":mediamp-preview")
-include(":mediamp-source-kotlinx-io")
+include(":mediamp-source-ktxio")
 
 include(":ci-helper")
 include(":catalog")
