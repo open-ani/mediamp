@@ -93,6 +93,33 @@ public interface MediampPlayer {
     public val mediaData: Flow<MediaData?>
 
     /**
+     * Properties of the video being played.
+     *
+     * Note that it may not be available immediately after [setVideoSource] returns,
+     * since the properties may be callback from the underlying player implementation.
+     */
+    public val videoProperties: StateFlow<VideoProperties?>
+
+    /**
+     * Current playback position of the video being played in millis seconds, ranged from `0` to [VideoProperties.durationMillis].
+     *
+     * `0` if no video is being played ([mediaData] is null).
+     */
+    public val currentPositionMillis: StateFlow<Long>
+
+    /**
+     * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
+     *
+     * There is no guarantee on the frequency of updates, but it should normally be updated at once per second.
+     */
+    public val playbackProgress: Flow<Float>
+
+    /**
+     * Additional features that are supported by the underlying player implementation.
+     */
+    public val features: PlayerFeatures
+
+    /**
      * Sets the video source to play, by [opening][MediaSource.open] the [source],
      * updating [mediaData], and calling the underlying player implementation to start playing.
      *
@@ -109,32 +136,9 @@ public interface MediampPlayer {
     public suspend fun setVideoSource(source: MediaSource<*>)
 
     /**
-     * Properties of the video being played.
-     *
-     * Note that it may not be available immediately after [setVideoSource] returns,
-     * since the properties may be callback from the underlying player implementation.
-     */
-    public val videoProperties: StateFlow<VideoProperties?>
-
-    /**
-     * Current playback position of the video being played in millis seconds, ranged from `0` to [VideoProperties.durationMillis].
-     *
-     * `0` if no video is being played ([mediaData] is null).
-     */
-    public val currentPositionMillis: StateFlow<Long>
-
-    /**
      * Obtains the exact current playback position of the video in milliseconds.
      */
     public fun getExactCurrentPositionMillis(): Long
-
-
-    /**
-     * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
-     *
-     * There is no guarantee on the frequency of updates, but it should normally be updated at once per second.
-     */
-    public val playbackProgress: Flow<Float>
 
     /**
      * Resumes playback.
@@ -184,11 +188,6 @@ public interface MediampPlayer {
     public val subtitleTracks: TrackGroup<SubtitleTrack>
     public val audioTracks: TrackGroup<AudioTrack>
     public val chapters: StateFlow<List<Chapter>>
-
-    /**
-     * Additional features that are supported by the underlying player implementation.
-     */
-    public val features: PlayerFeatures
 
     /**
      * Releases all resources held by the player. The instance will be unusable after this call.
