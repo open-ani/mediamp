@@ -62,6 +62,7 @@ import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent
 import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
 import java.io.File
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
@@ -116,8 +117,11 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
 
     override fun stopImpl() {
         currentPositionMillis.value = 0L
-        player.submit {
-            player.controls().stop()
+        try {
+            player.submit {
+                player.controls().stop()
+            }
+        } catch (_: RejectedExecutionException) {
         }
     }
 
