@@ -3,10 +3,9 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 // 也可以在 IDE 里右键 Run
@@ -382,7 +381,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 }
 
 object ArtifactNames {
-    fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-backend-mpv-${os}-${arch}"
+    fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-mpv-${os}-${arch}"
 }
 
 workflow(
@@ -551,12 +550,12 @@ workflow(
                 uses(
                     action = DownloadArtifact(
                         name = ArtifactNames.mediampBackendMpvNativeJar(os, arch),
-                        path = "mediamp-backend-mpv/build/native-jars/",
+                        path = "mediamp-mpv/build/native-jars/",
                     ),
                 )
             }
 
-            run(command = "ls -l mediamp-backend-mpv/build/native-jars")
+            run(command = "ls -l mediamp-mpv/build/native-jars")
             runGradle(
                 tasks = ["publish"],
                 env = mapOf(
@@ -825,14 +824,14 @@ class WithMatrix(
 
     fun JobBuilder<*>.uploadMediampBackendMpv(): ActionStep<UploadArtifact.Outputs> {
         runGradle(
-            name = "Build mediamp-backend-mpv",
+            name = "Build mediamp-mpv",
             tasks = ["copyNativeJarForCurrentPlatform"],
         )
         return uses(
-            name = "Upload mediamp-backend-mpv native builds",
+            name = "Upload mediamp-mpv native builds",
             action = UploadArtifact(
                 name = ArtifactNames.mediampBackendMpvNativeJar(matrix.os, matrix.arch),
-                path_Untyped = "mediamp-backend-mpv/build/native-jars/mediamp-backend-mpv-*.jar",
+                path_Untyped = "mediamp-mpv/build/native-jars/mediamp-mpv-*.jar",
                 overwrite = true,
                 ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
             ),
