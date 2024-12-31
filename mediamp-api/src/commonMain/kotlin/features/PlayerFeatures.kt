@@ -9,7 +9,7 @@
 package org.openani.mediamp.features
 
 /**
- * A container of optional features of the [org.openani.mediamp.core.MediampPlayer].
+ * A container of optional features of the [org.openani.mediamp.MediampPlayer].
  * @see Feature
  */
 public sealed interface PlayerFeatures {
