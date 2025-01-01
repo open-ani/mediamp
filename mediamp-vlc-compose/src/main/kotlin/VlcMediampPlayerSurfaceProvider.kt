@@ -6,11 +6,11 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc.compose
+package org.openani.mediamp.vlc.compose
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import org.openani.mediamp.backend.vlc.VlcMediampPlayer
+import org.openani.mediamp.vlc.VlcMediampPlayer
 import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
 import kotlin.reflect.KClass
 
@@ -19,6 +19,6 @@ class VlcMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<VlcMediampP
 
     @Composable
     override fun Surface(mediampPlayer: VlcMediampPlayer, modifier: Modifier) {
-        VlcMediaPlayerSurface(mediampPlayer, modifier)
+        VlcMediampPlayerSurface(mediampPlayer, modifier)
     }
 }

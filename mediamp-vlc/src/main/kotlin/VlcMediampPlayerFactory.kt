@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc
+package org.openani.mediamp.vlc
 
 import org.openani.mediamp.MediampPlayerFactory
 import kotlin.coroutines.CoroutineContext

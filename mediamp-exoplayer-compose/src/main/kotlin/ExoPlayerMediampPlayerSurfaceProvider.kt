@@ -6,11 +6,11 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.exoplayer.compose
+package org.openani.mediamp.exoplayer.compose
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import org.openani.mediamp.backend.exoplayer.ExoPlayerMediampPlayer
+import org.openani.mediamp.exoplayer.ExoPlayerMediampPlayer
 import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
 import kotlin.reflect.KClass
 

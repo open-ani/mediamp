@@ -6,4 +6,4 @@
 # https://github.com/open-ani/mediamp/blob/main/LICENSE
 #
 
-org.openani.mediamp.backend.exoplayer.compose.ExoPlayerMediampPlayerSurfaceProvider
+org.openani.mediamp.exoplayer.compose.ExoPlayerMediampPlayerSurfaceProvider

@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc.internal.io
+package org.openani.mediamp.vlc.internal.io
 
 import org.openani.mediamp.io.SeekableInput
 import uk.co.caprica.vlcj.media.callback.DefaultCallbackMedia

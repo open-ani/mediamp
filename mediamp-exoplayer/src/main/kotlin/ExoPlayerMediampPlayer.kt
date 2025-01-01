@@ -8,7 +8,7 @@
 
 @file:kotlin.OptIn(MediampInternalApi::class)
 
-package org.openani.mediamp.backend.exoplayer
+package org.openani.mediamp.exoplayer
 
 import android.content.Context
 import android.net.Uri
@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.backend.exoplayer.internal.SeekableInputDataSource
+import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures

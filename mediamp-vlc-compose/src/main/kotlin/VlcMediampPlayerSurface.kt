@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc.compose
+package org.openani.mediamp.vlc.compose
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -16,12 +16,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import org.openani.mediamp.backend.vlc.VlcMediampPlayer
+import org.openani.mediamp.vlc.VlcMediampPlayer
 import org.openani.mediamp.internal.MediampInternalApi
 import kotlin.math.roundToInt
 
 @Composable
-fun VlcMediaPlayerSurface(
+fun VlcMediampPlayerSurface(
     mediampPlayer: VlcMediampPlayer,
     modifier: Modifier = Modifier,
 ) {

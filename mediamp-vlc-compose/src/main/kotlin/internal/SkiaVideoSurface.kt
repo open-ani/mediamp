@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc.compose.internal
+package org.openani.mediamp.vlc.compose.internal
 
 import com.sun.jna.Pointer
 import com.sun.jna.ptr.IntByReference

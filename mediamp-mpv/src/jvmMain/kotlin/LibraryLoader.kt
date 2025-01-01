@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.mpv
+package org.openani.mediamp.mpv
 
 internal object LibraryLoader {
     fun loadLibraries() {

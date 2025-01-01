@@ -6,4 +6,4 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.mpv.compose
+package org.openani.mediamp.mpv.compose

@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.vlc.compose.internal
+package org.openani.mediamp.vlc.compose.internal
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf

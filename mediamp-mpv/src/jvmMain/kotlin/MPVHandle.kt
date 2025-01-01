@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.mpv
+package org.openani.mediamp.mpv
 import java.lang.ref.Cleaner
 import java.lang.ref.Reference
 

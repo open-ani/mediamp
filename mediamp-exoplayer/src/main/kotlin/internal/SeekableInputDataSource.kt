@@ -8,7 +8,7 @@
 
 @file:androidx.annotation.OptIn(UnstableApi::class)
 
-package org.openani.mediamp.backend.exoplayer.internal
+package org.openani.mediamp.exoplayer.internal
 
 import android.net.Uri
 import androidx.media3.common.C

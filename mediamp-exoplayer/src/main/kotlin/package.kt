@@ -6,4 +6,4 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.backend.exoplayer
+package org.openani.mediamp.exoplayer

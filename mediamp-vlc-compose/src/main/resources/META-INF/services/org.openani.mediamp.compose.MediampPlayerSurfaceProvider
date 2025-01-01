@@ -6,4 +6,4 @@
 # https://github.com/open-ani/mediamp/blob/main/LICENSE
 #
 
-org.openani.mediamp.backend.vlc.compose.VlcMediampPlayerSurfaceProvider
+org.openani.mediamp.vlc.compose.VlcMediampPlayerSurfaceProvider

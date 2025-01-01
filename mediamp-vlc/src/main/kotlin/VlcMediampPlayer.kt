@@ -8,7 +8,7 @@
 
 @file:OptIn(MediampInternalApi::class)
 
-package org.openani.mediamp.backend.vlc
+package org.openani.mediamp.vlc
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,8 +30,8 @@ import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.backend.vlc.VlcMediampPlayer.VlcjData
-import org.openani.mediamp.backend.vlc.internal.io.SeekableInputCallbackMedia
+import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
+import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlaybackSpeed
