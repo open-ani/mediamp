@@ -1,10 +1,9 @@
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
- * 此源代码的使用受 GNU AFFERO GENERAL PUBLIC LICENSE version 3 许可证的约束, 可以在以下链接找到该许可证.
- * Use of this source code is governed by the GNU AGPLv3 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
- * https://github.com/open-ani/ani/blob/main/LICENSE
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 @file:OptIn(ExperimentalKotlinGradlePluginApi::class)
@@ -24,14 +23,17 @@ catalog {
         version("mediamp", project.version.toString())
 
         val group = project.group.toString()
-        library("mediamp-backend-exoplayer", group, "mediamp-backend-exoplayer").versionRef("mediamp")
-        library("mediamp-backend-mpv", group, "mediamp-backend-mpv").versionRef("mediamp")
-        library("mediamp-backend-vlc", group, "mediamp-backend-vlc").versionRef("mediamp")
+        library("mediamp-exoplayer", group, "mediamp-exoplayer").versionRef("mediamp")
+        library("mediamp-exoplayer-compose", group, "mediamp-exoplayer-compose").versionRef("mediamp")
+        library("mediamp-mpv", group, "mediamp-mpv").versionRef("mediamp")
+        library("mediamp-mpv-compose", group, "mediamp-mpv-compose").versionRef("mediamp")
+        library("mediamp-vlc", group, "mediamp-vlc").versionRef("mediamp")
+        library("mediamp-vlc-compose", group, "mediamp-vlc-compose").versionRef("mediamp")
 
         library("mediamp-api", group, "mediamp-api").versionRef("mediamp")
         library("mediamp-compose", group, "mediamp-compose").versionRef("mediamp")
 
-        library("mediamp-source-kotlinx-io", group, "mediamp-source-kotlinx-io").versionRef("mediamp")
+        library("mediamp-source-ktxio", group, "mediamp-source-ktxio").versionRef("mediamp")
     }
 }
 
