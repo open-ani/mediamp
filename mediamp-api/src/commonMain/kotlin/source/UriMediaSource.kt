@@ -8,39 +8,46 @@
 
 package org.openani.mediamp.source
 
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
-import org.openani.mediamp.internal.MediampInternalApi
-import org.openani.mediamp.io.SeekableInput
-import kotlin.coroutines.CoroutineContext
+/**
+ * A [MediaData] that represents a media that can be fetched from a URI, typically a streaming media.
+ */
+public sealed interface UriMediaData : MediaData {
+    /**
+     * The URI of the media.
+     */
+    public val uri: String
 
-public open class UriMediaSource(
-    override val uri: String,
-    public val headers: Map<String, String> = emptyMap(),
-    override val extraFiles: MediaExtraFiles,
-) : MediaSource<UriMediaData> {
-    override suspend fun open(): UriMediaData {
-        return UriMediaData(uri)
-    }
-
-    override fun toString(): String {
-        return "HttpStreamingVideoSource(uri='$uri')"
-    }
+    /**
+     * The headers to be used when fetching the media.
+     *
+     * Note that whether the headers are used or not is implementation-dependent:
+     * - ExoPlayer uses all the headers
+     * - VLC only uses the `User-Agent` and `Referer`.
+     *
+     * Keys are **case-sensitive**. `UserAgent` may NOT be used. Using `User-Agent` and `Referer` are recommended.
+     */
+    public val headers: Map<String, String>
 }
 
+/**
+ * Create a [UriMediaData] instance.
+ *
+ * @param uri The URI of the media. For example `https://example.com/video.mp4` or `file:///sdcard/video.mp4`.
+ */
+public fun UriMediaData(
+    uri: String,
+    headers: Map<String, String> = emptyMap(),
+    extraFiles: MediaExtraFiles = MediaExtraFiles.EMPTY,
+): UriMediaData = UriMediaDataImpl(uri, headers, extraFiles)
 
-public open class UriMediaData(
-    public val url: String,
-) : MediaData {
-    override fun fileLength(): Long? = null
+internal class UriMediaDataImpl(
+    override val uri: String,
+    override val headers: Map<String, String>,
+    override val extraFiles: MediaExtraFiles,
+) : MediaData, UriMediaData {
+    override fun close() {}
 
-    @OptIn(MediampInternalApi::class)
-    override val networkStats: Flow<NetStats> = flowOf(NetStats(0, 0))
-
-    override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput {
-        throw UnsupportedOperationException()
-    }
-
-    override suspend fun close() {
+    override fun toString(): String {
+        return "UriMediaData(uri=$uri, headers=$headers, extraFiles=$extraFiles)"
     }
 }

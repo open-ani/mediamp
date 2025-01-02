@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(MediampInternalApi::class)
+@file:OptIn(InternalMediampApi::class)
 
 package org.openani.mediamp.vlc
 
@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
+import org.openani.mediamp.InternalForInheritanceMediampApi
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.AudioLevelController
@@ -36,7 +38,6 @@ import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.buildPlayerFeatures
-import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
@@ -45,8 +46,8 @@ import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.source.MediaData
-import org.openani.mediamp.source.MediaSource
-import org.openani.mediamp.source.UriMediaSource
+import org.openani.mediamp.source.SeekableInputMediaData
+import org.openani.mediamp.source.UriMediaData
 import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
 import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
@@ -67,10 +68,12 @@ import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
 import kotlin.contracts.contract
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
+@OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer,
     AbstractMediampPlayer<VlcjData>(parentCoroutineContext) {
     companion object {
@@ -128,25 +131,21 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
     override val chapters: StateFlow<List<Chapter>> = _chapters.asStateFlow()
 
     class VlcjData(
-        override val mediaSource: MediaSource<*>,
         override val mediaData: MediaData,
         val setPlay: () -> Unit,
         releaseResource: () -> Unit
-    ) : Data(mediaSource, mediaData, releaseResource)
+    ) : Data(mediaData, releaseResource)
 
-    override suspend fun openSource(source: MediaSource<*>): VlcjData {
-        if (source is UriMediaSource) {
-            val mediaData = source.open()
-            return VlcjData(
-                source,
-                mediaData,
+    override suspend fun setDataImpl(data: MediaData): VlcjData = when (data) {
+        is UriMediaData -> {
+            VlcjData(
+                data,
                 setPlay = {
-
                     player.media().play(
-                        source.uri,
+                        data.uri,
                         *buildList {
-                            add("http-user-agent=${source.headers["User-Agent"] ?: "Mozilla/5.0"}")
-                            val referer = source.headers["Referer"]
+                            add("http-user-agent=${data.headers["User-Agent"] ?: "Mozilla/5.0"}")
+                            val referer = data.headers["Referer"]
                             if (referer != null) {
                                 add("http-referrer=${referer}")
                             }
@@ -155,37 +154,40 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
                     lastMedia = null
                 },
                 releaseResource = {
-                    backgroundScope.launch(NonCancellable) {
-                        mediaData.close()
-                    }
+                    data.close()
                 },
             )
         }
 
-        val data = source.open()
+        is SeekableInputMediaData -> {
+            val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
+            try {
+                val input = data.createInput()
 
-        val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
-        val input = data.createInput()
-        return VlcjData(
-            source,
-            data,
-            setPlay = {
-                val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
-                player.controls().stop()
-                player.media().play(new)
-                lastMedia = new
-            },
-            releaseResource = {
-                logger.trace { "VLC ReleaseResource: begin" }
-                awaitContext.cancel()
-                logger.trace { "VLC ReleaseResource: close input" }
-                input.close()
-                logger.trace { "VLC ReleaseResource: close VideoData" }
-                backgroundScope.launch(NonCancellable) {
-                    data.close()
-                }
-            },
-        )
+                VlcjData(
+                    data,
+                    setPlay = {
+                        val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
+                        player.controls().stop()
+                        player.media().play(new)
+                        lastMedia = new
+                    },
+                    releaseResource = {
+                        logger.trace { "VLC ReleaseResource: begin" }
+                        awaitContext.cancel()
+                        logger.trace { "VLC ReleaseResource: close input" }
+                        input.close()
+                        logger.trace { "VLC ReleaseResource: close VideoData" }
+                        backgroundScope.launch(NonCancellable) {
+                            data.close()
+                        }
+                    },
+                )
+            } catch (e: Throwable) {
+                awaitContext.cancel(CancellationException("Failed to create input", e))
+                throw e
+            }
+        }
     }
 
     override fun closeImpl() {
@@ -412,7 +414,7 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
         }
 
         backgroundScope.launch {
-            openResource.filterNotNull().map { it.mediaSource.extraFiles.subtitles }
+            openResource.filterNotNull().map { it.mediaData.extraFiles.subtitles }
                 .distinctUntilChanged()
                 .debounce(1000)
                 .collectLatest { urls ->

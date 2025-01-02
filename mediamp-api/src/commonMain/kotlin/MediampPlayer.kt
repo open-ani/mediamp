@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(MediampInternalApi::class)
+@file:OptIn(InternalMediampApi::class)
 
 package org.openani.mediamp
 
@@ -24,10 +24,11 @@ import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
-import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.SubtitleTrack
@@ -36,16 +37,14 @@ import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
-import org.openani.mediamp.source.MediaSource
-import org.openani.mediamp.source.MediaSourceOpenException
-import org.openani.mediamp.source.UriMediaSource
+import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.reflect.KClass
 
 /**
- * An extensible media player that plays [MediaSource]s. Instances can be obtained from a [MediampPlayerFactory].
+ * An extensible media player that plays [MediaData]s. Instances can be obtained from a [MediampPlayerFactory].
  *
  * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
  * - Playback State: [playbackState], [mediaData], [videoProperties], [currentPositionMillis], [playbackProgress]
@@ -73,6 +72,7 @@ import kotlin.reflect.KClass
  * On other platforms, calls are not required to be on the main thread but should still be called from a single thread.
  * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the main thread in common code.
  */
+@SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface MediampPlayer {
     /**
      * The underlying player implementation.
@@ -120,20 +120,17 @@ public interface MediampPlayer {
     public val features: PlayerFeatures
 
     /**
-     * Sets the video source to play, by [opening][MediaSource.open] the [source],
-     * updating [mediaData], and calling the underlying player implementation to start playing.
+     * Sets the media data to play, updating [mediaData], and calling the underlying player implementation to start playing.
      *
-     * If this function failed to [start video streaming][MediaSource.open], it will throw an exception.
+     * This method is thread-safe and can be called from any thread, including the main thread.
      *
-     * This function must not be called on the main thread as it will call [MediaSource.open].
+     * Setting the same [MediaData] will be ignored.
      *
-     * @param source the media source to play.
-     * @throws MediaSourceOpenException when failed to open the video source.
+     * If the player is already playing a video, it will be stopped before playing the new video.
      *
      * @see stop
-     */ // TODO: 2024/12/22 mention cancellation support, thread safety, errors
-    @Throws(MediaSourceOpenException::class, CancellationException::class)
-    public suspend fun setVideoSource(source: MediaSource<*>)
+     */
+    public suspend fun setVideoSource(data: MediaData)
 
     /**
      * Obtains the exact current playback position of the video in milliseconds.
@@ -199,7 +196,7 @@ public interface MediampPlayer {
  * Plays the video at the specified [uri], e.g. a local file or a remote URL.
  */
 public suspend fun MediampPlayer.playUri(uri: String): Unit =
-    setVideoSource(UriMediaSource(uri, emptyMap(), MediaExtraFiles()))
+    setVideoSource(UriMediaData(uri, emptyMap(), MediaExtraFiles()))
 
 /**
  * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
@@ -213,7 +210,8 @@ public fun MediampPlayer.togglePause() {
 }
 
 
-@MediampInternalApi
+@InternalMediampApi
+@OptIn(InternalForInheritanceMediampApi::class)
 public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     parentCoroutineContext: CoroutineContext,
 ) : MediampPlayer {
@@ -234,7 +232,6 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     protected val openResource: MutableStateFlow<D?> = MutableStateFlow(null)
 
     public open class Data(
-        public open val mediaSource: MediaSource<*>,
         public open val mediaData: MediaData,
         public open val releaseResource: () -> Unit,
     )
@@ -251,9 +248,10 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
             (duration / properties.durationMillis).toFloat().coerceIn(0f, 1f)
         }
 
-    final override suspend fun setVideoSource(source: MediaSource<*>) {
+    private val setVideoSourceMutex = Mutex()
+    final override suspend fun setVideoSource(data: MediaData): Unit = setVideoSourceMutex.withLock {
         val previousResource = openResource.value
-        if (source == previousResource?.mediaSource) {
+        if (data == previousResource?.mediaData) {
             return
         }
 
@@ -261,7 +259,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         previousResource?.releaseResource?.invoke()
 
         val opened = try {
-            openSource(source)
+            setDataImpl(data)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -283,7 +281,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     }
 
 
-    public fun closeVideoSource() {
+    private fun closeVideoSource() {
         // TODO: 2024/12/16 proper synchronization?
         val value = openResource.value
         openResource.value = null
@@ -307,8 +305,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
      */
     protected abstract suspend fun cleanupPlayer()
 
-    @Throws(MediaSourceOpenException::class, CancellationException::class)
-    protected abstract suspend fun openSource(source: MediaSource<*>): D
+    protected abstract suspend fun setDataImpl(data: MediaData): D
 
     private val closed = MutableStateFlow(false)
     public fun close() {
@@ -351,6 +348,7 @@ public enum class PlaybackState(
 /**
  * For previewing
  */
+@OptIn(InternalForInheritanceMediampApi::class)
 public class DummyMediampPlayer(
     // TODO: 2024/12/22 move to preview package
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
@@ -365,10 +363,8 @@ public class DummyMediampPlayer(
         // no-op
     }
 
-    override suspend fun openSource(source: MediaSource<*>): Data {
-        val data = source.open()
+    override suspend fun setDataImpl(data: MediaData): Data {
         return Data(
-            source,
             data,
             releaseResource = {
                 backgroundScope.launch(NonCancellable) {

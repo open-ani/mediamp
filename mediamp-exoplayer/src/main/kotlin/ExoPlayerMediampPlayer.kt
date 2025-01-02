@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:kotlin.OptIn(MediampInternalApi::class)
+@file:kotlin.OptIn(InternalMediampApi::class)
 
 package org.openani.mediamp.exoplayer
 
@@ -43,13 +43,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
+import org.openani.mediamp.InternalForInheritanceMediampApi
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
-import org.openani.mediamp.internal.MediampInternalApi
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
@@ -57,8 +58,8 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.source.MediaData
-import org.openani.mediamp.source.MediaSource
-import org.openani.mediamp.source.UriMediaSource
+import org.openani.mediamp.source.SeekableInputMediaData
+import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.Player as Media3Player
@@ -68,17 +69,16 @@ import androidx.media3.common.Player as Media3Player
  * @see ExoPlayerMediampPlayerFactory
  */
 @OptIn(UnstableApi::class)
-@kotlin.OptIn(MediampInternalApi::class)
+@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 class ExoPlayerMediampPlayer @UiThread constructor(
     context: Context,
     parentCoroutineContext: CoroutineContext,
 ) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(parentCoroutineContext) {
     class ExoPlayerData(
-        mediaSource: MediaSource<*>,
         mediaData: MediaData,
         releaseResource: () -> Unit,
-        val setMedia: () -> Unit,
-    ) : Data(mediaSource, mediaData, releaseResource)
+        val setMedia: suspend () -> Unit,
+    ) : Data(mediaData, releaseResource)
 
     override suspend fun startPlayer(data: ExoPlayerData) {
         withContext(Dispatchers.Main.immediate) {
@@ -95,23 +95,19 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
     }
 
-    override suspend fun openSource(source: MediaSource<*>): ExoPlayerData {
-        if (source is UriMediaSource) {
-            val mediaData = source.open()
-            return ExoPlayerData(
-                source,
-                mediaData,
+    override suspend fun setDataImpl(data: MediaData): ExoPlayerData = when (data) {
+        is UriMediaData -> {
+            ExoPlayerData(
+                data,
                 releaseResource = {
-                    backgroundScope.launch(NonCancellable) {
-                        mediaData.close()
-                    }
+                    data.close()
                 },
                 setMedia = {
-                    val headers = source.headers
+                    val headers = data.headers
                     val item = MediaItem.Builder().apply {
-                        setUri(source.uri)
+                        setUri(data.uri)
                         setSubtitleConfigurations(
-                            source.extraFiles.subtitles.map {
+                            data.extraFiles.subtitles.map {
                                 MediaItem.SubtitleConfiguration.Builder(
                                     Uri.parse(it.uri),
                                 ).apply {
@@ -121,40 +117,42 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                             },
                         )
                     }.build()
-                    exoPlayer.setMediaSource(
-                        DefaultMediaSourceFactory(
-                            DefaultHttpDataSource.Factory()
-                                .setUserAgent(
-                                    headers["User-Agent"]
-                                        ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
-                                )
-                                .setDefaultRequestProperties(headers)
-                                .setConnectTimeoutMs(30_000),
-                        ).createMediaSource(item),
-                    )
+                    withContext(Dispatchers.Main.immediate) {
+                        exoPlayer.setMediaSource(
+                            DefaultMediaSourceFactory(
+                                DefaultHttpDataSource.Factory()
+                                    .setUserAgent(
+                                        headers["User-Agent"]
+                                            ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
+                                    )
+                                    .setDefaultRequestProperties(headers)
+                                    .setConnectTimeoutMs(30_000),
+                            ).createMediaSource(item),
+                        )
+                    }
                 },
             )
         }
-        val data = source.open()
-        val file = withContext(Dispatchers.IO) {
-            data.createInput()
-        }
-        val factory = ProgressiveMediaSource.Factory {
-            SeekableInputDataSource(data, file)
-        }
-        return ExoPlayerData(
-            source,
-            data,
-            releaseResource = {
-                file.close()
-                backgroundScope.launch(NonCancellable) {
+
+        is SeekableInputMediaData -> {
+            val file = withContext(Dispatchers.IO) {
+                data.createInput()
+            }
+            val factory = ProgressiveMediaSource.Factory {
+                SeekableInputDataSource(data, file)
+            }
+
+            ExoPlayerData(
+                data,
+                releaseResource = {
+                    file.close()
                     data.close()
-                }
-            },
-            setMedia = {
-                exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(source.uri)))
-            },
-        )
+                },
+                setMedia = {
+                    exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(data.uri)))
+                },
+            )
+        }
     }
 
     val exoPlayer = run {

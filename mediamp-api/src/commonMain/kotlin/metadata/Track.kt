@@ -8,23 +8,25 @@
 
 package org.openani.mediamp.metadata
 
+import org.openani.mediamp.InternalMediampApi
+
 public sealed interface Track
 
-public class SubtitleTrack(
+public class SubtitleTrack @InternalMediampApi constructor(
     public val id: String,
     public val internalId: String,
     public val language: String?,
     public val labels: List<TrackLabel>,
 ) : Track
 
-public class AudioTrack(
+public class AudioTrack @InternalMediampApi constructor(
     public val id: String,
     public val internalId: String,
     public val name: String?,
     public val labels: List<TrackLabel>,
 ) : Track
 
-public class TrackLabel(
+public class TrackLabel @InternalMediampApi constructor(
     public val language: String?, // "zh" 这指的是 value 的语言
     public val value: String // "CHS", "简日", "繁日"
 )

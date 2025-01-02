@@ -17,7 +17,7 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
 import kotlinx.coroutines.runBlocking
 import org.openani.mediamp.io.SeekableInput
-import org.openani.mediamp.source.MediaData
+import org.openani.mediamp.source.SeekableInputMediaData
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.measureTimedValue
@@ -32,7 +32,7 @@ private const val ENABLE_TRACE_LOG = false
  * This class will not close [mediaData].
  */
 internal class SeekableInputDataSource(
-    private val mediaData: MediaData,
+    private val mediaData: SeekableInputMediaData,
     private val file: SeekableInput,
 ) : BaseDataSource(true) {
     private var uri: Uri? = null

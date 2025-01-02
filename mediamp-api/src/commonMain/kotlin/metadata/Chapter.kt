@@ -8,7 +8,9 @@
 
 package org.openani.mediamp.metadata
 
-public class Chapter(
+import org.openani.mediamp.InternalMediampApi
+
+public class Chapter @InternalMediampApi constructor(
     public val name: String,
     public val durationMillis: Long,
     public val offsetMillis: Long

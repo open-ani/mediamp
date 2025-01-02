@@ -16,8 +16,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.vlc.VlcMediampPlayer
-import org.openani.mediamp.internal.MediampInternalApi
 import kotlin.math.roundToInt
 
 @Composable
@@ -28,7 +28,7 @@ fun VlcMediampPlayerSurface(
     val frameSizeCalculator = remember {
         FrameSizeCalculator()
     }
-    @OptIn(MediampInternalApi::class)
+    @OptIn(InternalMediampApi::class)
     Canvas(modifier) {
         val bitmap = mediampPlayer.surface.bitmap ?: return@Canvas
         frameSizeCalculator.calculate(

@@ -9,9 +9,12 @@
 package org.openani.mediamp.internal
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.openani.mediamp.InternalForInheritanceMediampApi
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.metadata.TrackGroup
 
-@MediampInternalApi
+@InternalMediampApi
+@OptIn(InternalForInheritanceMediampApi::class)
 public class MutableTrackGroup<T>(
     initialCandidates: List<T> = emptyList(),
 ) : TrackGroup<T> {

@@ -10,52 +10,59 @@ package org.openani.mediamp.source
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withContext
 import kotlinx.io.IOException
+import kotlinx.io.files.FileNotFoundException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
-import org.openani.mediamp.internal.MediampInternalApi
+import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.SystemFileSeekableInput
 import kotlin.coroutines.CoroutineContext
 
-public class SystemFileMediaData(
-    public val file: Path,
-    private val bufferSize: Int = 8 * 1024,
-) : MediaData {
-    override fun fileLength(): Long? = SystemFileSystem.metadataOrNull(file)?.size
+/**
+ * A [MediaData] that represents a media that is backed by a system file.
+ */
+@OptIn(ExperimentalMediampApi::class)
+public sealed interface SystemFileMediaData : SeekableInputMediaData {
 
-    @OptIn(MediampInternalApi::class)
-    override val networkStats: Flow<NetStats> = flowOf(NetStats(0, 0))
+    /**
+     * The file that backs this media data in [SystemFileSystem].
+     */
+    public val file: Path
+}
+
+
+@OptIn(ExperimentalMediampApi::class)
+internal class SystemFileMediaDataImpl(
+    override val file: Path,
+    override val extraFiles: MediaExtraFiles,
+    override val uri: String,
+    private val bufferSize: Int = 8 * 1024,
+) : SystemFileMediaData {
+    @Throws(IOException::class)
+    override fun fileLength(): Long? = SystemFileSystem.metadataOrNull(file)?.size
 
     override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput =
         withContext(Dispatchers.IO) { SystemFileSeekableInput(file, bufferSize) }
 
-    override suspend fun close() {
-        // no-op
-    }
+    override fun close() {}
 }
 
-public class SystemFileMediaSource internal constructor(
-    public val path: Path,
-    override val extraFiles: MediaExtraFiles,
-    override val uri: String,
-) : MediaSource<SystemFileMediaData> {
-    override suspend fun open(): SystemFileMediaData = SystemFileMediaData(path)
-    override fun toString(): String = "SystemFileMediaSource(uri=$uri)"
-}
-
-@Throws(IOException::class)
-public fun SystemFileMediaSource(
+/**
+ * Creates a [SystemFileMediaData] from the given [path].
+ *
+ * @throws FileNotFoundException if the file does not exist.
+ */
+@Throws(FileNotFoundException::class)
+public fun SystemFileMediaData(
     path: Path,
-    extraFiles: MediaExtraFiles = MediaExtraFiles.Empty,
-): SystemFileMediaSource {
-    check(SystemFileSystem.exists(path)) { "File does not exist: $path" }
-    return SystemFileMediaSource(
+    extraFiles: MediaExtraFiles = MediaExtraFiles.EMPTY,
+): SystemFileMediaData {
+    val resolve = SystemFileSystem.resolve(path)
+    return SystemFileMediaDataImpl(
         path,
         extraFiles,
-        "file://${SystemFileSystem.resolve(path)}",
+        uri = "file://$resolve",
     )
 }

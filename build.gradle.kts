@@ -6,10 +6,8 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-import com.android.build.api.dsl.CommonExtension
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
-import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+import org.jetbrains.kotlin.gradle.dsl.kotlinExtension
 
 buildscript {
     repositories {
@@ -44,6 +42,14 @@ allprojects {
         google()
         maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
         maven("https://androidx.dev/storage/compose-compiler/repository/")
+    }
+
+    afterEvaluate {
+        (runCatching { kotlinExtension }.getOrNull() as? KotlinMultiplatformExtension)?.apply {
+            compilerOptions {
+                optIn.add("kotlin.ExperimentalSubclassOptIn") // Workaround for IDE bug. This is already stable in Kotlin 2.1.0
+            }
+        }
     }
 }
 

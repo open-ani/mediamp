@@ -8,9 +8,9 @@
 
 package org.openani.mediamp.metadata
 
-import org.openani.mediamp.internal.MediampInternalApi
+import org.openani.mediamp.InternalMediampApi
 
-public class VideoProperties @MediampInternalApi public constructor(
+public class VideoProperties @InternalMediampApi public constructor(
     public val title: String?,
     public val durationMillis: Long,
 ) {
@@ -18,7 +18,7 @@ public class VideoProperties @MediampInternalApi public constructor(
         title: String? = this.title,
         durationMillis: Long = this.durationMillis,
     ): VideoProperties {
-        @OptIn(MediampInternalApi::class)
+        @OptIn(InternalMediampApi::class)
         return VideoProperties(
             title = title,
             durationMillis = durationMillis,

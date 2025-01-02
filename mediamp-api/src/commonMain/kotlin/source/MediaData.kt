@@ -8,19 +8,43 @@
 
 package org.openani.mediamp.source
 
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.io.IOException
-import org.openani.mediamp.internal.MediampInternalApi
+import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
-import org.openani.mediamp.io.emptySeekableInput
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
 /**
- * Holds information about a video file.
+ * A playable media data.
+ *
+ * @see SeekableInputMediaData
+ * @see UriMediaData
  */
-public interface MediaData {
+public sealed interface MediaData {
+    /**
+     * Extra files associated with this media data.
+     */
+    public val extraFiles: MediaExtraFiles
+
+    /**
+     * Closes any the underlying resources held by this media data, if any.
+     * This method should be idempotent. Calling it multiple times should have no effect.
+     *
+     * Note that this method might be called on the main thread.
+     */
+    public fun close()
+}
+
+/**
+ * A [MediaData] that represents a media that may open a custom [SeekableInput] to provide the payload for playing.
+ */
+@SubclassOptInRequired(ExperimentalMediampApi::class)
+public interface SeekableInputMediaData : MediaData {
+    /**
+     * The unique identifier of the media data.
+     */
+    public val uri: String
+
     /**
      * Returns the length of the video file in bytes, or `null` if not known.
      */
@@ -28,52 +52,11 @@ public interface MediaData {
     public fun fileLength(): Long?
 
     /**
-     * Subscribe to network stats updates of this video data, if known.
-     */
-    public val networkStats: Flow<NetStats> // todo: remove networkStats
-
-    // TODO: 2024/12/16 remove isCacheFinished
-    public val isCacheFinished: Flow<Boolean> get() = flowOf(false)
-
-    /**
      * Opens a new input stream to the video file.
-     * The returned [SeekableInput] needs to be closed when not used anymore.
+     * The returned [SeekableInput] needs to be closed if it is no longer needed.
      *
      * The returned [SeekableInput] must be closed before a new [createInput] can be made.
      * Otherwise, it is undefined behavior.
      */
     public suspend fun createInput(coroutineContext: CoroutineContext = EmptyCoroutineContext): SeekableInput
-
-    /**
-     * Closes the video data. // TODO: 2024/12/16 documentation
-     */
-    public suspend fun close() // TODO: 2024/12/16 make non-suspend?
-}
-
-public class NetStats @MediampInternalApi public constructor(
-    /**
-     * The download speed in bytes per second.
-     *
-     * May return `-1` if it is not known.
-     */
-    public val downloadSpeed: Long,
-
-    /**
-     * The upload speed in bytes per second.
-     *
-     * May return `-1` if it is not known.
-     */
-    public val uploadRate: Long,
-)
-
-public fun emptyVideoData(): MediaData = EmptyMediaData
-
-private object EmptyMediaData : MediaData {
-    override fun fileLength(): Long? = null
-
-    @OptIn(MediampInternalApi::class)
-    override val networkStats: Flow<NetStats> = flowOf(NetStats(0, 0))
-
-    override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput = emptySeekableInput()
-    override suspend fun close() {}
 }

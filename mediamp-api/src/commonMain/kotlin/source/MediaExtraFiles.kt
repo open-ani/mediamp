@@ -8,11 +8,14 @@
 
 package org.openani.mediamp.source
 
+import kotlin.jvm.JvmField
+
 public class MediaExtraFiles(
     public val subtitles: List<Subtitle> = emptyList(),
 ) {
     public companion object {
-        public val Empty: MediaExtraFiles = MediaExtraFiles()
+        @JvmField
+        public val EMPTY: MediaExtraFiles = MediaExtraFiles()
     }
 }
 

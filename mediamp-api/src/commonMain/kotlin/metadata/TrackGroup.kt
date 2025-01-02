@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import org.openani.mediamp.InternalForInheritanceMediampApi
 
+@SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface TrackGroup<T> {
     public val current: StateFlow<T?>
     public val candidates: Flow<List<T>>
@@ -20,11 +22,15 @@ public interface TrackGroup<T> {
     public fun select(track: T?): Boolean
 }
 
-public fun <T> emptyTrackGroup(): TrackGroup<T> = object : TrackGroup<T> {
-    override val current: StateFlow<T?> = MutableStateFlow<T?>(null)
-    override val candidates: Flow<List<T>> = emptyFlow()
+@Suppress("UNCHECKED_CAST")
+public fun <T> emptyTrackGroup(): TrackGroup<T> = EmptyTrackGroup as TrackGroup<T>
 
-    override fun select(track: T?): Boolean = false
+@OptIn(InternalForInheritanceMediampApi::class)
+private object EmptyTrackGroup : TrackGroup<Nothing> {
+    override val current: StateFlow<Nothing?> = MutableStateFlow(null)
+    override val candidates: Flow<List<Nothing>> = emptyFlow()
+
+    override fun select(track: Nothing?): Boolean = false
 }
 
 //fun <T> mutableTrackGroupOf(vararg tracks: T): MutableTrackGroup<T> = MutableTrackGroup<T>().apply {
