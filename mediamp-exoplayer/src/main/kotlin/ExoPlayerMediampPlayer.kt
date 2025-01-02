@@ -337,7 +337,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     private inner class PlaybackSpeedImpl : PlaybackSpeed {
         override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
-        override val value: Float get() = playbackSpeed.value
+        override val value: Float get() = valueFlow.value
 
         override fun set(speed: Float) {
             valueFlow.value = speed.coerceAtLeast(0f)
