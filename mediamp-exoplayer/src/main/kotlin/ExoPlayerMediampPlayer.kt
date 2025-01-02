@@ -59,7 +59,6 @@ import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.emptyVideoData
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.Player as Media3Player
@@ -98,10 +97,15 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     override suspend fun openSource(source: MediaSource<*>): ExoPlayerData {
         if (source is UriMediaSource) {
+            val mediaData = source.open()
             return ExoPlayerData(
                 source,
-                emptyVideoData(),
-                releaseResource = {},
+                mediaData,
+                releaseResource = {
+                    backgroundScope.launch(NonCancellable) {
+                        mediaData.close()
+                    }
+                },
                 setMedia = {
                     val headers = source.headers
                     val item = MediaItem.Builder().apply {

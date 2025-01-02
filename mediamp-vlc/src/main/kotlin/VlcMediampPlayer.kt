@@ -30,8 +30,6 @@ import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
-import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlaybackSpeed
@@ -49,7 +47,8 @@ import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaSource
 import org.openani.mediamp.source.UriMediaSource
-import org.openani.mediamp.source.emptyVideoData
+import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
+import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
 import uk.co.caprica.vlcj.media.Media
@@ -137,9 +136,10 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
 
     override suspend fun openSource(source: MediaSource<*>): VlcjData {
         if (source is UriMediaSource) {
+            val mediaData = source.open()
             return VlcjData(
                 source,
-                emptyVideoData(),
+                mediaData,
                 setPlay = {
 
                     player.media().play(
@@ -154,7 +154,11 @@ class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) : MediampPlayer
                     )
                     lastMedia = null
                 },
-                releaseResource = {},
+                releaseResource = {
+                    backgroundScope.launch(NonCancellable) {
+                        mediaData.close()
+                    }
+                },
             )
         }
 
