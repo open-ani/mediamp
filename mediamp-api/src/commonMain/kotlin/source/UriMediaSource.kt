@@ -29,7 +29,7 @@ public open class UriMediaSource(
 }
 
 
-public class UriMediaData(
+public open class UriMediaData(
     public val url: String,
 ) : MediaData {
     override fun fileLength(): Long? = null
