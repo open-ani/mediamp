@@ -51,7 +51,7 @@ public abstract class BufferedSeekableInput(
 
     final override val bytesRemaining: Long get() = (this.size - position).coerceAtLeast(0)
 
-    final override fun seek(position: Long) {
+    final override fun seekTo(position: Long) {
         require(position >= 0) { "offset must be non-negative, but was $position" }
 
         checkClosed()

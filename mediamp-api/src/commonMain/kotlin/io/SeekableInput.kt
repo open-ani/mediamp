@@ -36,12 +36,12 @@ public interface SeekableInput : AutoCloseable {
     /**
      * The size of the input source in bytes.
      */
-    public val size: @Range(from = 0L, to = Long.MAX_VALUE) Long // TODO: Make function
+    public val size: @Range(from = 0L, to = Long.MAX_VALUE) Long
 
     /**
      * Seeks to the given offset in bytes from the start of the input source.
      *
-     * This function suspends until the target byte at [seek] position is available to read.
+     * This function suspends until the target byte at [seekTo] position is available to read.
      *
      * When this function returns, it moves [the current position][SeekableInput.position] to [position].
      *
@@ -51,7 +51,7 @@ public interface SeekableInput : AutoCloseable {
      * @throws IllegalStateException if the input source is closed.
      */
     @Throws(IOException::class)
-    public fun seek(
+    public fun seekTo(
         position: @Range(from = 0L, to = Long.MAX_VALUE) Long,
     )
 
@@ -187,7 +187,7 @@ private object EmptySeekableInput : SeekableInput {
     override val bytesRemaining: Long get() = 0
     override val size: Long get() = 0
 
-    override fun seek(position: Long) {
+    override fun seekTo(position: Long) {
         require(position >= 0) { "offset must be non-negative, but was $position" }
         checkClosed()
     }

@@ -30,7 +30,7 @@ internal class SeekableInputCallbackMedia(
     }
 
     override fun onSeek(offset: Long): Boolean {
-        input.seek(offset)
+        input.seekTo(offset)
         return true
     }
 

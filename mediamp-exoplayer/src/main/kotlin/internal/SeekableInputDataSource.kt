@@ -88,7 +88,7 @@ internal class SeekableInputDataSource(
         } else {
             if (dataSpec.position != -1L && dataSpec.position != 0L) {
                 if (ENABLE_TRACE_LOG) log { "Seeking to ${dataSpec.position}" }
-                runBlocking { file.seek(dataSpec.position) }
+                runBlocking { file.seekTo(dataSpec.position) }
             }
 
             if (ENABLE_TRACE_LOG) log { "Open done, bytesRemaining = ${file.bytesRemaining}" }

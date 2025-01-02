@@ -41,7 +41,7 @@ internal open class BufferedFileInput(
     private val bufferSize: Int = DEFAULT_BUFFER_SIZE,
     private val onFillBuffer: (() -> Unit)? = null,
 ) : BufferedSeekableInput(bufferSize) {
-    override val size: Long get() = file.length()
+    override val size: Long = file.length()
 
     override fun fillBuffer() {
         onFillBuffer?.invoke()

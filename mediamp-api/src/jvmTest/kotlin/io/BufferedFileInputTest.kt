@@ -64,55 +64,55 @@ class BufferedFileInputTest {
 
     @Test
     fun `seek then read fully`() {
-        input.seek(4)
+        input.seekTo(4)
         assertEquals(sampleText.drop(4), input.readAllBytes().decodeToString())
     }
 
     @Test
     fun `read, seek forward, read fully`() {
         assertEquals(sampleText.take(4), input.readBytes(maxLength = 4).decodeToString())
-        input.seek(8)
+        input.seekTo(8)
         assertEquals(sampleText.drop(8), input.readAllBytes().decodeToString())
     }
 
     @Test
     fun `read, seek back, read fully`() {
         assertEquals(sampleText.take(4), input.readBytes(maxLength = 4).decodeToString())
-        input.seek(0)
+        input.seekTo(0)
         assertEquals(sampleText, input.readAllBytes().decodeToString())
     }
 
     @Test
     fun `double seek same`() {
         assertEquals(sampleText.take(4), input.readBytes(maxLength = 4).decodeToString())
-        input.seek(0)
-        input.seek(0)
+        input.seekTo(0)
+        input.seekTo(0)
         assertEquals(sampleText, input.readAllBytes().decodeToString())
     }
 
     @Test
     fun `seek forward then back`() {
         assertEquals(sampleText.take(4), input.readBytes(maxLength = 4).decodeToString())
-        input.seek(8)
-        input.seek(4)
+        input.seekTo(8)
+        input.seekTo(4)
         assertEquals(sampleText.drop(4), input.readAllBytes().decodeToString())
     }
 
     @Test
     fun `seek over length, read return -1`() {
-        input.seek(999999)
+        input.seekTo(999999)
         assertEquals(-1, input.read(ByteArray(1), 0, 1))
     }
 
     @Test
     fun `seek over length, bytesRemaining is zero`() {
-        input.seek(999999)
+        input.seekTo(999999)
         assertEquals(0, input.bytesRemaining)
     }
 
     @Test
     fun `seek over length, readBytes return empty`() {
-        input.seek(999999)
+        input.seekTo(999999)
         assertEquals(0, input.readAllBytes().size)
     }
 
@@ -125,12 +125,12 @@ class BufferedFileInputTest {
     fun `reuse buffer from previous start`() {
         // buffer size is 20
 
-        input.seek(30)
+        input.seekTo(30)
         assertEquals(1, input.read(ByteArray(1))) // fill buffer
         assertEquals(30 - bufferSize..<30L + bufferSize, input.bufferedOffsetRange)
         // 10..<50
 
-        input.seek(0) // 超出 buffer 范围
+        input.seekTo(0) // 超出 buffer 范围
         input.prepareBuffer()
         assertEquals(0L..<bufferSize, input.bufferedOffsetRange)
         // 0..<20, last 10 was reused from previous buffer
@@ -142,12 +142,12 @@ class BufferedFileInputTest {
     fun `reuse buffer from previous end - second half`() {
         // buffer size is 20
 
-        input.seek(30)
+        input.seekTo(30)
         assertEquals(1, input.read(ByteArray(1))) // fill buffer
         assertEquals(30 - bufferSize..<30L + bufferSize, input.bufferedOffsetRange)
         // 10..<50
 
-        input.seek(60) // 超出 buffer 范围
+        input.seekTo(60) // 超出 buffer 范围
         input.prepareBuffer()
         assertEquals(60 - bufferSize..<60L + bufferSize, input.bufferedOffsetRange)
         // 40..<80, first 10 was reused from previous buffer
@@ -159,12 +159,12 @@ class BufferedFileInputTest {
     fun `reuse buffer from previous end - first half`() {
         // buffer size is 20
 
-        input.seek(30)
+        input.seekTo(30)
         assertEquals(1, input.read(ByteArray(1))) // fill buffer
         assertEquals(30 - bufferSize..<30L + bufferSize, input.bufferedOffsetRange)
         // 10..<50
 
-        input.seek(50) // 超出 buffer 范围
+        input.seekTo(50) // 超出 buffer 范围
         input.prepareBuffer()
         assertEquals(50 - bufferSize..<50L + bufferSize, input.bufferedOffsetRange)
         // 40..<80, first 10 was reused from previous buffer
@@ -177,7 +177,7 @@ class BufferedFileInputTest {
         val random = Random(2352151)
         repeat(1000) {
             val pos = random.nextLong(0L..<sampleText.length).absoluteValue
-            input.seek(pos)
+            input.seekTo(pos)
 //                val length = Random.nextInt()
             assertEquals(sampleText.substring(pos.toInt()), input.readAllBytes().decodeToString())
         }
@@ -190,7 +190,7 @@ class BufferedFileInputTest {
     @Test
     fun `seek negative fails`() {
         assertFailsWith<IllegalArgumentException> {
-            input.seek(-1)
+            input.seekTo(-1)
         }
     }
 
