@@ -17,7 +17,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.getAndUpdate
@@ -26,14 +25,16 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
+import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
-import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.metadata.emptyTrackGroup
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
@@ -47,7 +48,7 @@ import kotlin.reflect.KClass
  * An extensible media player that plays [MediaData]s. Instances can be obtained from a [MediampPlayerFactory].
  *
  * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
- * - Playback State: [playbackState], [mediaData], [videoProperties], [currentPositionMillis], [playbackProgress]
+ * - Playback State: [playbackState], [mediaData], [mediaProperties], [currentPositionMillis], [playbackProgress]
  * - Playback Control: [pause], [resume], [stop], [seekTo], [skip]
  *
  * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
@@ -84,8 +85,12 @@ public interface MediampPlayer {
      * A hot flow of the current playback state. Collect on this flow to receive state updates.
      *
      * States might be changed either by user interaction ([resume]) or by the player itself (e.g. decoder errors).
+     *
+     * To retrieve the current state without suspension, use [getCurrentPlaybackState].
+     *
+     * @see getCurrentPlaybackState
      */
-    public val playbackState: StateFlow<PlaybackState>
+    public val playbackState: Flow<PlaybackState>
 
     /**
      * The video data of the currently playing video.
@@ -98,14 +103,18 @@ public interface MediampPlayer {
      * Note that it may not be available immediately after [setVideoSource] returns,
      * since the properties may be callback from the underlying player implementation.
      */
-    public val videoProperties: StateFlow<VideoProperties?>
+    public val mediaProperties: Flow<MediaProperties?>
 
     /**
-     * Current playback position of the video being played in millis seconds, ranged from `0` to [VideoProperties.durationMillis].
+     * Current playback position of the video being played in millis seconds, ranged from `0` to [MediaProperties.durationMillis].
      *
      * `0` if no video is being played ([mediaData] is null).
+     *
+     * To obtain the current position without suspension, use [getCurrentPositionMillis].
+     *
+     * @see getCurrentPositionMillis
      */
-    public val currentPositionMillis: StateFlow<Long>
+    public val currentPositionMillis: Flow<Long>
 
     /**
      * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
@@ -133,9 +142,22 @@ public interface MediampPlayer {
     public suspend fun setVideoSource(data: MediaData)
 
     /**
-     * Obtains the exact current playback position of the video in milliseconds.
+     * Gets the current playback state without suspension.
+     *
+     * To subscribe for updates, use [playbackState].
+     *
+     * @see playbackState
      */
-    public fun getExactCurrentPositionMillis(): Long
+    public fun getCurrentPlaybackState(): PlaybackState
+
+    /**
+     * Obtains the exact current playback position of the video in milliseconds, without suspension.
+     *
+     * If no video is being played, this function will return `0`.
+     *
+     * To subscribe for updates, use [currentPositionMillis].
+     */
+    public fun getCurrentPositionMillis(): Long
 
     /**
      * Resumes playback.
@@ -178,13 +200,8 @@ public interface MediampPlayer {
      * // TODO argument errors?
      */
     public fun skip(deltaMillis: Long) {
-        seekTo(currentPositionMillis.value + deltaMillis)
+        seekTo(getCurrentPositionMillis() + deltaMillis)
     }
-
-    // TODO: 2024/12/22 extract to feature 
-    public val subtitleTracks: TrackGroup<SubtitleTrack>
-    public val audioTracks: TrackGroup<AudioTrack>
-    public val chapters: StateFlow<List<Chapter>>
 
     /**
      * Releases all resources held by the player. The instance will be unusable after this call.
@@ -202,7 +219,7 @@ public suspend fun MediampPlayer.playUri(uri: String): Unit =
  * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
  */
 public fun MediampPlayer.togglePause() {
-    if (playbackState.value.isPlaying) {
+    if (getCurrentPlaybackState().isPlaying) {
         pause()
     } else {
         resume()
@@ -241,7 +258,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     }
 
     final override val playbackProgress: Flow<Float>
-        get() = combine(videoProperties.filterNotNull(), currentPositionMillis) { properties, duration ->
+        get() = combine(mediaProperties.filterNotNull(), currentPositionMillis) { properties, duration ->
             if (properties.durationMillis == 0L) {
                 return@combine 0f
             }
@@ -354,6 +371,10 @@ public class DummyMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
 ) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(parentCoroutineContext) {
     override val impl: Any get() = this
+    override fun getCurrentPlaybackState(): PlaybackState {
+        return playbackState.value
+    }
+
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
     override fun stopImpl() {
 
@@ -381,14 +402,14 @@ public class DummyMediampPlayer(
         // no-op
     }
 
-    override val videoProperties: MutableStateFlow<VideoProperties> = MutableStateFlow(
-        VideoProperties(
+    override val mediaProperties: MutableStateFlow<MediaProperties> = MutableStateFlow(
+        MediaPropertiesImpl(
             title = "Test Video",
             durationMillis = 100_000,
         ),
     )
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(10_000L)
-    override fun getExactCurrentPositionMillis(): Long {
+    override fun getCurrentPositionMillis(): Long {
         return currentPositionMillis.value
     }
 
@@ -404,16 +425,6 @@ public class DummyMediampPlayer(
         this.currentPositionMillis.value = positionMillis
     }
 
-    override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
-    override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
-
-    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(
-        listOf(
-            Chapter("chapter1", durationMillis = 90_000L, 0L),
-            Chapter("chapter2", durationMillis = 5_000L, 90_000L),
-        ),
-    )
-
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(
             PlaybackSpeed,
@@ -423,6 +434,19 @@ public class DummyMediampPlayer(
                 override fun set(speed: Float) {
                     valueFlow.value = speed
                 }
+            },
+        )
+        add(
+            MediaMetadata,
+            object : MediaMetadata {
+                override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
+                override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
+                override val chapters: Flow<List<Chapter>?> = MutableStateFlow(
+                    listOf(
+                        Chapter("chapter1", durationMillis = 90_000L, 0L),
+                        Chapter("chapter2", durationMillis = 5_000L, 90_000L),
+                    ),
+                )
             },
         )
     }

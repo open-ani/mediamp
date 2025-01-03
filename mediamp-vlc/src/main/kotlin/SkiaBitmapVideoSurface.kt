@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import javax.swing.SwingUtilities
 
 @InternalMediampApi
-class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideoSurfaceAdapter()) {
+public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideoSurfaceAdapter()) {
     private val videoSurface = SkiaVideoSurface()
 
     @Volatile
@@ -43,7 +43,7 @@ class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideoSurface
     private val skiaBitmap: Bitmap = Bitmap()
     private val composeBitmap = mutableStateOf<ImageBitmap?>(null)
 
-    val enableRendering = MutableStateFlow(false)
+    public val enableRendering: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
     /**
      * Set this to non-zero to draw frames even if [enableRendering] is true.
@@ -52,15 +52,15 @@ class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideoSurface
      */
     @JvmField
     @Volatile
-    var allowedDrawFrames = 0
+    public var allowedDrawFrames: Int = 0
 
-    fun setAllowedDrawFrames(value: Int) {
+    public fun setAllowedDrawFrames(value: Int) {
         ALLOWED_DRAW_FRAMES.set(this, value)
     }
 
-    val bitmap by composeBitmap
+    public val bitmap: ImageBitmap? by composeBitmap
 
-    fun clearBitmap() {
+    public fun clearBitmap() {
         composeBitmap.value = null
     }
 

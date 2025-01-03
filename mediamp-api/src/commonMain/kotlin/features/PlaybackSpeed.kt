@@ -9,7 +9,9 @@
 package org.openani.mediamp.features
 
 import kotlinx.coroutines.flow.Flow
+import org.openani.mediamp.InternalForInheritanceMediampApi
 
+@SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface PlaybackSpeed : Feature {
     /**
      * A cold flow of the current playback speed. `1.0` by default.

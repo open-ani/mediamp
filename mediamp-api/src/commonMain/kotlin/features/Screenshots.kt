@@ -9,7 +9,7 @@
 package org.openani.mediamp.features
 
 /**
- * An optional feature of the [org.openani.mediamp.core.MediampPlayer] that allows taking screenshots of the current video frame.
+ * An optional feature of the [org.openani.mediamp.MediampPlayer] that allows taking screenshots of the current video frame.
  */
 public interface Screenshots : Feature {
     /**

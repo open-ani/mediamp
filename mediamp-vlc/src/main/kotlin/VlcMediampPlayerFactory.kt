@@ -12,7 +12,7 @@ import org.openani.mediamp.MediampPlayerFactory
 import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 
-class VlcMediampPlayerFactory : MediampPlayerFactory<VlcMediampPlayer> {
+public class VlcMediampPlayerFactory : MediampPlayerFactory<VlcMediampPlayer> {
     override val forClass: KClass<VlcMediampPlayer> = VlcMediampPlayer::class
     override fun create(
         context: Any,

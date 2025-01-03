@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import org.openani.mediamp.InternalForInheritanceMediampApi
+import org.openani.mediamp.InternalMediampApi
 
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface TrackGroup<T> {
@@ -22,6 +23,7 @@ public interface TrackGroup<T> {
     public fun select(track: T?): Boolean
 }
 
+@InternalMediampApi
 @Suppress("UNCHECKED_CAST")
 public fun <T> emptyTrackGroup(): TrackGroup<T> = EmptyTrackGroup as TrackGroup<T>
 

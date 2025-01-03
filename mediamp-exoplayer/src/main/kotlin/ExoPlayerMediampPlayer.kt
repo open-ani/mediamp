@@ -43,20 +43,23 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
+import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
+import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
-import org.openani.mediamp.metadata.VideoProperties
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -156,7 +159,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
     }
 
-    val exoPlayer = run {
+    private val exoPlayer: ExoPlayer = run {
         ExoPlayer.Builder(context).apply {
             setTrackSelector(
                 object : DefaultTrackSelector(context) {
@@ -166,7 +169,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         params: Parameters,
                         selectedAudioLanguage: String?
                     ): Pair<ExoTrackSelection.Definition, Int>? {
-                        val preferred = subtitleTracks.current.value
+                        val preferred = mediaMetadataFeature.subtitleTracks.current.value
                             ?: return super.selectTextTrack(
                                 mappedTrackInfo,
                                 rendererFormatSupports,
@@ -236,12 +239,12 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                                 }
                                 .toList()
                         // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
-                        if (newSubtitleTracks != subtitleTracks.candidates.value) {
-                            subtitleTracks.candidates.value = newSubtitleTracks
-                            subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
+                        if (newSubtitleTracks != mediaMetadataFeature.subtitleTracks.candidates.value) {
+                            mediaMetadataFeature.subtitleTracks.candidates.value = newSubtitleTracks
+                            mediaMetadataFeature.subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
                         }
 
-                        audioTracks.candidates.value =
+                        mediaMetadataFeature.audioTracks.candidates.value =
                             tracks.groups.asSequence()
                                 .filter { it.type == C.TRACK_TYPE_AUDIO }
                                 .flatMapIndexed { groupIndex: Int, group: Tracks.Group ->
@@ -270,7 +273,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         val duration = duration
 
                         // 注意, 要把所有 UI 属性全都读出来然后 captured 到 background -- ExoPlayer 所有属性都需要在主线程
-                        videoProperties.value = VideoProperties(
+                        mediaProperties.value = MediaPropertiesImpl(
                             title = title?.toString(),
                             durationMillis = duration,
                         )
@@ -321,36 +324,23 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     }
     override val impl: ExoPlayer get() = exoPlayer
 
-    override val videoProperties = MutableStateFlow<VideoProperties?>(null)
+    override val mediaProperties = MutableStateFlow<MediaProperties?>(null)
 
-    val buffering = BufferingImpl()
+    private val buffering = ExoPlayerBuffering()
+    private val mediaMetadataFeature = ExoPlayerMediaMetadata()
+    private val playbackSpeed = PlaybackSpeedImpl(exoPlayer)
 
-    inner class BufferingImpl : Buffering {
-        override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
-        override val bufferedPercentage = MutableStateFlow(0)
-    }
-
-    override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
-    override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
-
-    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
-    private val playbackSpeed = PlaybackSpeedImpl()
-
-    private inner class PlaybackSpeedImpl : PlaybackSpeed {
-        override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
-        override val value: Float get() = valueFlow.value
-
-        override fun set(speed: Float) {
-            valueFlow.value = speed.coerceAtLeast(0f)
-            exoPlayer.setPlaybackSpeed(speed)
-        }
-    }
-
+    @kotlin.OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(PlaybackSpeed, playbackSpeed)
         add(Buffering, buffering)
+        add(MediaMetadata, mediaMetadataFeature)
+    }
+
+    override fun getCurrentPlaybackState(): PlaybackState {
+        return playbackState.value
     }
 
     override fun release() {
@@ -366,7 +356,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             }
         }
         backgroundScope.launch(Dispatchers.Main) {
-            subtitleTracks.current.collect {
+            mediaMetadataFeature.subtitleTracks.current.collect {
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().apply {
                     setPreferredTextLanguage(it?.internalId) // dummy value to trigger a select, we have custom selector
                     setTrackTypeDisabled(C.TRACK_TYPE_TEXT, it == null) // disable subtitle track
@@ -380,7 +370,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         exoPlayer.seekTo(positionMillis)
     }
 
-    override fun getExactCurrentPositionMillis(): Long = exoPlayer.currentPosition
+    override fun getCurrentPositionMillis(): Long = exoPlayer.currentPosition
 
     override fun pause() {
         exoPlayer.playWhenReady = false
@@ -440,4 +430,32 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             }
         }
     }
+}
+
+@kotlin.OptIn(InternalForInheritanceMediampApi::class)
+internal class PlaybackSpeedImpl(
+    private val exoPlayer: ExoPlayer,
+) : PlaybackSpeed {
+    override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
+    override val value: Float get() = valueFlow.value
+
+    override fun set(speed: Float) {
+        valueFlow.value = speed.coerceAtLeast(0f)
+        exoPlayer.setPlaybackSpeed(speed)
+    }
+}
+
+
+@kotlin.OptIn(InternalForInheritanceMediampApi::class)
+internal class ExoPlayerMediaMetadata : MediaMetadata {
+    override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
+    override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
+
+    override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
+}
+
+@kotlin.OptIn(ExperimentalMediampApi::class, InternalForInheritanceMediampApi::class)
+internal class ExoPlayerBuffering : Buffering {
+    override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    override val bufferedPercentage = MutableStateFlow(0)
 }

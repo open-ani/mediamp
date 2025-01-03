@@ -24,7 +24,7 @@ fun ExoPlayerMediampPlayerSurface(
         factory = { context ->
             PlayerView(context).apply {
                 useController = false
-                this.player = mediampPlayer.exoPlayer
+                this.player = mediampPlayer.impl
                 configuration()
             }
         },
@@ -32,7 +32,7 @@ fun ExoPlayerMediampPlayerSurface(
         onRelease = {
         },
         update = { view ->
-            view.player = mediampPlayer.exoPlayer
+            view.player = mediampPlayer.impl
         },
     )
 
