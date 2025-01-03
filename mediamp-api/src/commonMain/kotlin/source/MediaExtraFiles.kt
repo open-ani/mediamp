@@ -26,4 +26,5 @@ public class Subtitle(
     public val uri: String,
     public val mimeType: String? = null,
     public val language: String? = null,
+    public val label: String? = null,
 )
