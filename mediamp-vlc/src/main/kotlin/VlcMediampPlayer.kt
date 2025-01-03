@@ -18,7 +18,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -116,6 +115,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private var lastMedia: SeekableInputCallbackMedia? = null // keep referenced so won't be gc'ed
 
     override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
+
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
@@ -144,6 +144,8 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         public val setPlay: () -> Unit,
         releaseResource: () -> Unit
     ) : Data(mediaData, releaseResource)
+
+    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
 
     override suspend fun setDataImpl(data: MediaData): VlcjData = when (data) {
         is UriMediaData -> {
@@ -357,7 +359,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         )
 
         backgroundScope.launch {
-            mediaMetadata.subtitleTracks.current.collect { track ->
+            mediaMetadata.subtitleTracks.selected.collect { track ->
                 try {
                     if (playbackState.value == PlaybackState.READY) {
                         return@collect
@@ -387,7 +389,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         }
 
         backgroundScope.launch {
-            mediaMetadata.audioTracks.current.collect { track ->
+            mediaMetadata.audioTracks.selected.collect { track ->
                 try {
                     if (playbackState.value == PlaybackState.READY) {
                         return@collect
@@ -447,7 +449,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
         if (mediaMetadata.subtitleTracks.candidates.value != newSubtitleTracks) {
             mediaMetadata.subtitleTracks.candidates.value = newSubtitleTracks
-            mediaMetadata.subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
+            mediaMetadata.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
         }
     }
 
@@ -546,7 +548,7 @@ internal class VlcMediaMetadata : MediaMetadata {
     override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
     override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
     internal val chaptersMutable: MutableStateFlow<List<Chapter>?> = MutableStateFlow(null)
-    override val chapters: Flow<List<Chapter>?> = chaptersMutable.asStateFlow()
+    override val chapters = chaptersMutable.filterNotNull()
 }
 
 internal class VlcScreenshots(

@@ -13,6 +13,7 @@ package org.openani.mediamp
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
@@ -60,12 +61,18 @@ import kotlin.reflect.KClass
  *
  * On other platforms, calls are not required to be on the main thread but should still be called from a single thread.
  * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the main thread in common code.
+ *
+ * ## Not safe for inheritance
+ *
+ * [MediampPlayer] interface is not safe for inheritance from third-party users, as new abstract methods might be added in the future.
  */
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface MediampPlayer {
     /**
      * The underlying player implementation.
      * It can be cast to the actual player implementation to access additional features that are not yet ported by Mediamp.
+     *
+     * Refer to platform-specific inheritor of [MediampPlayer] for the actual type of this property.
      */
     public val impl: Any
 
@@ -78,7 +85,7 @@ public interface MediampPlayer {
      *
      * @see getCurrentPlaybackState
      */
-    public val playbackState: Flow<PlaybackState>
+    public val playbackState: StateFlow<PlaybackState>
 
     /**
      * The video data of the currently playing video.
@@ -90,8 +97,21 @@ public interface MediampPlayer {
      *
      * Note that it may not be available immediately after [setVideoSource] returns,
      * since the properties may be callback from the underlying player implementation.
+     *
+     * To get more metadata information, e.g. audio tracks, subtitles and chapters, use [features] to get [MediaMetadata].
+     * @see features
+     * @see MediaMetadata
+     * @see getCurrentMediaProperties
      */
-    public val mediaProperties: Flow<MediaProperties?>
+    public val mediaProperties: StateFlow<MediaProperties?>
+
+    /**
+     * Gets the current media properties without suspension.
+     *
+     * To subscribe for updates, use [mediaProperties].
+     * @see mediaProperties
+     */
+    public fun getCurrentMediaProperties(): MediaProperties?
 
     /**
      * Current playback position of the video being played in millis seconds, ranged from `0` to [MediaProperties.durationMillis].
@@ -102,7 +122,7 @@ public interface MediampPlayer {
      *
      * @see getCurrentPositionMillis
      */
-    public val currentPositionMillis: Flow<Long>
+    public val currentPositionMillis: StateFlow<Long>
 
     /**
      * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
@@ -287,6 +307,9 @@ public class DummyMediampPlayer(
             durationMillis = 100_000,
         ),
     )
+
+    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
+
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(10_000L)
     override fun getCurrentPositionMillis(): Long {
         return currentPositionMillis.value
@@ -320,7 +343,7 @@ public class DummyMediampPlayer(
             object : MediaMetadata {
                 override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
                 override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
-                override val chapters: Flow<List<Chapter>?> = MutableStateFlow(
+                override val chapters: Flow<List<Chapter>> = MutableStateFlow(
                     listOf(
                         Chapter("chapter1", durationMillis = 90_000L, 0L),
                         Chapter("chapter2", durationMillis = 5_000L, 90_000L),

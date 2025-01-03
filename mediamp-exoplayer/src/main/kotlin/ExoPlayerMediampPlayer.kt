@@ -169,7 +169,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         params: Parameters,
                         selectedAudioLanguage: String?
                     ): Pair<ExoTrackSelection.Definition, Int>? {
-                        val preferred = mediaMetadataFeature.subtitleTracks.current.value
+                        val preferred = mediaMetadataFeature.subtitleTracks.selected.value
                             ?: return super.selectTextTrack(
                                 mappedTrackInfo,
                                 rendererFormatSupports,
@@ -241,7 +241,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
                         if (newSubtitleTracks != mediaMetadataFeature.subtitleTracks.candidates.value) {
                             mediaMetadataFeature.subtitleTracks.candidates.value = newSubtitleTracks
-                            mediaMetadataFeature.subtitleTracks.current.value = newSubtitleTracks.firstOrNull()
+                            mediaMetadataFeature.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
                         }
 
                         mediaMetadataFeature.audioTracks.candidates.value =
@@ -339,6 +339,10 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         add(MediaMetadata, mediaMetadataFeature)
     }
 
+    override fun getCurrentMediaProperties(): MediaProperties? {
+        return mediaProperties.value
+    }
+
     override fun getCurrentPlaybackState(): PlaybackState {
         return playbackState.value
     }
@@ -356,7 +360,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             }
         }
         backgroundScope.launch(Dispatchers.Main) {
-            mediaMetadataFeature.subtitleTracks.current.collect {
+            mediaMetadataFeature.subtitleTracks.selected.collect {
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon().apply {
                     setPreferredTextLanguage(it?.internalId) // dummy value to trigger a select, we have custom selector
                     setTrackTypeDisabled(C.TRACK_TYPE_TEXT, it == null) // disable subtitle track
