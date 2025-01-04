@@ -7,165 +7,100 @@
  */
 
 package org.openani.mediamp.mpv
-import java.lang.ref.Cleaner
-import java.lang.ref.Reference
 
-class MPVHandle private constructor(private val ptr: Long) : AutoCloseable {
-    private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
+import org.openani.mediamp.InternalMediampApi
+
+@OptIn(ExperimentalStdlibApi::class)
+class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
+    // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
-    
+
     constructor(context: Any) : this(nMake(context)) {
         if (ptr == 0L) throw IllegalStateException("Failed to create native mpv handle")
     }
-    
+
     fun initialize(): Boolean {
-        try {
-            return nInitialize(ptr)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nInitialize(ptr)
     }
-    
+
     fun setEventListener(listener: EventListener) {
         eventListener = listener
         nSetEventListener(ptr, listener)
     }
-    
+
     fun command(vararg command: String): Boolean {
-        try {
-            return nCommand(ptr, command)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nCommand(ptr, command)
     }
-    
+
     fun option(key: String, value: String): Boolean {
-        try {
-            return nOption(ptr, key, value)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nOption(ptr, key, value)
     }
-    
+
     fun getPropertyInt(name: String): Int {
-        try {
-            return nGetPropertyInt(ptr, name)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nGetPropertyInt(ptr, name)
     }
-    
+
     fun getPropertyBoolean(name: String): Boolean {
-        try {
-            return nGetPropertyBoolean(ptr, name)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nGetPropertyBoolean(ptr, name)
     }
-    
+
     fun getPropertyDouble(name: String): Double {
-        try {
-            return nGetPropertyDouble(ptr, name)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nGetPropertyDouble(ptr, name)
     }
-    
+
     fun getPropertyString(name: String): String {
-        try {
-            return nGetPropertyString(ptr, name)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nGetPropertyString(ptr, name)
     }
-    
+
     fun setPropertyInt(name: String, value: Int): Boolean {
-        try {
-            return nSetPropertyInt(ptr, name, value)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nSetPropertyInt(ptr, name, value)
     }
-    
+
     fun setPropertyBoolean(name: String, value: Boolean): Boolean {
-        try {
-            return nSetPropertyBoolean(ptr, name, value)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nSetPropertyBoolean(ptr, name, value)
     }
-    
+
     fun setPropertyDouble(name: String, value: Double): Boolean {
-        try {
-            return nSetPropertyDouble(ptr, name, value)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nSetPropertyDouble(ptr, name, value)
     }
-    
+
     fun setPropertyString(name: String, value: String): Boolean {
-        try {
-            return nSetPropertyString(ptr, name, value)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nSetPropertyString(ptr, name, value)
     }
-    
+
     fun observeProperty(name: String, format: MPVFormat, replyData: Long = 0L): Boolean {
-        try {
-            return nObserveProperty(ptr, name, format.ordinal, replyData)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nObserveProperty(ptr, name, format.ordinal, replyData)
     }
-    
+
     fun unobserveProperty(replyData: Long): Boolean {
-        try {
-            return nUnobserveProperty(ptr, replyData)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nUnobserveProperty(ptr, replyData)
     }
-    
-    fun attachAndroidSurface(surface: Any): Boolean {
-        try {
-            return nAttachAndroidSurface(ptr, surface)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
-    }
-    
-    fun detachAndroidSurface(): Boolean {
-        try {
-            return nDetachAndroidSurface(ptr)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
-    }
-    
+
+    /**
+     * Stop this `mpv_context` instance, which will run into the unrecoverable state.
+     *
+     * You will not expected to call any method except [close] after calling this function.
+     */
     fun destroy(): Boolean {
-        try {
-            return nDestroy(ptr)
-        } finally {
-            Reference.reachabilityFence(this)
-        }
+        return nDestroy(ptr)
     }
 
     override fun close() {
-        cleanable.clean()
+        nFinalize(ptr)
     }
-    
-    companion object {
+
+    /*companion object {
         init { LibraryLoader.loadLibraries() }
         
         private val cleaner = Cleaner.create()
         
         private class ReferenceHolder(private val nativePtr: Long) : Runnable {
-            override fun run() { nFinalize(nativePtr) }
+            override fun run() {  }
         }
-    }
+    }*/
 }
 
+@Suppress("unused")
 enum class MPVFormat {
     MPV_FORMAT_NONE,
     MPV_FORMAT_STRING,
@@ -196,8 +131,17 @@ private external fun nSetPropertyString(ptr: Long, name: String, value: String):
 private external fun nObserveProperty(ptr: Long, name: String, format: Int, replyData: Long): Boolean
 private external fun nUnobserveProperty(ptr: Long, replyData: Long): Boolean
 
-private external fun nAttachAndroidSurface(ptr: Long, surface: Any): Boolean
-private external fun nDetachAndroidSurface(ptr: Long): Boolean
+/**
+ * Attach render surface to the mpv context.
+ *
+ * On Android, the surface should be `android.view.Surface` object.
+ */
+internal expect fun attachSurface(ptr: Long, surface: Any): Boolean
+
+/**
+ * Detach current render surface of the mpv context.
+ */
+internal expect fun detachSurface(ptr: Long): Boolean
 
 private external fun nDestroy(ptr: Long): Boolean
 private external fun nFinalize(ptr: Long)

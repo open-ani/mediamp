@@ -7,7 +7,7 @@ void jni_cache_classes(JNIEnv *env) {
     if (jni_class_cached) return;
 
     jni_mediamp_clazz_EventListener = 
-            reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass("org/openani/mediamp/backend/mpv/EventListener")));
+            reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass("org/openani/mediamp/mpv/EventListener")));
 
     // MPV_FORMAT_NONE -> EventListener.onPropertyChange(String)
     jni_mediamp_method_EventListener_onPropertyChange_NONE =
