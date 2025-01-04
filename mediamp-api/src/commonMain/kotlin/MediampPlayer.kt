@@ -38,7 +38,7 @@ import kotlin.reflect.KClass
  *
  * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
  * - Playback State: [playbackState], [mediaData], [mediaProperties], [currentPositionMillis], [playbackProgress]
- * - Playback Control: [pause], [resume], [stop], [seekTo], [skip]
+ * - Playback Control: [pause], [resume], [stopPlayback], [seekTo], [skip]
  *
  * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
  *
@@ -56,18 +56,18 @@ import kotlin.reflect.KClass
  * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
  * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
  *
- * All functions in this interface are expected to be called from the **main thread** on Android.
+ * All functions in this interface are expected to be called from the **UI thread** on Android.
  * Calls from illegal threads will cause an exception.
  *
- * On other platforms, calls are not required to be on the main thread but should still be called from a single thread.
- * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the main thread in common code.
+ * On other platforms, calls are not required to be on the UI thread but should still be called from a single thread.
+ * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the UI thread in common code.
  *
  * ## Not safe for inheritance
  *
  * [MediampPlayer] interface is not safe for inheritance from third-party users, as new abstract methods might be added in the future.
  */
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
-public interface MediampPlayer {
+public interface MediampPlayer : AutoCloseable {
     /**
      * The underlying player implementation.
      * It can be cast to the actual player implementation to access additional features that are not yet ported by Mediamp.
@@ -95,7 +95,7 @@ public interface MediampPlayer {
     /**
      * Properties of the video being played.
      *
-     * Note that it may not be available immediately after [setVideoSource] returns,
+     * Note that it may not be available immediately after [setMediaData] returns,
      * since the properties may be callback from the underlying player implementation.
      *
      * To get more metadata information, e.g. audio tracks, subtitles and chapters, use [features] to get [MediaMetadata].
@@ -139,15 +139,15 @@ public interface MediampPlayer {
     /**
      * Sets the media data to play, updating [mediaData], and calling the underlying player implementation to start playing.
      *
-     * This method is thread-safe and can be called from any thread, including the main thread.
+     * This method is thread-safe and can be called from any thread, including the UI thread.
      *
      * Setting the same [MediaData] will be ignored.
      *
      * If the player is already playing a video, it will be stopped before playing the new video.
      *
-     * @see stop
+     * @see stopPlayback
      */
-    public suspend fun setVideoSource(data: MediaData)
+    public suspend fun setMediaData(data: MediaData)
 
     /**
      * Gets the current playback state without suspension.
@@ -187,9 +187,9 @@ public interface MediampPlayer {
      * Stops playback, releasing all resources and setting [mediaData] to `null`.
      * Subsequent calls to [resume] will do nothing.
      *
-     * To play again, call [setVideoSource].
+     * To play again, call [setMediaData].
      */
-    public fun stop()
+    public fun stopPlayback()
 
     /**
      * Jumps playback to the specified position.
@@ -212,16 +212,30 @@ public interface MediampPlayer {
     }
 
     /**
-     * Releases all resources held by the player. The instance will be unusable after this call.
+     * Closes the player, releasing all resources held by the player.
+     *
+     * This operation is permanent.
+     * After [close], calling any method from the player will either result in an exception or have no effect.
+     * Flows will emit no value.
+     *
+     * This function must be called on the UI thread as some backends may require it.
      */
-    public fun release()
+    public override fun close()
 }
+
+@Suppress("DeprecatedCallableAddReplaceWith", "UnusedReceiverParameter")
+@Deprecated(
+    message = "'stop' is ambiguous. " +
+            "To stop current playback, use `MediampPlayer.stopPlayback()`. " +
+            "To close the player and release any background resources, use `MediampPlayer.close()`.",
+)
+public fun MediampPlayer.stop(): Nothing = throw NotImplementedError("stop")
 
 /**
  * Plays the video at the specified [uri], e.g. a local file or a remote URL.
  */
 public suspend fun MediampPlayer.playUri(uri: String): Unit =
-    setVideoSource(UriMediaData(uri, emptyMap(), MediaExtraFiles()))
+    setMediaData(UriMediaData(uri, emptyMap(), MediaExtraFiles()))
 
 /**
  * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
@@ -275,12 +289,8 @@ public class DummyMediampPlayer(
     }
 
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
-    override fun stopImpl() {
+    override fun stopPlaybackImpl() {
 
-    }
-
-    override suspend fun cleanupPlayer() {
-        // no-op
     }
 
     override suspend fun setDataImpl(data: MediaData): Data {
@@ -359,8 +369,5 @@ public class DummyMediampPlayer(
         override fun create(context: Any, parentCoroutineContext: CoroutineContext): DummyMediampPlayer {
             return DummyMediampPlayer(parentCoroutineContext)
         }
-    }
-
-    override fun release() {
     }
 }

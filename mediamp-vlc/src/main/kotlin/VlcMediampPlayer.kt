@@ -10,7 +10,6 @@
 
 package org.openani.mediamp.vlc
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -25,7 +24,6 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
@@ -129,14 +127,16 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         }
     }
 
-    override fun stopImpl() {
+    override fun stopPlaybackImpl() {
         currentPositionMillis.value = 0L
+        lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
         try {
             player.submit {
                 player.controls().stop()
             }
         } catch (_: RejectedExecutionException) {
         }
+        surface.clearBitmap()
     }
 
     public class VlcjData(
@@ -205,9 +205,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
         lastMedia = null
         backgroundScope.launch(NonCancellable) {
-            logger.trace { "VLC closeImpl: release player" }
             player.release()
-            logger.trace { "VLC closeImpl: release player" }
         }
     }
 
@@ -217,16 +215,6 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 //        player.media().options().add(*arrayOf(":avcodec-hw=none")) // dxva2
 //        player.controls().play()
 //        player.media().play/*OR .start*/(data.videoData.file.absolutePath)
-    }
-
-    override suspend fun cleanupPlayer() {
-        lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
-        player.submit {
-            player.controls().stop()
-        }
-        withContext(Dispatchers.Main) {
-            surface.clearBitmap()
-        }
     }
 
     override fun getCurrentPositionMillis(): Long = player.status().time()
@@ -259,12 +247,6 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override fun getCurrentPlaybackState(): PlaybackState {
         return playbackState.value
-    }
-
-    override fun release() {
-        player.submit {
-            player.release()
-        }
     }
 
     init {

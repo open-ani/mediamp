@@ -42,7 +42,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
 
     /**
      * Currently playing resource that should be closed when the controller is closed.
-     * @see setVideoSource
+     * @see setMediaData
      */
     protected val openResource: MutableStateFlow<D?> = MutableStateFlow(null)
 
@@ -63,8 +63,11 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
             (duration / properties.durationMillis).toFloat().coerceIn(0f, 1f)
         }
 
+    private val closed = MutableStateFlow(false)
+
     private val setVideoSourceMutex = Mutex()
-    final override suspend fun setVideoSource(data: MediaData): Unit = setVideoSourceMutex.withLock {
+
+    final override suspend fun setMediaData(data: MediaData): Unit = setVideoSourceMutex.withLock {
         val previousResource = openResource.value
         if (data == previousResource?.mediaData) {
             return
@@ -95,39 +98,36 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         this.openResource.value = opened
     }
 
+    final override fun stopPlayback() {
+        stopPlaybackImpl()
+        releaseOpenedMediaData()
+    }
 
-    private fun closeVideoSource() {
+    protected abstract fun stopPlaybackImpl()
+
+    /**
+     * Start playing the [data].
+     * This method might be called from any thread.
+     */
+    protected abstract suspend fun startPlayer(data: D)
+
+    /**
+     * Resolves the [data] for playing.
+     */
+    protected abstract suspend fun setDataImpl(data: MediaData): D
+
+    private fun releaseOpenedMediaData() {
         // TODO: 2024/12/16 proper synchronization?
         val value = openResource.value
         openResource.value = null
         value?.releaseResource?.invoke()
     }
 
-    final override fun stop() {
-        stopImpl()
-        closeVideoSource()
-    }
-
-    protected abstract fun stopImpl()
-
-    /**
-     * 开始播放
-     */
-    protected abstract suspend fun startPlayer(data: D)
-
-    /**
-     * 停止播放, 因为要释放资源了
-     */
-    protected abstract suspend fun cleanupPlayer()
-
-    protected abstract suspend fun setDataImpl(data: MediaData): D
-
-    private val closed = MutableStateFlow(false)
-    public fun close() {
+    public final override fun close() {
         if (closed.getAndUpdate { true }) return // already closed
-        closeImpl()
-        closeVideoSource()
         backgroundScope.cancel()
+        closeImpl()
+        releaseOpenedMediaData()
     }
 
     protected abstract fun closeImpl()

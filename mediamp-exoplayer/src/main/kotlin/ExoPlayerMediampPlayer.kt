@@ -31,10 +31,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.trackselection.TrackSelection
-import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,13 +85,6 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             data.setMedia()
             exoPlayer.prepare()
             exoPlayer.play()
-        }
-    }
-
-    override suspend fun cleanupPlayer() {
-        withContext(Dispatchers.Main.immediate) {
-            exoPlayer.stop()
-            exoPlayer.clearMediaItems()
         }
     }
 
@@ -347,10 +337,6 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         return playbackState.value
     }
 
-    override fun release() {
-        exoPlayer.release()
-    }
-
     init {
         backgroundScope.launch(Dispatchers.Main) {
             while (currentCoroutineContext().isActive) {
@@ -418,21 +404,15 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
     }
 
-    override fun stopImpl() {
+    override fun stopPlaybackImpl() {
         exoPlayer.stop()
+        exoPlayer.clearMediaItems()
     }
 
 
     override fun closeImpl() {
-        @kotlin.OptIn(DelicateCoroutinesApi::class)
-        GlobalScope.launch(Dispatchers.Main + NonCancellable) {
-            try {
-                exoPlayer.stop()
-                exoPlayer.release()
-            } catch (e: Throwable) {
-                e.printStackTrace() // TODO: 2024/12/16
-            }
-        }
+        exoPlayer.stop()
+        exoPlayer.release()
     }
 }
 
