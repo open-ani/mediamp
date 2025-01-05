@@ -15,6 +15,7 @@ import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.copy
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
@@ -51,20 +52,21 @@ actual class MpvMediampPlayer (
 
         override fun onPropertyChange(name: String, value: Long) {
             when (name) {
-                "time-pos" -> currentPositionMillis.value = value
+                "time-pos/full" -> currentPositionMillis.value = value * 1000
+                "duration/full" -> mediaProperties.value =
+                    if (mediaProperties.value == null) MediaPropertiesImpl(null, value * 1000)
+                    else mediaProperties.value?.copy(durationMillis = value * 1000)
             }
         }
 
         override fun onPropertyChange(name: String, value: Double) {
-            when (name) {
-                "duration/full" -> mediaProperties.value =
-                    mediaProperties.value?.copy(durationMillis = value.toLong())
-            }
         }
 
         override fun onPropertyChange(name: String, value: String) {
             when (name) {
-                "media-title" -> mediaProperties.value = mediaProperties.value?.copy(title = value)
+                "media-title" -> mediaProperties.value = 
+                    if (mediaProperties.value == null) MediaPropertiesImpl(value, -1)
+                    else mediaProperties.value?.copy(title = value)
             }
         }
 
@@ -142,11 +144,11 @@ actual class MpvMediampPlayer (
 
         handle.option("save-position-on-quit", "no")
         handle.option("force-window", "no")
-        handle.option("idle", "once")
+        handle.option("idle", "yes")
         handle.option("keep-open", "always")
 
-        handle.observeProperty("time-pos", MPVFormat.MPV_FORMAT_INT64)
-        handle.observeProperty("duration/full", MPVFormat.MPV_FORMAT_DOUBLE)
+        handle.observeProperty("time-pos/full", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("duration/full", MPVFormat.MPV_FORMAT_INT64)
         handle.observeProperty("pause", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("paused-for-cache", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("speed", MPVFormat.MPV_FORMAT_STRING) // todo

@@ -42,6 +42,7 @@ private:
     jobject *event_listener_ = nullptr;
 
 #ifdef __ANDROID__
+    bool surface_attached_ = false;
     jobject surface_;
 #endif
 

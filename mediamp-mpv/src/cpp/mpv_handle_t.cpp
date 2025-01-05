@@ -115,11 +115,15 @@ bool mpv_handle_t::unobserve_property(uint64_t reply_data) {
     return mpv_unobserve_property(handle_, reply_data) >= 0;
 }
 
+CREATE_LOCK(surface_access_lock);
+
 bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
     FP;
+    LOCK(surface_access_lock);
     CHECK_HANDLE()
 
 #ifdef __ANDROID__
+    if (surface_attached_) detach_android_surface(env);
     if (env->IsInstanceOf(surface, mediampv::jni_mediamp_clazz_android_Surface) != JNI_TRUE) {
         LOG("surface is not instance of android.view.Surface");
         return false;
@@ -128,7 +132,9 @@ bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
     jobject ref = env->NewGlobalRef(surface);
     int64_t wid = (int64_t)(intptr_t) ref;
     surface_ = ref;
-    return mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
+    surface_attached_ = mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
+    
+    return surface_attached_;
 #else
     LOG("attach_android_surface is only implemented on Android");
     return false;
@@ -137,14 +143,16 @@ bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
 
 bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
     FP;
+    LOCK(surface_access_lock);
     CHECK_HANDLE()
     
 #ifdef __ANDROID__
-    if (!surface_) return false;
+    if (!surface_attached_) return false;
     
     int64_t wid = 0;
     bool result = mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, (void*) &wid);
     env->DeleteGlobalRef(surface_);
+    surface_attached_ = false;
     
     return result;
 #else
