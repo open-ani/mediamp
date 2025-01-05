@@ -407,6 +407,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     override fun stopPlaybackImpl() {
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
+        currentPositionMillis.value = 0
     }
 
 

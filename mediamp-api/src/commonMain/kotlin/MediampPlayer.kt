@@ -187,6 +187,8 @@ public interface MediampPlayer : AutoCloseable {
      * Stops playback, releasing all resources and setting [mediaData] to `null`.
      * Subsequent calls to [resume] will do nothing.
      *
+     * [currentPositionMillis] will be reset to `0`.
+     *
      * To play again, call [setMediaData].
      */
     public fun stopPlayback()
@@ -291,7 +293,9 @@ public class DummyMediampPlayer(
 
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
     override fun stopPlaybackImpl() {
-
+        currentPositionMillis.value = 0
+        mediaProperties.value = null
+        // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
     }
 
     override suspend fun setDataImpl(data: MediaData): Data {
@@ -312,7 +316,7 @@ public class DummyMediampPlayer(
         // no-op
     }
 
-    override val mediaProperties: MutableStateFlow<MediaProperties> = MutableStateFlow(
+    override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(
         MediaPropertiesImpl(
             title = "Test Video",
             durationMillis = 100_000,
