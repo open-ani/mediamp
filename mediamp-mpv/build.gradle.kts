@@ -260,7 +260,7 @@ tasks.named("assemble") {
 mavenPublishing {
     configure(KotlinMultiplatform(JavadocJar.Empty(), true, androidVariantsToPublish = listOf("release", "debug")))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    //signAllPublications()
+    signAllPublications()
     configurePom(project)
 }
 
