@@ -228,6 +228,7 @@ public interface MediampPlayer : AutoCloseable {
     message = "'stop' is ambiguous. " +
             "To stop current playback, use `MediampPlayer.stopPlayback()`. " +
             "To close the player and release any background resources, use `MediampPlayer.close()`.",
+    level = DeprecationLevel.ERROR,
 )
 public fun MediampPlayer.stop(): Nothing = throw NotImplementedError("stop")
 
