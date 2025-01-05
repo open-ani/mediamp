@@ -15,8 +15,6 @@ import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.metadata.MediaPropertiesImpl
-import org.openani.mediamp.metadata.copy
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -54,7 +52,7 @@ actual class MpvMediampPlayer (
             when (name) {
                 "time-pos/full" -> currentPositionMillis.value = value * 1000
                 "duration/full" -> mediaProperties.value =
-                    if (mediaProperties.value == null) MediaPropertiesImpl(null, value * 1000)
+                    if (mediaProperties.value == null) MediaProperties(null, value * 1000)
                     else mediaProperties.value?.copy(durationMillis = value * 1000)
             }
         }
@@ -64,8 +62,8 @@ actual class MpvMediampPlayer (
 
         override fun onPropertyChange(name: String, value: String) {
             when (name) {
-                "media-title" -> mediaProperties.value = 
-                    if (mediaProperties.value == null) MediaPropertiesImpl(value, -1)
+                "media-title" -> mediaProperties.value =
+                    if (mediaProperties.value == null) MediaProperties(value, -1)
                     else mediaProperties.value?.copy(title = value)
             }
         }

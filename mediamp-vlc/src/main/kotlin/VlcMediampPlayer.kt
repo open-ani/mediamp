@@ -41,10 +41,8 @@ import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
-import org.openani.mediamp.metadata.copy
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -269,7 +267,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     // 对于 m3u8, 这个 callback 会先调用
                     mediaProperties.value = mediaProperties.value?.copy(
                         durationMillis = newLength,
-                    ) ?: MediaPropertiesImpl(
+                    ) ?: MediaProperties(
                         title = null,
                         durationMillis = newLength, // 至少要把 length 放进去, 否则会一直显示缓冲
                     )
@@ -451,7 +449,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private fun createVideoProperties(): MediaProperties? {
         val info = player.media().info() ?: return null
         val title = player.titles().titleDescriptions().firstOrNull()
-        return MediaPropertiesImpl(
+        return MediaProperties(
             title = title?.name(),
             durationMillis = info.duration(),
         )

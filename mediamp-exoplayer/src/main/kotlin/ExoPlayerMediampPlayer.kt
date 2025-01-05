@@ -54,7 +54,6 @@ import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackLabel
 import org.openani.mediamp.source.MediaData
@@ -263,7 +262,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         val duration = duration
 
                         // 注意, 要把所有 UI 属性全都读出来然后 captured 到 background -- ExoPlayer 所有属性都需要在主线程
-                        mediaProperties.value = MediaPropertiesImpl(
+                        mediaProperties.value = MediaProperties(
                             title = title?.toString(),
                             durationMillis = duration,
                         )

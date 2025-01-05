@@ -22,7 +22,6 @@ import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.metadata.MediaPropertiesImpl
 import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.emptyTrackGroup
@@ -317,7 +316,7 @@ public class DummyMediampPlayer(
     }
 
     override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(
-        MediaPropertiesImpl(
+        MediaProperties(
             title = "Test Video",
             durationMillis = 100_000,
         ),
