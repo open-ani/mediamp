@@ -268,9 +268,9 @@ tasks
     .matching { it.name.startsWith("publishDesktopPublicationTo") }
     .all { dependsOn(copyNativeJarForCurrentPlatform) }
 
-//tasks.getByName("signDesktopPublication") {
-//    dependsOn(copyNativeJarForCurrentPlatform)
-//}
+tasks.getByName("signDesktopPublication") {
+    dependsOn(copyNativeJarForCurrentPlatform)
+}
 
 afterEvaluate {
     publishing {
