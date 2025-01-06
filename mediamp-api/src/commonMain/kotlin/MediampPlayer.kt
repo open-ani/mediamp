@@ -294,6 +294,7 @@ public class DummyMediampPlayer(
     override fun stopPlaybackImpl() {
         currentPositionMillis.value = 0
         mediaProperties.value = null
+        playbackState.value = PlaybackState.READY
         // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
     }
 
@@ -312,6 +313,7 @@ public class DummyMediampPlayer(
     }
 
     override suspend fun startPlayer(data: Data) {
+        playbackState.value = PlaybackState.READY
         // no-op
     }
 
