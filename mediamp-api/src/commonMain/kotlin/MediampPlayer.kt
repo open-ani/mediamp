@@ -44,13 +44,10 @@ import kotlin.reflect.KClass
  * ## Lifecycle
  * 
  * MediampPlayer uses [PlaybackState] to represent the current state of the player.
- * Since playback state is comparable, playback control methods have its effective stage.
  * 
- * You should strictly implement in accordance with the states defined in [PlaybackState] 
- * and fundamental state transformation described below
- * to ensure te consistency of the behaviour of [MediampPlayer]'s API.
+ * MediampPlayer implementations (with VLC or MPV, or any others) are required to respect to the following state transition mechanism.
  * 
- * State machine diagram for fundamental functions: (expand tooltip if you see glitches)
+ * > Hint: You may toggle off doc rendering if you see glitches in IDE
  * 
  * ```
  * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
@@ -79,14 +76,15 @@ import kotlin.reflect.KClass
  * 
  * ```
  *
- * For example: 
- * 
- * * At state [CREATED][PlaybackState.CREATED], only call to [setMediaData] or [close] takes effect.
+ * ### Invalid calls are ignored
+ *
+ * Calls to any of the methods without corresponding state transition target, at any state, takes no effect.
+ *
+ * For example:
+ *
+ * * At state [CREATED][PlaybackState.CREATED], only [setMediaData] or [close] will take effect.
  * * At state [READY][PlaybackState.READY], call to [resume], [stopPlayback] or [close] takes effect.
  * * At state [BUFFERING][PlaybackState.PAUSED_BUFFERING], call to [pause], [stopPlayback] or [close] takes effect.
- * 
- * Implementations can expand new state transformation.
- * For example, call [setMediaData] while `state >= PAUSED` transform state to [FINISHED][PlaybackState.FINISHED], then change to [READY][PlaybackState.READY].
  * 
  * ## Additional Features
  *
@@ -132,7 +130,8 @@ public interface MediampPlayer : AutoCloseable {
      *
      * To retrieve the current state without suspension, use [getCurrentPlaybackState].
      * 
-     * Notice for implementations: New state should be emitted only after all jobs are done.
+     * `Implementation notes`: New state must be emitted only when the call to the delegated player finishes an transition. 
+     * For example, emit `PlaybackState.PLAYING` only if `ExoPlayer.resume()` succeeds.
      *
      * @see getCurrentPlaybackState
      */
@@ -301,89 +300,6 @@ public fun MediampPlayer.togglePause() {
     } else if (currentState == PlaybackState.PAUSED) {
         resume()
     }
-}
-
-/**
- * The current playback state of the player. 
- * 
- * ## State is comparable
- * 
- * State is comparable in [ordinal] order. This is inspired by the Lifecycle design from Android.
- * For example, to check if playback is running:
- * 
- * ```kotlin
- * fun PlaybackState.isPlaybackRunning() = this >= PlaybackState.PAUSED
- * ```
- * 
- * See documentation of [MediampPlayer] to get te flowchart of state transformation and understand how state changes.
- * Also see each state in [PlaybackState] for more details.
- * 
- * @see MediampPlayer
- * @see MediampPlayer.playbackState
- */
-public enum class PlaybackState {
-    /**
-     * Player is destroyed and has recycled all resources.
-     * 
-     * Any method will take no effect while in this state. 
-     * It is safe to drop the reference to the player and also the only thing you can do.
-     */
-    DESTROYED,
-
-    /**
-     * An error has occured, causing the player to stop playing.
-     * 
-     * If the error is recoverable, the player will transform into [CREATED] state.
-     * Otherwise the player will should be destroyed and turn to [DESTROYED] state.
-     * 
-     * Note at it is decided by user whether the error is recoverable. 
-     * When error has occurred, user may call [MediampPlayer.setMediaData] to restart playback or [MediampPlayer.close] to release player.
-     */
-    ERROR,
-    
-    /**
-     * Player is created but not yet loaded with any media data. 
-     * 
-     * This is the initial state of [MediampPlayer].
-     * At this state, implementations should initialize and setup the player, typically initializes at `init {}` block.
-     * 
-     * By [setting media][MediampPlayer.setMediaData], the player will transform into [READY] state.
-     */
-    CREATED,
-
-    /**
-     * Playback is finished.
-     * 
-     * In this state, resources are still held by the player, meaning the player can play another media later.
-     * State transitions to [READY] when a new media is set using [MediampPlayer.setMediaData].
-     * 
-     * If the player is not going to play another media, call [MediampPlayer.close] to release resources.
-     * Then the state will transform into [DESTROYED].
-     */
-    FINISHED,
-    
-    /**
-     * Player has loaded a media data and will start playback as soon as the first frame is ready.
-     */
-    READY,
-
-    /**
-     * Playback is paused by user.
-     */
-    PAUSED,
-
-    /**
-     * Playback is playing.
-     */
-    PLAYING,
-
-    /**
-     * Playback is paused due to buffering.
-     *
-     * You can also pause the playback by [MediampPlayer.pause] so that playback will remain [PAUSED] state after buffer complete.
-     */
-    PAUSED_BUFFERING,
-    ;
 }
 
 /**
