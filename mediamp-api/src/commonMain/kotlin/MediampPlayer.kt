@@ -363,7 +363,7 @@ public enum class PlaybackState {
     FINISHED,
     
     /**
-     * Player loaded media data and will start playback as soon as the first frame is ready.
+     * Player has loaded a media data and will start playback as soon as the first frame is ready.
      */
     READY,
 
