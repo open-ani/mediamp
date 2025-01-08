@@ -33,18 +33,14 @@ public enum class PlaybackState {
      * Player is destroyed and has recycled all resources.
      *
      * Any method will take no effect while in this state.
-     * It is safe to drop the reference to the player and also the only thing you can do.
+     * It is safe to drop the reference to the player, which is the only thing you can do.
      */
     DESTROYED,
 
     /**
      * An error has occured, causing the player to stop playing.
      *
-     * If the error is recoverable, the player will transform into [CREATED] state.
-     * Otherwise the player will should be destroyed and turn to [DESTROYED] state.
-     *
-     * Note at it is decided by user whether the error is recoverable.
-     * When error has occurred, user may call [MediampPlayer.setMediaData] to restart playback or [MediampPlayer.close] to release player.
+     * You may call [MediampPlayer.setMediaData] to restart playback or [MediampPlayer.close] to release the player.
      */
     ERROR,
 

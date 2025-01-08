@@ -77,11 +77,8 @@ import kotlin.reflect.KClass
  * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
  * 
  * ```
- * 
- * ### Calls at states in transformation path are valid
- * 
- * In the following diagram, each method has its own path for state transformation.
- * At any state (except for target state), calling it's method will transform the current state to the target state.
+ * Calling the function labelled to the right of the diagram, at any state included in the path, 
+ * will transform the state to the destination state pointed by arrow.
  * 
  * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
  * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
