@@ -47,14 +47,14 @@ import kotlin.reflect.KClass
  * 
  * MediampPlayer implementations (with VLC or MPV, or any others) are required to respect to the following state transition mechanism.
  * 
- * > Hint: You may toggle off doc rendering if you see glitches in IDE
+ * > Hint: You may toggle off doc rendering in IDE if diagram glitches
  * 
  * ```
  * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
  * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
  * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
  *       |            |           |            |            |          |            |             |
- *       |            |-----------+------------+----------->|          |            |             |  setMediaData
+ *       |            |-----------+------------+----------->*<---------+------------+-------------|  setMediaData
  *       |            |           |            |            |          |            |             |
  *       |            |           |            |            |----------+----------->|             |  resume
  *       |            |           |            |            |          |            |             |
@@ -66,7 +66,9 @@ import kotlin.reflect.KClass
  *       |            |           |            |            |          |<-----------+-------------|  pause
  *       |            |           |            |            |          |            |             |
  *       |            |           |            |<-----------+----------+------------+-------------|  stopPlayback
- *       |            |           |            |            |          |            |             |  (playback finished)
+ *       |            |           |            |            |          |            |             |  (or playback finished)
+ *       |            |           |            |            |          |            |             |
+ *       |            |<----------+------------+------------+----------+------------+-------------|  (error)
  *       |            |           |            |            |          |            |             |
  *       |<-----------+-----------+------------+------------+----------+------------+-------------|  close
  *       |            |           |            |            |          |            |             |
@@ -75,11 +77,41 @@ import kotlin.reflect.KClass
  * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
  * 
  * ```
+ * 
+ * ### Calls at states in transformation path are valid
+ * 
+ * In the following diagram, each method has its own path for state transformation.
+ * At any state (except for target state), calling it's method will transform the current state to the target state.
+ * 
+ * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
+ * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
  *
  * ### Invalid calls are ignored
  *
- * Calls to any of the methods without corresponding state transition target, at any state, takes no effect.
+ * Calls to any method while not at its state transformation path will be ignored.
+ * 
+ * For example, calling [stopPlayback] at state [FINISHED][PlaybackState.FINISHED], [CREATED][PlaybackState.CREATED], 
+ * [ERROR][PlaybackState.ERROR] and [DESTROYED][PlaybackState.DESTROYED] will be ignored and takes no effect.
  *
+ * ### State transform directly to target state
+ * 
+ * Although each method has its transformation path, calling will not produce intermediate state.
+ * 
+ * For example, call [close] at [PLAYING][PlaybackState.PLAYING] will directly transform state to [DESTROYED][PlaybackState.DESTROYED].
+ * Any state of `state >= ERROR && state <= PAUSED` will be emitted.
+ *
+ * ### [setMediaData] is special
+ *
+ * [setMediaData] has special transformation path. It will always transform state into [READY][PlaybackState.READY].
+ * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED],
+ * including [READY][PlaybackState.READY] itself.
+ * 
+ * ### Error can occurred at any time
+ * 
+ * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
+ *
+ * Error state has high priority. If an error occurred at background while calling a method, final state should be [ERROR][PlaybackState.ERROR].
+ * 
  * For example:
  *
  * * At state [CREATED][PlaybackState.CREATED], only [setMediaData] or [close] will take effect.
@@ -100,7 +132,7 @@ import kotlin.reflect.KClass
  * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
  * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
  *
- * All functions in this interface are expected to be called from the **UI thread** on Android.
+ * All methods in this interface are expected to be called from the **UI thread** on Android.
  * Calls from illegal threads will cause an exception.
  *
  * On other platforms, calls are not required to be on the UI thread but should still be called from a single thread.
