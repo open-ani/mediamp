@@ -91,7 +91,7 @@ import kotlin.reflect.KClass
  * Calls to any method while not at its state transformation path will be ignored.
  * 
  * For example, calling [stopPlayback] at state [FINISHED][PlaybackState.FINISHED], [CREATED][PlaybackState.CREATED], 
- * [ERROR][PlaybackState.ERROR] and [DESTROYED][PlaybackState.DESTROYED] will be ignored and takes no effect.
+ * [ERROR][PlaybackState.ERROR] and [DESTROYED][PlaybackState.DESTROYED] will be ignored and take no effect.
  *
  * ### State transform directly to target state
  * 
@@ -111,12 +111,6 @@ import kotlin.reflect.KClass
  * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
  *
  * Error state has high priority. If an error occurred at background while calling a method, final state should be [ERROR][PlaybackState.ERROR].
- * 
- * For example:
- *
- * * At state [CREATED][PlaybackState.CREATED], only [setMediaData] or [close] will take effect.
- * * At state [READY][PlaybackState.READY], call to [resume], [stopPlayback] or [close] takes effect.
- * * At state [BUFFERING][PlaybackState.PAUSED_BUFFERING], call to [pause], [stopPlayback] or [close] takes effect.
  * 
  * ## Additional Features
  *
