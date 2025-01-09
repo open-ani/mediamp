@@ -260,7 +260,7 @@ tasks.named("assemble") {
 mavenPublishing {
     configure(KotlinMultiplatform(JavadocJar.Empty(), true, androidVariantsToPublish = listOf("release", "debug")))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    signAllPublicationsIfEnabled(project)
     configurePom(project)
 }
 
@@ -268,8 +268,10 @@ tasks
     .matching { it.name.startsWith("publishDesktopPublicationTo") }
     .all { dependsOn(copyNativeJarForCurrentPlatform) }
 
-tasks.getByName("signDesktopPublication") {
-    dependsOn(copyNativeJarForCurrentPlatform)
+if (getPropertyOrNull("mediamp.sign.publications.disabled")?.toBoolean() != true) {
+    tasks.getByName("signDesktopPublication") {
+        dependsOn(copyNativeJarForCurrentPlatform)
+    }
 }
 
 afterEvaluate {

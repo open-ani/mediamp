@@ -9,6 +9,11 @@
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
 import org.gradle.api.Project
 
+fun MavenPublishBaseExtension.signAllPublicationsIfEnabled(project: Project) {
+    if (project.getPropertyOrNull("mediamp.sign.publications.disabled")?.toBoolean() == true) return
+    signAllPublications()
+}
+
 fun MavenPublishBaseExtension.configurePom(project: Project) {
     pom {
         name.set(project.name)

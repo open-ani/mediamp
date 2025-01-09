@@ -36,6 +36,6 @@ kotlin {
 mavenPublishing {
     configure(KotlinJvm(JavadocJar.Empty(), true))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

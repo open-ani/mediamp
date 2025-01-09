@@ -49,6 +49,6 @@ dependencies {
 mavenPublishing {
     configure(AndroidMultiVariantLibrary(true, true, setOf("debug", "release")))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

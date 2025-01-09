@@ -40,6 +40,6 @@ catalog {
 mavenPublishing {
     configure(com.vanniktech.maven.publish.VersionCatalog())
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    signAllPublicationsIfEnabled(project)
     configurePom(project)
 }
