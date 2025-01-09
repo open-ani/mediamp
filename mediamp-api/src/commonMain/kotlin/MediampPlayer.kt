@@ -334,36 +334,6 @@ public class DummyMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
 ) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(parentCoroutineContext) {
     override val impl: Any get() = this
-    override fun getCurrentPlaybackState(): PlaybackState {
-        return playbackState.value
-    }
-
-    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PLAYING)
-    override fun stopPlaybackImpl() {
-        currentPositionMillis.value = 0
-        mediaProperties.value = null
-        playbackState.value = PlaybackState.READY
-        // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
-    }
-
-    override suspend fun setDataImpl(data: MediaData): Data {
-        return Data(
-            data,
-            releaseResource = {
-                backgroundScope.launch(NonCancellable) {
-                    data.close()
-                }
-            },
-        )
-    }
-
-    override fun closeImpl() {
-    }
-
-    override suspend fun startPlayer(data: Data) {
-        playbackState.value = PlaybackState.READY
-        // no-op
-    }
 
     override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(
         MediaProperties(
@@ -379,16 +349,42 @@ public class DummyMediampPlayer(
         return currentPositionMillis.value
     }
 
-    override fun pause() {
-        playbackState.value = PlaybackState.PAUSED
+    override fun getCurrentPlaybackState(): PlaybackState {
+        return playbackState.value
     }
 
-    override fun resume() {
-        playbackState.value = PlaybackState.PLAYING
+    override fun stopPlaybackImpl() {
+        currentPositionMillis.value = 0
+        mediaProperties.value = null
+        playbackState.value = PlaybackState.READY
+        // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
     }
 
+    override suspend fun setMediaDataImpl(data: MediaData): Data {
+        return Data(
+            data,
+            releaseResource = {
+                backgroundScope.launch(NonCancellable) {
+                    data.close()
+                }
+            },
+        )
+    }
+    
     override fun seekTo(positionMillis: Long) {
         this.currentPositionMillis.value = positionMillis
+    }
+
+    override fun resumeImpl() {
+
+    }
+
+    override fun pauseImpl() {
+
+    }
+
+    override fun closeImpl() {
+
     }
 
     override val features: PlayerFeatures = buildPlayerFeatures {
