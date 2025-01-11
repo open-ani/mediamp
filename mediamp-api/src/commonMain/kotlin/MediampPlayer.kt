@@ -10,6 +10,8 @@
 
 package org.openani.mediamp
 
+import androidx.annotation.UiThread
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -246,6 +248,7 @@ public interface MediampPlayer : AutoCloseable {
      * If there is no video source set, this function will do nothing.
      * @see togglePause
      */
+    @UiThread
     public fun resume()
 
     /**
@@ -254,6 +257,7 @@ public interface MediampPlayer : AutoCloseable {
      * If there is no video source set, this function will do nothing.
      * @see togglePause
      */
+    @UiThread
     public fun pause()
 
     /**
@@ -264,6 +268,7 @@ public interface MediampPlayer : AutoCloseable {
      *
      * To play again, call [setMediaData].
      */
+    @UiThread
     public fun stopPlayback()
 
     /**
@@ -271,6 +276,7 @@ public interface MediampPlayer : AutoCloseable {
      *
      * // TODO argument errors?
      */
+    @UiThread
     public fun seekTo(positionMillis: Long)
 
     /**
@@ -282,6 +288,7 @@ public interface MediampPlayer : AutoCloseable {
      *
      * // TODO argument errors?
      */
+    @UiThread
     public fun skip(deltaMillis: Long) {
         seekTo(getCurrentPositionMillis() + deltaMillis)
     }
@@ -331,8 +338,8 @@ public fun MediampPlayer.togglePause() {
 @OptIn(InternalForInheritanceMediampApi::class)
 public class DummyMediampPlayer(
     // TODO: 2024/12/22 move to preview package
-    parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
-) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(parentCoroutineContext) {
+    defaultDispatcher: CoroutineContext = Dispatchers.Default,
+) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(defaultDispatcher) {
     override val impl: Any get() = this
 
     override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(
