@@ -85,6 +85,9 @@ import kotlin.reflect.KClass
  * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
  * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
  *
+ * Playback control methods are expected to be called from the main/UI thread. 
+ * Asynchronous operations of actual player implementations should ensure that playback state must be transformed to target state.
+ * 
  * ### Invalid calls are ignored
  *
  * Calls to any method while not at its state transformation path will be ignored.
@@ -98,7 +101,7 @@ import kotlin.reflect.KClass
  * 
  * For example, call [close] at [PLAYING][PlaybackState.PLAYING] will directly transform state to [DESTROYED][PlaybackState.DESTROYED].
  * Any state of `state >= ERROR && state <= PAUSED` will be emitted.
- *
+ * 
  * ### [setMediaData] is special
  *
  * [setMediaData] has special transformation path. It will always transform state into [READY][PlaybackState.READY].

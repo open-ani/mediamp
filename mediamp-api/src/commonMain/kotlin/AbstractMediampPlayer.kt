@@ -8,19 +8,16 @@
 
 package org.openani.mediamp
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.openani.mediamp.source.MediaData
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -31,27 +28,19 @@ import kotlin.coroutines.cancellation.CancellationException
  * Method [setMediaData], [resume], [pause], [stopPlayback] and [close] are wrapped, 
  * please implement the actual playback control logic in corresponding `xxxImpl` methods. Note that:
  *
- * - You should not change playback state in the `xxxImpl` methods, the state is managed by this class.
- * - You can ignore error handling in the `xxxImpl` methods, this class will handle it.
- * - `xxxImpl` methods will only be called when the playback state is valid at its state transformation path, 
+ * - These methods are called in main/UI thread, so implementations should not do any heavy work.
+ * - These methods will only be called when the playback state is valid at its state transformation path, 
  * so it is not necessary to validate playback state.
- * - `xxxImpl` methods call synchronously, new state will be set after the method returns.
- * If your player core only provides asynchronous methods, you should block until your core callback is executed.
- * 
+ * - These methods should ensure that playback state must be transformed to target state in the future.
+ * - No error occurred, error at main thread will crash the application.
+ * - [setMediaDataImpl] can be called at any thread. 
+ * If error occurred, playback state will be set to [PlaybackState.ERROR] and error will be rethrow.
  */
 @InternalMediampApi
 @OptIn(InternalForInheritanceMediampApi::class)
 public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
-    parentCoroutineContext: CoroutineContext,
+    private val defaultDispatcher: CoroutineContext = Dispatchers.Default,
 ) : MediampPlayer {
-    protected val backgroundScope: CoroutineScope = CoroutineScope(
-        parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
-    ).apply {
-        coroutineContext.job.invokeOnCompletion {
-            close()
-        }
-    }
-
     override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.CREATED)
 
     /**
@@ -76,39 +65,41 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         }
 
     private val setVideoSourceMutex = Mutex()
+    private val closed = MutableStateFlow(false)
 
-    final override suspend fun setMediaData(data: MediaData): Unit = setVideoSourceMutex.withLock {
-        if (playbackState.value == PlaybackState.DESTROYED) {
-            throw IllegalStateException("Instance of MediampPlayer($this) is closed, please create a new instance.")
-        }
-
-        // playback has set media data, stop previous first.
-        if (playbackState.value >= PlaybackState.READY) {
-            val previousResource = openResource.value
-            if (data == previousResource?.mediaData) {
-                return
+    final override suspend fun setMediaData(data: MediaData): Unit = withContext(defaultDispatcher) {
+        setVideoSourceMutex.withLock {
+            if (playbackState.value == PlaybackState.DESTROYED) {
+                return@withLock
             }
-            // stop playback if running
-            if (playbackState.value >= PlaybackState.PAUSED) {
-                stopPlaybackImpl()
-            }
-            
-            openResource.value = null
-            previousResource?.releaseResource?.invoke()
-        }
-        
-        val opened = try {
-            setMediaDataImpl(data)
-        } catch (e: CancellationException) {
-            playbackState.value = PlaybackState.ERROR
-            throw e
-        } catch (e: Exception) {
-            playbackState.value = PlaybackState.ERROR
-            throw e
-        }
 
-        this.openResource.value = opened
-        playbackState.value = PlaybackState.READY
+            // playback has set media data, stop previous first.
+            if (playbackState.value >= PlaybackState.READY) {
+                val previousResource = openResource.value
+                if (data == previousResource?.mediaData) {
+                    return@withLock
+                }
+                // stop playback if running
+                if (playbackState.value >= PlaybackState.PAUSED) {
+                    stopPlaybackImpl()
+                }
+
+                openResource.value = null
+                previousResource?.releaseResource?.invoke()
+            }
+
+            val opened = try {
+                setMediaDataImpl(data)
+            } catch (e: CancellationException) {
+                playbackState.value = PlaybackState.ERROR
+                throw e
+            } catch (e: Exception) {
+                playbackState.value = PlaybackState.ERROR
+                throw e
+            }
+
+            this@AbstractMediampPlayer.openResource.value = opened
+        }
     }
 
     /**
@@ -121,34 +112,27 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     final override fun resume() {
         val currState = playbackState.value
         if (currState == PlaybackState.READY || currState == PlaybackState.PAUSED) {
-            try {
-                resumeImpl()
-                playbackState.value = PlaybackState.PLAYING
-            } catch (e: Exception) {
-                playbackState.value = PlaybackState.ERROR
-                throw e
-            }
+            resumeImpl()
+            playbackState.value = PlaybackState.PLAYING
         }
     }
 
     /**
+     * Playback state must change to [PlaybackState.PLAYING] in the future.
+     * 
      * @see resume
      */
     protected abstract fun resumeImpl()
     
     final override fun pause() {
         if (playbackState.value > PlaybackState.PAUSED) {
-            try {
-                pauseImpl()
-                playbackState.value = PlaybackState.PAUSED
-            } catch (e: Exception) {
-                playbackState.value = PlaybackState.ERROR
-                throw e
-            }
+            pauseImpl()
         }
     }
 
     /**
+     * Playback state must change to [PlaybackState.PAUSED] in the future.
+     * 
      * @see pause
      */
     protected abstract fun pauseImpl()
@@ -156,17 +140,13 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     final override fun stopPlayback() {
         if (playbackState.value <= PlaybackState.FINISHED) return
         
-        try {
-            stopPlaybackImpl()
-            releaseOpenedMediaData()
-            playbackState.value = PlaybackState.FINISHED
-        } catch (e: Exception) {
-            playbackState.value = PlaybackState.ERROR
-            throw e
-        }
+        stopPlaybackImpl()
+        releaseOpenedMediaData()
     }
 
     /**
+     * Playback state must change to [PlaybackState.FINISHED] in the future.
+     * 
      * @see stopPlayback
      */
     protected abstract fun stopPlaybackImpl()
@@ -177,19 +157,18 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         openResource.value = null
         value?.releaseResource?.invoke()
     }
-
+    
     public final override fun close() {
+        if (closed.getAndUpdate { true }) return // already called, avoid multiple calls
         if (playbackState.value <= PlaybackState.DESTROYED) return // already closed
         
-        try {
-            backgroundScope.cancel()
-            releaseOpenedMediaData()
-            closeImpl()
-            playbackState.value = PlaybackState.DESTROYED
-        } catch (_: Exception) { }
+        releaseOpenedMediaData()
+        closeImpl()
     }
 
     /**
+     * Playback state must change to [PlaybackState.DESTROYED] in the future.
+     * 
      * @see close
      */
     protected abstract fun closeImpl()
