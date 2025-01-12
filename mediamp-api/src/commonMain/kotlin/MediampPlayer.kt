@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2025 OpenAni and contributors.
  *
  * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
@@ -56,7 +56,8 @@ import kotlin.reflect.KClass
  * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
  * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
  *       |            |           |            |            |          |            |             |
- *       |            |-----------+------------+----------->*<---------+------------+-------------|  setMediaData
+ *       |            |-----------+------------+----------->*          |            |             |  setMediaData
+ *       |            |           |            +<-----------+----------+------------+-------------|  setMediaData
  *       |            |           |            |            |          |            |             |
  *       |            |           |            |            |----------+----------->|             |  resume
  *       |            |           |            |            |          |            |             |
@@ -84,9 +85,6 @@ import kotlin.reflect.KClass
  * 
  * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
  * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
- *
- * Playback control methods are expected to be called from the main/UI thread. 
- * Asynchronous operations of actual player implementations should ensure that playback state must be transformed to target state.
  * 
  * ### Invalid calls are ignored
  *
@@ -108,6 +106,8 @@ import kotlin.reflect.KClass
  * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED],
  * including [READY][PlaybackState.READY] itself.
  * 
+ * If the player has set media data, the previous media will be [closed][close] and set playback state to [FINISHED][PlaybackState.FINISHED] first.
+ * 
  * ### Error can occurred at any time
  * 
  * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
@@ -128,8 +128,8 @@ import kotlin.reflect.KClass
  * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
  * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
  *
- * All methods in this interface are expected to be called from the **UI thread** on Android.
- * Calls from illegal threads will cause an exception.
+ * Playback control methods are expected to be called from the UI thread. Calls from illegal threads will cause an exception.
+ * Asynchronous operations of actual player implementations should ensure that playback state must be transformed to target state.
  *
  * On other platforms, calls are not required to be on the UI thread but should still be called from a single thread.
  * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the UI thread in common code.
@@ -363,20 +363,11 @@ public class DummyMediampPlayer(
         return playbackState.value
     }
 
-    override fun stopPlaybackImpl() {
-        currentPositionMillis.value = 0
-        mediaProperties.value = null
-        playbackState.value = PlaybackState.READY
-        // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
-    }
-
     override suspend fun setMediaDataImpl(data: MediaData): Data {
         return Data(
             data,
             releaseResource = {
-                backgroundScope.launch(NonCancellable) {
-                    data.close()
-                }
+                data.close()
             },
         )
     }
@@ -386,15 +377,22 @@ public class DummyMediampPlayer(
     }
 
     override fun resumeImpl() {
-
+        playbackState.value = PlaybackState.PLAYING
     }
 
     override fun pauseImpl() {
+        playbackState.value = PlaybackState.PAUSED
+    }
 
+    override fun stopPlaybackImpl() {
+        currentPositionMillis.value = 0
+        mediaProperties.value = null
+        playbackState.value = PlaybackState.FINISHED
+        // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
     }
 
     override fun closeImpl() {
-
+        playbackState.value = PlaybackState.DESTROYED
     }
 
     override val features: PlayerFeatures = buildPlayerFeatures {

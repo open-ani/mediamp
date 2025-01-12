@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2025 OpenAni and contributors.
  *
  * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
@@ -28,7 +28,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * Method [setMediaData], [resume], [pause], [stopPlayback] and [close] are wrapped, 
  * please implement the actual playback control logic in corresponding `xxxImpl` methods. Note that:
  *
- * - These methods are called in main/UI thread, so implementations should not do any heavy work.
+ * - These methods are called in UI thread, so implementations should not do any heavy work.
  * - These methods will only be called when the playback state is valid at its state transformation path, 
  * so it is not necessary to validate playback state.
  * - These methods should ensure that playback state must be transformed to target state in the future.
@@ -68,19 +68,23 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     private val closed = MutableStateFlow(false)
 
     final override suspend fun setMediaData(data: MediaData): Unit = withContext(defaultDispatcher) {
+        if (closed.value || playbackState.value == PlaybackState.DESTROYED) {
+            return@withContext
+        }
         setVideoSourceMutex.withLock {
-            if (playbackState.value == PlaybackState.DESTROYED) {
+            val currentState = playbackState.value
+            if (closed.value || currentState == PlaybackState.DESTROYED) {
                 return@withLock
             }
 
             // playback has set media data, stop previous first.
-            if (playbackState.value >= PlaybackState.READY) {
+            if (currentState >= PlaybackState.READY) {
                 val previousResource = openResource.value
                 if (data == previousResource?.mediaData) {
                     return@withLock
                 }
                 // stop playback if running
-                if (playbackState.value >= PlaybackState.PAUSED) {
+                if (currentState >= PlaybackState.PAUSED) {
                     stopPlaybackImpl()
                 }
 
@@ -97,8 +101,15 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
                 playbackState.value = PlaybackState.ERROR
                 throw e
             }
+            
+            // Player is closed before setMediaDataImpl is finished
+            if (closed.value) {
+                opened.releaseResource.invoke()
+                return@withLock
+            }
 
-            this@AbstractMediampPlayer.openResource.value = opened
+            openResource.value = opened
+            playbackState.value = PlaybackState.READY
         }
     }
 
@@ -113,7 +124,6 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         val currState = playbackState.value
         if (currState == PlaybackState.READY || currState == PlaybackState.PAUSED) {
             resumeImpl()
-            playbackState.value = PlaybackState.PLAYING
         }
     }
 
