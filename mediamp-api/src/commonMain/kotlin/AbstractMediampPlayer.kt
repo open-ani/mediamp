@@ -29,10 +29,17 @@ import kotlin.coroutines.cancellation.CancellationException
  * please implement the actual playback control logic in corresponding `xxxImpl` methods. Note that:
  *
  * - These methods are called in UI thread, so implementations should not do any heavy work.
+ * 
  * - These methods will only be called when the playback state is valid at its state transformation path, 
  * so it is not necessary to validate playback state.
+ * 
  * - These methods should ensure that playback state must be transformed to target state in the future.
+ * You may not call these methods at your player core state listener to avoid endless loop.
+ * 
+ * - It is OK to perform state transformation before method returns (via directly set) or after method returns (via callback or listener).
+ * 
  * - No error occurred, error at main thread will crash the application.
+ * 
  * - [setMediaDataImpl] can be called at any thread. 
  * If error occurred, playback state will be set to [PlaybackState.ERROR] and error will be rethrow.
  */

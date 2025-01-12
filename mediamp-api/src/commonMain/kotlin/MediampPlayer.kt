@@ -56,8 +56,7 @@ import kotlin.reflect.KClass
  * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
  * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
  *       |            |           |            |            |          |            |             |
- *       |            |-----------+------------+----------->*          |            |             |  setMediaData
- *       |            |           |            +<-----------+----------+------------+-------------|  setMediaData
+ *       |            |-----------+------------+----------->*<---------+------------+-------------|  setMediaData
  *       |            |           |            |            |          |            |             |
  *       |            |           |            |            |----------+----------->|             |  resume
  *       |            |           |            |            |          |            |             |
@@ -80,7 +79,7 @@ import kotlin.reflect.KClass
  * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
  * 
  * ```
- * Calling the function labelled to the right of the diagram, at any state included in the path, 
+ * Calling the method labelled to the right of the diagram, at any state included in the path, 
  * will transform the state to the destination state pointed by arrow.
  * 
  * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
@@ -102,12 +101,11 @@ import kotlin.reflect.KClass
  * 
  * ### [setMediaData] is special
  *
- * [setMediaData] has special transformation path. It will always transform state into [READY][PlaybackState.READY].
- * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED],
- * including [READY][PlaybackState.READY] itself.
+ * `setMediaData` has special transformation path. It will always transform state into [READY][PlaybackState.READY] and may have intermediate state transformation.
+ * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED] state, including [READY][PlaybackState.READY] state itself.
  * 
- * If the player has set media data, the previous media will be [closed][close] and set playback state to [FINISHED][PlaybackState.FINISHED] first.
- * 
+ * See [setMediaData] for more details.
+ *
  * ### Error can occurred at any time
  * 
  * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
@@ -221,7 +219,19 @@ public interface MediampPlayer : AutoCloseable {
      *
      * Setting the same [MediaData] will be ignored.
      *
-     * If the player is already playing a video, it will be stopped before playing the new video.
+     * ### Compound operation
+     * 
+     * If a media data is already set, the previous will be closed before new one is set.
+     * 
+     * Note that after closing the previous video, the playback state will transform to [FINISHED][PlaybackState.FINISHED].
+     * After method returned, the player will be in the [READY][PlaybackState.READY] state.
+     * 
+     * ### Error handling
+     * 
+     * This method will open media data.
+     * 
+     * If error occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR].
+     * And the error will be propagated to the caller.
      *
      * @see stopPlayback
      */
@@ -239,7 +249,7 @@ public interface MediampPlayer : AutoCloseable {
     /**
      * Obtains the exact current playback position of the video in milliseconds, without suspension.
      *
-     * If no video is being played, this function will return `0`.
+     * If no video is being played, this method will return `0`.
      *
      * To subscribe for updates, use [currentPositionMillis].
      */
@@ -248,7 +258,7 @@ public interface MediampPlayer : AutoCloseable {
     /**
      * Resumes playback.
      *
-     * If there is no video source set, this function will do nothing.
+     * If there is no video source set, this method will do nothing.
      * @see togglePause
      */
     @UiThread
@@ -257,7 +267,7 @@ public interface MediampPlayer : AutoCloseable {
     /**
      * Pauses playback.
      *
-     * If there is no video source set, this function will do nothing.
+     * If there is no video source set, this method will do nothing.
      * @see togglePause
      */
     @UiThread
@@ -287,7 +297,7 @@ public interface MediampPlayer : AutoCloseable {
      * Positive [deltaMillis] will skip forward, and negative [deltaMillis] will skip backward.
      *
      * If the player is paused, it will remain paused, but it is guaranteed that the new frame will be displayed.
-     * If there is no video source set, this function will do nothing.
+     * If there is no video source set, this method will do nothing.
      *
      * // TODO argument errors?
      */
@@ -303,7 +313,7 @@ public interface MediampPlayer : AutoCloseable {
      * After [close], calling any method from the player will either result in an exception or have no effect.
      * Flows will emit no value.
      *
-     * This function must be called on the UI thread as some backends may require it.
+     * This method must be called on the UI thread as some backends may require it.
      */
     public override fun close()
 }
