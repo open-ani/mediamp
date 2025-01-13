@@ -221,10 +221,13 @@ public interface MediampPlayer : AutoCloseable {
      *
      * ### State transition
      * 
-     * If a media data is already set, the previous will be closed before new one is set.
-     * 
-     * Note that after closing the previous video, the playback state will transform to [FINISHED][PlaybackState.FINISHED].
-     * After method returned, the player will be in the [READY][PlaybackState.READY] state.
+     * If [data] is not equal to the currently playing media data, the later will be closed before [data] is set. 
+     * That is equivalent to (atomically) calling [stopPlayback] before calling this method, in which case [playbackState] may emit a [FINISHED]. 
+     *
+     * **State transition may be asynchronous and cancellable.**
+     * Depending on whether the player implements synchronous opening or asynchronous opening, this function returns normally, [playbackState] either has already emitted [READY][PlaybackState.READY] or will emit it in the near future. In other words:
+     * - If the player implements synchronous media opening (e.g. [DummyPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this function returns. Or, this function may throw an exception to indicate an error, and transit state to [ERROR][PlaybackState.ERROR].
+     * - If the player implements asynchronous media opening (e.g. ExoPlayer), observers of [playbackState] MAY NOT have already seen an [READY][PlaybackState.READY] state before this function returns. Instead, the observers may collect an [READY][PlaybackState.READY] in arbitrary time after this function returns. Decoding errors can only be seen by the observers, not the caller of [setMediaData]. If before the [READY][PlaybackState.READY] is emit (i.e. before initial video decoding is completed), [setMediaData] is called again, a new asynchronous opening process will start, cancelling the old one. So observers will not see an [READY][PlaybackState.READY] for the old media, but only the one for the new [data].
      * 
      * ### Error handling
      * 
