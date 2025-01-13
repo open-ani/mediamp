@@ -225,9 +225,18 @@ public interface MediampPlayer : AutoCloseable {
      * That is equivalent to (atomically) calling [stopPlayback] before calling this method, in which case [playbackState] may emit a [FINISHED]. 
      *
      * **State transition may be asynchronous and cancellable.**
-     * Depending on whether the player implements synchronous opening or asynchronous opening, this function returns normally, [playbackState] either has already emitted [READY][PlaybackState.READY] or will emit it in the near future. In other words:
-     * - If the player implements synchronous media opening (e.g. [DummyPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this function returns. Or, this function may throw an exception to indicate an error, and transit state to [ERROR][PlaybackState.ERROR].
-     * - If the player implements asynchronous media opening (e.g. ExoPlayer), observers of [playbackState] MAY NOT have already seen an [READY][PlaybackState.READY] state before this function returns. Instead, the observers may collect an [READY][PlaybackState.READY] in arbitrary time after this function returns. Decoding errors can only be seen by the observers, not the caller of [setMediaData]. If before the [READY][PlaybackState.READY] is emit (i.e. before initial video decoding is completed), [setMediaData] is called again, a new asynchronous opening process will start, cancelling the old one. So observers will not see an [READY][PlaybackState.READY] for the old media, but only the one for the new [data].
+     * Depending on whether the player implements synchronous opening or asynchronous opening, 
+     * this method returns normally, [playbackState] either has already emitted [READY][PlaybackState.READY] or will emit it in the near future. 
+     * In other words:
+     * 
+     * - If the player implements synchronous media opening (e.g. [DummyMediampPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this method returns. 
+     * Or, this method may throw an exception to indicate an error, and transit state to [ERROR][PlaybackState.ERROR].
+     * 
+     * - If the player implements asynchronous media opening (e.g. ExoPlayer), observers of [playbackState] MAY NOT have already seen an [READY][PlaybackState.READY] state before this method returns. 
+     * Instead, the observers may collect an [READY][PlaybackState.READY] in arbitrary time after this method returns.
+     * Decoding errors can only be seen by the observers, not the caller of [setMediaData]. 
+     * If before the [READY][PlaybackState.READY] is emit (i.e. before initial video decoding is completed), [setMediaData] is called again, a new asynchronous opening process will start, cancelling the old one. 
+     * So observers will not see an [READY][PlaybackState.READY] for the old media, but only the one for the new [data].
      * 
      * ### Error handling
      * 
@@ -236,7 +245,9 @@ public interface MediampPlayer : AutoCloseable {
      * If an exception is occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR], 
      * while the exception will also be propagated to the caller.
      * 
-     * Note that only exceptions during [opening][MediaData.open] are propagated. Exceptions happened in the player implementation, for example, asynchronous video decoding, etc., will NOT be thrown from this function. These errors can be seen by observing the [playbackState] flow.
+     * Note that only exceptions during [opening][MediaData.open] are propagated. 
+     * Exceptions happened in the player implementation, for example, asynchronous video decoding, etc., will NOT be thrown from this method. 
+     * These errors can be seen by observing the [playbackState] flow.
      *
      * @see stopPlayback
      */
@@ -378,6 +389,32 @@ public class DummyMediampPlayer(
         return playbackState.value
     }
 
+    override val features: PlayerFeatures = buildPlayerFeatures {
+        add(
+            PlaybackSpeed,
+            object : PlaybackSpeed {
+                override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
+                override val value: Float get() = valueFlow.value
+                override fun set(speed: Float) {
+                    valueFlow.value = speed
+                }
+            },
+        )
+        add(
+            MediaMetadata,
+            object : MediaMetadata {
+                override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
+                override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
+                override val chapters: Flow<List<Chapter>> = MutableStateFlow(
+                    listOf(
+                        Chapter("chapter1", durationMillis = 90_000L, 0L),
+                        Chapter("chapter2", durationMillis = 5_000L, 90_000L),
+                    ),
+                )
+            },
+        )
+    }
+
     override suspend fun setMediaDataImpl(data: MediaData): Data {
         return Data(
             data,
@@ -408,32 +445,6 @@ public class DummyMediampPlayer(
 
     override fun closeImpl() {
         playbackState.value = PlaybackState.DESTROYED
-    }
-
-    override val features: PlayerFeatures = buildPlayerFeatures {
-        add(
-            PlaybackSpeed,
-            object : PlaybackSpeed {
-                override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
-                override val value: Float get() = valueFlow.value
-                override fun set(speed: Float) {
-                    valueFlow.value = speed
-                }
-            },
-        )
-        add(
-            MediaMetadata,
-            object : MediaMetadata {
-                override val audioTracks: TrackGroup<AudioTrack> = emptyTrackGroup()
-                override val subtitleTracks: TrackGroup<SubtitleTrack> = emptyTrackGroup()
-                override val chapters: Flow<List<Chapter>> = MutableStateFlow(
-                    listOf(
-                        Chapter("chapter1", durationMillis = 90_000L, 0L),
-                        Chapter("chapter2", durationMillis = 5_000L, 90_000L),
-                    ),
-                )
-            },
-        )
     }
 
     public object Factory : MediampPlayerFactory<DummyMediampPlayer> {

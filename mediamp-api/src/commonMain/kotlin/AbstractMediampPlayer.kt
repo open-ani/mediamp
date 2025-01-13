@@ -33,8 +33,9 @@ import kotlin.coroutines.cancellation.CancellationException
  * - These methods will only be called when the playback state is valid at its state transformation path, 
  * so it is not necessary to validate playback state.
  * 
- * - These methods should ensure that playback state must be transformed to target state in the future.
+ * - These methods (except [setMediaDataImpl]) should ensure that playback state must be transformed to target state in the future.
  * You may not call these methods at your player core state listener to avoid endless loop.
+ * [setMediaDataImpl] is special, new playback state will be set by this class after [setMediaDataImpl] returned.
  * 
  * - State transformation is allowed to be made immediately when the methods are called. For example, you may either change playbackState before the method returns, OR return the function and change state later in the background.
  * 
