@@ -36,7 +36,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * - These methods should ensure that playback state must be transformed to target state in the future.
  * You may not call these methods at your player core state listener to avoid endless loop.
  * 
- * - It is OK to perform state transformation before method returns (via directly set) or after method returns (via callback or listener).
+ * - State transformation is allowed to be made immediately when the methods are called. For example, you may either change playbackState before the method returns, OR return the function and change state later in the background.
  * 
  * - No error occurred, error at main thread will crash the application.
  * 
