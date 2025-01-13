@@ -230,8 +230,10 @@ public interface MediampPlayer : AutoCloseable {
      * 
      * This method will open media data by calling [MediaData.open], if and only if the [data] instance is different from the currently playing media data.
      * 
-     * If error occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR].
-     * And the error will be propagated to the caller.
+     * If an exception is occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR], 
+     * while the exception will also be propagated to the caller.
+     * 
+     * Note that only exceptions during [opening][MediaData.open] are propagated. Exceptions happened in the player implementation, for example, asynchronous video decoding, etc., will NOT be thrown from this function. These errors can be seen by observing the [playbackState] flow.
      *
      * @see stopPlayback
      */
