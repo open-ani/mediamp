@@ -219,7 +219,7 @@ public interface MediampPlayer : AutoCloseable {
      *
      * Setting the same [MediaData] will be ignored.
      *
-     * ### Compound operation
+     * ### State transition
      * 
      * If a media data is already set, the previous will be closed before new one is set.
      * 
