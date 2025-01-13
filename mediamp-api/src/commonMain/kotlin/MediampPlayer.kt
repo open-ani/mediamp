@@ -228,7 +228,7 @@ public interface MediampPlayer : AutoCloseable {
      * 
      * ### Error handling
      * 
-     * This method will open media data.
+     * This method will open media data by calling [MediaData.open], if and only if the [data] instance is different from the currently playing media data.
      * 
      * If error occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR].
      * And the error will be propagated to the caller.
