@@ -25,7 +25,6 @@ android {
 }
 
 kotlin {
-    explicitApi()
     jvmToolchain(8)
     sourceSets {
         commonMain.dependencies {
