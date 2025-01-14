@@ -23,11 +23,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
-public abstract class AbstractMediampPlayerTest {
-    public abstract fun createMediampPlayer(): MediampPlayer
+abstract class AbstractMediampPlayerTest {
+    abstract fun createMediampPlayer(): MediampPlayer
 
     @Test
-    public fun `initial state`(): TestResult = runTest {
+    fun `initial state`(): TestResult = runTest {
         val player = createMediampPlayer()
         // Initially, the player should be in CREATED state
         assertEquals(PlaybackState.CREATED, player.playbackState.value)
@@ -38,7 +38,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `set media`(): TestResult = runTest {
+    fun `set media`(): TestResult = runTest {
         val player = createMediampPlayer()
         // Use UriMediaData for demonstration; this requires no real file
         val data = UriMediaData(
@@ -59,7 +59,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `resume and pause`(): TestResult = runTest {
+    fun `resume and pause`(): TestResult = runTest {
         val player = createMediampPlayer()
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
@@ -81,7 +81,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `stop playback`(): TestResult = runTest {
+    fun `stop playback`(): TestResult = runTest {
         val player = createMediampPlayer()
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
@@ -106,7 +106,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `close player`(): TestResult = runTest {
+    fun `close player`(): TestResult = runTest {
         val player = createMediampPlayer()
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
@@ -131,7 +131,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `seek and skip`(): TestResult = runTest {
+    fun `seek and skip`(): TestResult = runTest {
         val player = createMediampPlayer()
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
@@ -159,7 +159,7 @@ public abstract class AbstractMediampPlayerTest {
     }
 
     @Test
-    public fun `toggle pause`(): TestResult = runTest {
+    fun `toggle pause`(): TestResult = runTest {
         val player = createMediampPlayer()
         player.setMediaData(
             UriMediaData(
