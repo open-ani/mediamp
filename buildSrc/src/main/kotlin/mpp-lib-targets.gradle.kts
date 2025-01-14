@@ -13,6 +13,8 @@ import org.jetbrains.compose.ComposeExtension
 import org.jetbrains.compose.ComposePlugin
 import org.jetbrains.compose.ExperimentalComposeLibrary
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.HasConfigurableKotlinCompilerOptions
+import org.jetbrains.kotlin.gradle.dsl.KotlinBaseExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
@@ -28,7 +30,8 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 val android = extensions.findByType(LibraryExtension::class)
 val composeExtension = extensions.findByType(ComposeExtension::class)
 
-configure<KotlinMultiplatformExtension> {
+val kotlinMultiplatformExtension = extensions.findByType<KotlinMultiplatformExtension>()
+kotlinMultiplatformExtension?.apply {
     /**
      * 平台架构:
      * ```
@@ -76,10 +79,6 @@ configure<KotlinMultiplatformExtension> {
         applyDefaultHierarchyTemplate()
     }
 
-    compilerOptions {
-        freeCompilerArgs.add("-Xexpect-actual-classes")
-    }
-
     sourceSets.commonMain.dependencies {
         // 添加常用依赖
         if (composeExtension != null) {
@@ -108,39 +107,72 @@ configure<KotlinMultiplatformExtension> {
         }
     }
 
-    if (android != null && composeExtension != null) {
-        val composeVersion = versionCatalogs.named("libs").findVersion("jetpack-compose").get()
-        listOf(
-            sourceSets.getByName("androidInstrumentedTest"),
-            sourceSets.getByName("androidUnitTest"),
-        ).forEach { sourceSet ->
-            sourceSet.dependencies {
-                // https://developer.android.com/develop/ui/compose/testing#setup
-                implementation("androidx.compose.ui:ui-test-junit4-android:${composeVersion}")
-                implementation("androidx.compose.ui:ui-test-manifest:${composeVersion}")
-            }
+    if (project.findProperty("mediamp.enable.ios")?.toString()?.toBoolean() != false) {
+        // ios testing workaround
+        // https://developer.squareup.com/blog/kotlin-multiplatform-shared-test-resources/
+        tasks.register<Copy>("copyiOSTestResources") {
+            from("src/commonTest/resources")
+            into("build/bin/iosSimulatorArm64/debugTest/resources")
         }
-
-        dependencies {
-            "debugImplementation"("androidx.compose.ui:ui-test-manifest:${composeVersion}")
+        tasks.named("iosSimulatorArm64Test") {
+            dependsOn("copyiOSTestResources")
         }
     }
 }
 
-if (project.findProperty("mediamp.enable.ios")?.toString()?.toBoolean() != false) {
-    // ios testing workaround
-    // https://developer.squareup.com/blog/kotlin-multiplatform-shared-test-resources/
-    tasks.register<Copy>("copyiOSTestResources") {
-        from("src/commonTest/resources")
-        into("build/bin/iosSimulatorArm64/debugTest/resources")
+(extensions.findByType<KotlinBaseExtension>() as? HasConfigurableKotlinCompilerOptions<*>)?.apply {
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
     }
-    tasks.named("iosSimulatorArm64Test") {
-        dependsOn("copyiOSTestResources")
+}
+
+configure<KotlinBaseExtension> {
+    val androidTestExtVersion = versionCatalogs.named("libs").findVersion("androidx-test-ext-junit").get()
+
+    when {
+        kotlinMultiplatformExtension != null -> { // is kotlin multiplatform
+            if (android != null) {
+                dependencies {
+                    "androidInstrumentedTestImplementation"(kotlin("test"))
+                }
+            }
+
+            if (android != null && composeExtension != null) {
+                val composeVersion = versionCatalogs.named("libs").findVersion("jetpack-compose").get()
+                listOf(
+                    sourceSets.getByName("androidInstrumentedTest"),
+                    sourceSets.getByName("androidUnitTest"),
+                ).forEach { sourceSet ->
+                    sourceSet.dependencies {
+                        // https://developer.android.com/develop/ui/compose/testing#setup
+                        implementation("androidx.compose.ui:ui-test-junit4-android:${composeVersion}")
+                        implementation("androidx.compose.ui:ui-test-manifest:${composeVersion}")
+                    }
+                }
+
+                dependencies {
+                    "debugImplementation"("androidx.compose.ui:ui-test-manifest:${composeVersion}")
+                }
+
+                dependencies {
+                    "androidInstrumentedTestImplementation"("androidx.test.ext:junit:${androidTestExtVersion}")
+                    "androidInstrumentedTestImplementation"("androidx.test.ext:junit-ktx:${androidTestExtVersion}")
+                }
+            }
+        }
+
+        android != null -> { // is android single platform
+            dependencies {
+                "androidTestImplementation"(kotlin("test"))
+                "androidTestImplementation"("androidx.test.ext:junit:${androidTestExtVersion}")
+                "androidTestImplementation"("androidx.test.ext:junit-ktx:${androidTestExtVersion}")
+            }
+        }
     }
 }
 
 if (android != null) {
-    configure<KotlinMultiplatformExtension> {
+    kotlinMultiplatformExtension?.apply {
         sourceSets {
             // Workaround for MPP compose bug, don't change
             removeIf { it.name == "androidAndroidTestRelease" }

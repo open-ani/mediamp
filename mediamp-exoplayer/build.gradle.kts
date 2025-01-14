@@ -13,6 +13,7 @@ plugins {
     kotlin("android")
     id("com.android.library")
 
+    `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
