@@ -1,9 +1,3 @@
-import kotlinx.coroutines.test.runTest
-import org.openani.mediamp.MediampPlayer
-import org.openani.mediamp.api.test.AbstractMediampPlayerTest
-import org.openani.mediamp.dummy.DummyMediampPlayer
-import kotlin.test.Test
-
 /*
  * Copyright (C) 2024 OpenAni and contributors.
  *
@@ -11,6 +5,12 @@ import kotlin.test.Test
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
+
+package org.openani.mediamp.test
+
+import org.openani.mediamp.MediampPlayer
+import org.openani.mediamp.api.test.AbstractMediampPlayerTest
+import org.openani.mediamp.dummy.DummyMediampPlayer
 
 class DummyMediampPlayerTest : AbstractMediampPlayerTest() {
     override fun createMediampPlayer(): MediampPlayer {

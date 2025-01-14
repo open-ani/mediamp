@@ -39,7 +39,7 @@ kotlin {
             api(libs.kotlinx.coroutines.test)
         }
         sourceSets["jvmMain"].dependencies {
-            api(kotlin("test-junit5", libs.versions.kotlin.get()))
+            api(kotlin("test-junit", libs.versions.kotlin.get()))
         }
         iosMain.dependencies {
             implementation(libs.androidx.annotation)
