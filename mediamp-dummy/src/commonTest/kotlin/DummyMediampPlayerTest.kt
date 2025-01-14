@@ -1,6 +1,8 @@
+import kotlinx.coroutines.test.runTest
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.api.test.AbstractMediampPlayerTest
 import org.openani.mediamp.dummy.DummyMediampPlayer
+import kotlin.test.Test
 
 /*
  * Copyright (C) 2024 OpenAni and contributors.

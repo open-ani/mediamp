@@ -33,7 +33,7 @@ kotlin {
     jvmToolchain(8)
     sourceSets {
         commonMain.dependencies {
-            api(projects.mediampApi)
+            implementation(projects.mediampApi)
         }
         commonTest.dependencies { 
             implementation(projects.mediampApiTest)

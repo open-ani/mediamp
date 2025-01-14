@@ -35,13 +35,11 @@ kotlin {
             
             implementation(projects.mediampApi)
             
-            api(kotlin("test"))
             api(kotlin("test-annotations-common", libs.versions.kotlin.get()))
             api(libs.kotlinx.coroutines.test)
         }
         sourceSets["jvmMain"].dependencies {
-            api(kotlin("test"))
-            api(libs.junit)
+            api(kotlin("test-junit5", libs.versions.kotlin.get()))
         }
         iosMain.dependencies {
             implementation(libs.androidx.annotation)
