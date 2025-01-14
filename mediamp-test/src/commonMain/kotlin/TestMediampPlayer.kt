@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.dummy
+package org.openani.mediamp.test
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -35,7 +35,7 @@ import kotlin.reflect.KClass
  * For previewing
  */
 @OptIn(InternalForInheritanceMediampApi::class, InternalMediampApi::class)
-public class DummyMediampPlayer(
+public class TestMediampPlayer(
     // TODO: 2024/12/22 move to preview package
     defaultDispatcher: CoroutineContext = Dispatchers.Default,
 ) : AbstractMediampPlayer<AbstractMediampPlayer.Data>(defaultDispatcher) {
@@ -117,11 +117,11 @@ public class DummyMediampPlayer(
         playbackState.value = PlaybackState.DESTROYED
     }
 
-    public object Factory : MediampPlayerFactory<DummyMediampPlayer> {
-        override val forClass: KClass<DummyMediampPlayer> = DummyMediampPlayer::class
+    public object Factory : MediampPlayerFactory<TestMediampPlayer> {
+        override val forClass: KClass<TestMediampPlayer> = TestMediampPlayer::class
 
-        override fun create(context: Any, parentCoroutineContext: CoroutineContext): DummyMediampPlayer {
-            return DummyMediampPlayer(parentCoroutineContext)
+        override fun create(context: Any, parentCoroutineContext: CoroutineContext): TestMediampPlayer {
+            return TestMediampPlayer(parentCoroutineContext)
         }
     }
 }

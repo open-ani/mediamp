@@ -10,10 +10,9 @@ package org.openani.mediamp.test
 
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.api.test.AbstractMediampPlayerTest
-import org.openani.mediamp.dummy.DummyMediampPlayer
 
-class DummyMediampPlayerTest : AbstractMediampPlayerTest() {
+class TestMediampPlayerTest : AbstractMediampPlayerTest() {
     override fun createMediampPlayer(): MediampPlayer {
-        return DummyMediampPlayer()
+        return TestMediampPlayer()
     }
 }

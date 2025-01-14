@@ -229,7 +229,7 @@ public interface MediampPlayer : AutoCloseable {
      * this method returns normally, [playbackState] either has already emitted [READY][PlaybackState.READY] or will emit it in the near future. 
      * In other words:
      * 
-     * - If the player implements synchronous media opening (e.g. [DummyMediampPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this method returns. 
+     * - If the player implements synchronous media opening (e.g. [TestMediampPlayer][org.openani.mediamp.test.TestMediampPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this method returns. 
      * Or, this method may throw an exception to indicate an error, and transit state to [ERROR][PlaybackState.ERROR].
      * 
      * - If the player implements asynchronous media opening (e.g. ExoPlayer), observers of [playbackState] MAY NOT have already seen an [READY][PlaybackState.READY] state before this method returns. 

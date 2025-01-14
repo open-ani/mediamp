@@ -18,10 +18,10 @@ plugins {
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
-description = "Dummy backend for MediaMP"
+description = "Test backend for MediaMP"
 
 android {
-    namespace = "org.openani.mediamp.dummy"
+    namespace = "org.openani.mediamp.test"
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
