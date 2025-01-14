@@ -9,7 +9,6 @@
 @file:OptIn(ExperimentalKotlinGradlePluginApi::class, ExperimentalComposeLibrary::class)
 
 import com.android.build.api.dsl.LibraryExtension
-import gradle.kotlin.dsl.accessors._b43a41b3a2c24e7f863347686afebb31.versionCatalogs
 import org.jetbrains.compose.ComposeExtension
 import org.jetbrains.compose.ComposePlugin
 import org.jetbrains.compose.ExperimentalComposeLibrary
