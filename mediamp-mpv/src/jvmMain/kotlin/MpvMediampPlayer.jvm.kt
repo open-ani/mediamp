@@ -27,7 +27,6 @@ actual class MpvMediampPlayer (
 ) : AbstractMediampPlayer<MpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
     class MPVPlayerData(
         mediaData: MediaData,
-        val setMedia: () -> Unit,
         releaseResource: () -> Unit,
     ) : Data(mediaData, releaseResource)
     
@@ -166,7 +165,7 @@ actual class MpvMediampPlayer (
         return detachSurface(handle.ptr)
     }
 
-    override suspend fun setDataImpl(data: MediaData): MPVPlayerData = when (data) {
+    override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
             val headers = data.headers
             
@@ -180,31 +179,35 @@ actual class MpvMediampPlayer (
                 handle.option("http-header-fields", "$key: $value")
             }
             
-            MPVPlayerData(
-                data, 
-                setMedia = {
-                    handle.option("pause", "true")
-                    handle.command("loadfile", data.uri)
-                },
-                releaseResource = { data.close() }
-            )
+            MPVPlayerData(data, releaseResource = { data.close() })
         }
         is SeekableInputMediaData -> {
             TODO()
         }
     }
 
-    override suspend fun startPlayer(data: MPVPlayerData) {
-        data.setMedia()
-        
+    override fun resumeImpl() {
+        when (playbackState.value) {
+            PlaybackState.READY -> {
+                val media = openResource.value ?: return
+                handle.option("pause", "true")
+                when (val data = media.mediaData) {
+                    is UriMediaData -> {
+                        handle.command("loadfile", data.uri)
+                        playbackState.value = PlaybackState.PLAYING
+                    }
+                    is SeekableInputMediaData -> TODO()
+                    else -> { } // TODO: log unsupported media type
+                }
+            }
+            PlaybackState.PLAYING -> {
+                handle.command("cycle", "pause")
+            }
+            else -> { } // TODO: unreachable
+        }
     }
 
-    override fun resume() {
-        if (playbackState.value == PlaybackState.PLAYING) return
-        handle.command("cycle", "pause")
-    }
-
-    override fun pause() {
+    override fun pauseImpl() {
         if (playbackState.value == PlaybackState.PAUSED) return
         handle.command("cycle", "pause")
     }
@@ -222,6 +225,7 @@ actual class MpvMediampPlayer (
     override fun stopPlaybackImpl() {
         handle.command("stop")
         currentPositionMillis.value = 0L
+        playbackState.value = PlaybackState.FINISHED
     }
     
 

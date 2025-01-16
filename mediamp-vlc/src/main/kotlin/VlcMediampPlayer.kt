@@ -10,9 +10,12 @@
 
 package org.openani.mediamp.vlc
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +26,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.ExperimentalMediampApi
@@ -74,18 +78,14 @@ import kotlin.math.roundToInt
 @OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     MediampPlayer,
-    AbstractMediampPlayer<VlcjData>(parentCoroutineContext) {
-    public companion object {
-        private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
-
-        public fun prepareLibraries() {
-            createPlayerLock.withLock {
-                NativeDiscovery().discover()
-                CallbackMediaPlayerComponent().release()
-            }
+    AbstractMediampPlayer<VlcjData>(Dispatchers.Default) {
+        
+    private val backgroundScope: CoroutineScope = CoroutineScope(
+        parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
+    ).apply {
+        coroutineContext.job.invokeOnCompletion {
+            close()
         }
-
-        private val logger = Logger
     }
 
     //    val mediaPlayerFactory = MediaPlayerFactory(
@@ -114,8 +114,8 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
-    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.PAUSED_BUFFERING)
     private val buffering = VlcBuffering(player, currentPositionMillis, playbackState)
+    private val setTimeLock = ReentrantLock()
 
     init {
         backgroundScope.launch {
@@ -125,109 +125,11 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         }
     }
 
-    override fun stopPlaybackImpl() {
-        currentPositionMillis.value = 0L
-        lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
-        try {
-            player.submit {
-                player.controls().stop()
-            }
-        } catch (_: RejectedExecutionException) {
-        }
-        surface.clearBitmap()
-    }
-
     public class VlcjData(
         override val mediaData: MediaData,
         public val setPlay: () -> Unit,
         releaseResource: () -> Unit
     ) : Data(mediaData, releaseResource)
-
-    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
-
-    override suspend fun setDataImpl(data: MediaData): VlcjData = when (data) {
-        is UriMediaData -> {
-            VlcjData(
-                data,
-                setPlay = {
-                    player.media().play(
-                        data.uri,
-                        *buildList {
-                            add("http-user-agent=${data.headers["User-Agent"] ?: "Mozilla/5.0"}")
-                            val referer = data.headers["Referer"]
-                            if (referer != null) {
-                                add("http-referrer=${referer}")
-                            }
-                        }.toTypedArray(),
-                    )
-                    lastMedia = null
-                },
-                releaseResource = {
-                    data.close()
-                },
-            )
-        }
-
-        is SeekableInputMediaData -> {
-            val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
-            try {
-                val input = data.createInput()
-
-                VlcjData(
-                    data,
-                    setPlay = {
-                        val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
-                        player.controls().stop()
-                        player.media().play(new)
-                        lastMedia = new
-                    },
-                    releaseResource = {
-                        logger.trace { "VLC ReleaseResource: begin" }
-                        awaitContext.cancel()
-                        logger.trace { "VLC ReleaseResource: close input" }
-                        input.close()
-                        logger.trace { "VLC ReleaseResource: close VideoData" }
-                        backgroundScope.launch(NonCancellable) {
-                            data.close()
-                        }
-                    },
-                )
-            } catch (e: Throwable) {
-                awaitContext.cancel(CancellationException("Failed to create input", e))
-                throw e
-            }
-        }
-    }
-
-    override fun closeImpl() {
-        lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
-        lastMedia = null
-        backgroundScope.launch(NonCancellable) {
-            player.release()
-        }
-    }
-
-    override suspend fun startPlayer(data: VlcjData) {
-        data.setPlay()
-
-//        player.media().options().add(*arrayOf(":avcodec-hw=none")) // dxva2
-//        player.controls().play()
-//        player.media().play/*OR .start*/(data.videoData.file.absolutePath)
-    }
-
-    override fun getCurrentPositionMillis(): Long = player.status().time()
-
-    override fun pause() {
-        player.submit {
-            player.controls().pause()
-        }
-    }
-
-    override fun resume() {
-        player.submit {
-            player.controls().play()
-        }
-    }
 
     private val screenshots = VlcScreenshots(player)
     private val playbackSpeed = VlcPlaybackSpeed(player)
@@ -241,10 +143,6 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         add(AudioLevelController.Key, audioLevelController)
         add(PlaybackSpeed.Key, playbackSpeed)
         add(MediaMetadata, mediaMetadata)
-    }
-
-    override fun getCurrentPlaybackState(): PlaybackState {
-        return playbackState.value
     }
 
     init {
@@ -321,6 +219,10 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 }
 
                 override fun finished(mediaPlayer: MediaPlayer) {
+                    playbackState.value = PlaybackState.FINISHED
+                }
+
+                override fun stopped(mediaPlayer: MediaPlayer?) {
                     playbackState.value = PlaybackState.FINISHED
                 }
 
@@ -415,6 +317,148 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         }
     }
 
+    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
+
+    override fun getCurrentPositionMillis(): Long = player.status().time()
+
+    override fun getCurrentPlaybackState(): PlaybackState {
+        return playbackState.value
+    }
+
+    override suspend fun setMediaDataImpl(data: MediaData): VlcjData = when (data) {
+        is UriMediaData -> {
+            VlcjData(
+                data,
+                setPlay = {
+                    player.media().play(
+                        data.uri,
+                        *buildList {
+                            add("http-user-agent=${data.headers["User-Agent"] ?: "Mozilla/5.0"}")
+                            val referer = data.headers["Referer"]
+                            if (referer != null) {
+                                add("http-referrer=${referer}")
+                            }
+                        }.toTypedArray(),
+                    )
+                    lastMedia = null
+                },
+                releaseResource = {
+                    data.close()
+                },
+            ).also {
+                playbackState.value = PlaybackState.READY
+            }
+        }
+
+        is SeekableInputMediaData -> {
+            val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
+            try {
+                val input = data.createInput()
+
+                VlcjData(
+                    data,
+                    setPlay = {
+                        val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
+                        player.controls().stop()
+                        player.media().play(new)
+                        lastMedia = new
+                    },
+                    releaseResource = {
+                        logger.trace { "VLC ReleaseResource: begin" }
+                        awaitContext.cancel()
+                        logger.trace { "VLC ReleaseResource: close input" }
+                        input.close()
+                        logger.trace { "VLC ReleaseResource: close VideoData" }
+                        backgroundScope.launch(NonCancellable) {
+                            data.close()
+                        }
+                    },
+                ).also {
+                    playbackState.value = PlaybackState.READY
+                }
+            } catch (e: Throwable) {
+                awaitContext.cancel(CancellationException("Failed to create input", e))
+                throw e
+            }
+        }
+    }
+
+    override fun resumeImpl() {
+        when (val state = playbackState.value) {
+            PlaybackState.READY -> {
+                openResource.value?.setPlay?.let { it() }
+
+                //        player.media().options().add(*arrayOf(":avcodec-hw=none")) // dxva2
+                //        player.controls().play()
+                //        player.media().play/*OR .start*/(data.videoData.file.absolutePath)
+            }
+            PlaybackState.PAUSED -> {
+                player.submit {
+                    player.controls().play()
+                }
+            }
+            else -> logger.warn { "unreachable state $state in resume." }
+        }
+    }
+
+    override fun seekTo(positionMillis: Long) {
+        @Suppress("NAME_SHADOWING")
+        val positionMillis = positionMillis.coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
+        if (positionMillis == currentPositionMillis.value) {
+            return
+        }
+
+        currentPositionMillis.value = positionMillis
+        player.submit {
+            setTimeLock.withLock {
+                player.controls().setTime(positionMillis)
+            }
+        }
+        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
+    }
+
+    override fun skip(deltaMillis: Long) {
+        if (playbackState.value == PlaybackState.PAUSED) {
+            // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
+            // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
+            currentPositionMillis.value = (currentPositionMillis.value + deltaMillis)
+                .coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
+        }
+        player.submit {
+            setTimeLock.withLock {
+                player.controls().skipTime(deltaMillis) // 采用当前 player 时间
+            }
+        }
+        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
+    }
+
+    override fun pauseImpl() {
+        player.submit {
+            player.controls().pause()
+        }
+    }
+
+    override fun stopPlaybackImpl() {
+        currentPositionMillis.value = 0L
+        lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
+        try {
+            player.submit {
+                player.controls().stop()
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+        surface.clearBitmap()
+    }
+
+    override fun closeImpl() {
+        lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
+        lastMedia = null
+        backgroundScope.launch(NonCancellable) {
+            player.release()
+            backgroundScope.cancel()
+        }
+    }
+
     private fun reloadSubtitleTracks() {
         val newSubtitleTracks = player.subpictures().trackDescriptions()
             .filterNot { it.id() == -1 } // "Disable"
@@ -455,37 +499,17 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         )
     }
 
-    private val setTimeLock = ReentrantLock()
+    public companion object {
+        private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
 
-    override fun seekTo(positionMillis: Long) {
-        @Suppress("NAME_SHADOWING")
-        val positionMillis = positionMillis.coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
-        if (positionMillis == currentPositionMillis.value) {
-            return
-        }
-
-        currentPositionMillis.value = positionMillis
-        player.submit {
-            setTimeLock.withLock {
-                player.controls().setTime(positionMillis)
+        public fun prepareLibraries() {
+            createPlayerLock.withLock {
+                NativeDiscovery().discover()
+                CallbackMediaPlayerComponent().release()
             }
         }
-        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
-    }
 
-    override fun skip(deltaMillis: Long) {
-        if (playbackState.value == PlaybackState.PAUSED) {
-            // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
-            // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
-            currentPositionMillis.value = (currentPositionMillis.value + deltaMillis)
-                .coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
-        }
-        player.submit {
-            setTimeLock.withLock {
-                player.controls().skipTime(deltaMillis) // 采用当前 player 时间
-            }
-        }
-        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
+        private val logger = Logger
     }
 }
 
