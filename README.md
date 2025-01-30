@@ -62,10 +62,10 @@ kotlin {
         implementation(libs.mediamp.compose) // for Compose UI
     }
     sourceSets.androidMain.dependencies {
-        implementation(libs.mediamp.backend.exoplayer)
+        implementation(libs.mediamp.exoplayer)
     }
     sourceSets.jvmMain.dependencies { // Desktop JVM
-        implementation(libs.mediamp.backend.vlc)
+        implementation(libs.mediamp.vlc)
     }
 }
 ```
@@ -82,7 +82,7 @@ fun main() = singleWindowApplication {
             Text("Play")
         }
 
-        MediaPlayer(player, Modifier.fillMaxSize())
+        MediampPlayerSurface(player, Modifier.fillMaxSize())
     }
 }
 ```
