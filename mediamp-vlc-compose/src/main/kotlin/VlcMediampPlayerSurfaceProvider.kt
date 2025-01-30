@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2025 OpenAni and contributors.
  *
  * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
@@ -10,8 +10,8 @@ package org.openani.mediamp.vlc.compose
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import org.openani.mediamp.vlc.VlcMediampPlayer
 import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
+import org.openani.mediamp.vlc.VlcMediampPlayer
 import kotlin.reflect.KClass
 
 class VlcMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<VlcMediampPlayer> {

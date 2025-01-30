@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2024-2025 OpenAni and contributors.
  *
- * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
@@ -11,28 +11,14 @@
 package org.openani.mediamp
 
 import androidx.annotation.UiThread
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import org.openani.mediamp.features.MediaMetadata
-import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
-import org.openani.mediamp.features.buildPlayerFeatures
-import org.openani.mediamp.metadata.AudioTrack
-import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.metadata.SubtitleTrack
-import org.openani.mediamp.metadata.TrackGroup
-import org.openani.mediamp.metadata.emptyTrackGroup
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.reflect.KClass
 
 /**
  * An extensible media player that plays [MediaData]s. Instances can be obtained from a [MediampPlayerFactory].

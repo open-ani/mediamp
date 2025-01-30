@@ -1,9 +1,9 @@
 #!/usr/bin/env kotlin
 
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2025 OpenAni and contributors.
  *
- * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
@@ -36,6 +36,8 @@
 
 
 import Secrets.GITHUB_REPOSITORY
+import Src_main.Arch
+import Src_main.OS
 import io.github.typesafegithub.workflows.actions.actions.Checkout
 import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
