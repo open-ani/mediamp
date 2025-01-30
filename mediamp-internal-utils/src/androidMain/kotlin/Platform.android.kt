@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.mpv
+package org.openani.mediamp.internal
 
 import android.os.Build
 

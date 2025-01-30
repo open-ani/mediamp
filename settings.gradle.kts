@@ -21,6 +21,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
 }
 
+include(":mediamp-internal-utils")
 include(":mediamp-api")
 include(":mediamp-compose")
 

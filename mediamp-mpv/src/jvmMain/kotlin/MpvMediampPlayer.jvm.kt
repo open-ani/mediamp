@@ -14,6 +14,8 @@ import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
+import org.openani.mediamp.internal.Platform
+import org.openani.mediamp.internal.currentPlatform
 import org.openani.mediamp.metadata.MediaProperties
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData

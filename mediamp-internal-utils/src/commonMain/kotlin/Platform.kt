@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-package org.openani.mediamp.mpv
+package org.openani.mediamp.internal
 
 sealed class Platform {
     abstract val name: String // don't change, it's actually an ID

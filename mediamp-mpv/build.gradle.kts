@@ -52,6 +52,7 @@ kotlin {
         commonMain {
             dependencies {
                 api(projects.mediampApi)
+                implementation(projects.mediampInternalUtils)
             }
         }
         getByName("jvmMain").dependencies { 
