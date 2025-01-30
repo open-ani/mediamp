@@ -89,23 +89,16 @@ fun main() = singleWindowApplication {
 
 ## License
 
-MediaMP is licensed under the GNU General Public License v3.0. You can find the full license text in
-the `LICENSE` file.
+MediaMP is mainly licensed under the Apache License version 2. However, depending on the license of
+transitive dependencies, the backend-specific implementations may have different licenses.
 
-```
-MediaMP
-Copyright (C) 2024  OpenAni and contributors
+A breakdown of the licenses:
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+- mediamp-exoplayer: Apache License 2.0 (Apache-v2)
+- mediamp-vlc: GNU GENERAL PUBLIC LICENSE Version 3 (GPLv3)
+- mediamp-mpv: Apache License 2.0
+- All other modules: Apache License 2.0
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+You can find the full license text of Apache-v2 in the `LICENSE` file from the root of the
+repository, and that of GPLv3 from `mediamp-vlc/LICENSE`.
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-```
