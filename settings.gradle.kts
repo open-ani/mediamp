@@ -33,8 +33,6 @@ include(":mediamp-exoplayer-compose")
 include(":mediamp-mpv")
 include(":mediamp-mpv-compose")
 
-include(":mediamp-gradle-plugin")
-
 include(":mediamp-test")
 include(":mediamp-api-test")
 
