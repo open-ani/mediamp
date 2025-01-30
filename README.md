@@ -1,6 +1,6 @@
 # MediaMP
 
-MediaMP is a Kotlin-first media player for Compose Multiplatform. It is an
+MediaMP is a media player for Compose Multiplatform. It is an
 wrapper over popular media player libraries like ExoPlayer on each platform.
 
 The goal is to provide both common and backend-specific features for `commonMain`, as
@@ -14,17 +14,17 @@ Supported targets and backends:
 | JVM on Windows | x86_64          | VLC            |
 |  JVM on macOS  | x86_64, AArch64 | VLC            |
 
-Platforms that are not listed above are not supported yet.
+Platforms that are not listed above are not supported yet. Feel free to file an issue if you need
+them.
+
+A unified MPV backend is in active development, and will be available soon.
 
 > [!WARNING]
 >
-> This is a work in progress. The following steps will not work for desktop JVMs.
+> **This is a work in progress.**
 >
-> We have a working implementation for the listed platforms
-> in [Animeko](https://github.com/open-ani/Animeko), and we are working on extracting the core media
-> player logic into this separate library.
->
-> We are also working on porting libmpv as a more robust and feature-rich backend than VLC.
+> No API/ABI guarantees are provided before `v0.1.0` release, but we would still like to hear your
+> feedback. Please open an issue if you have any suggestions or find any bugs.
 
 ## Installation
 
