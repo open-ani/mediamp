@@ -3,8 +3,10 @@
 MediaMP is a media player for Compose Multiplatform. It is an
 wrapper over popular media player libraries like ExoPlayer on each platform.
 
-The goal is to provide both common and backend-specific features for `commonMain`, as
-well as supporting direct access with the underlying media player library for advanced use cases.
+The goal is to provide a **unified** media player abstraction for
+`commonMain`, as
+well as supporting backend-specific features and direct access with the underlying media player
+library for advanced use cases.
 
 Supported targets and backends:
 
@@ -26,12 +28,55 @@ A unified MPV backend is in active development, and will be available soon.
 > No API/ABI guarantees are provided before `v0.1.0` release, but we would still like to hear your
 > feedback. Please open an issue if you have any suggestions or find any bugs.
 
-## Installation
+## Quick Installation
 
-Check the latest
-version: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)
+The latest
+version
+is: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)
 
-### 1. Add Version Catalogs
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+    }
+    versionCatalogs {
+        create("mediampLibs") {
+            from("org.openani.mediamp:catalog:0.0.4") // replace with the latest version
+        }
+    }
+}
+
+// build.gradle.kts
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation(mediampLibs.api) // Does not depend on Compose. Can be used in data/domain-layer
+        implementation(mediampLibs.compose) // In UI-layer
+    }
+    sourceSets.androidMain.dependencies {
+        implementation(mediampLibs.exoplayer) // To use ExoPlayer on Android
+
+        // If needed, include additional ExoPlayer libraries
+        implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
+        implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
+    }
+    sourceSets.jvmMain.dependencies {
+        // See below
+    }
+}
+```
+
+- Using VLC on desktop JVM: [mediamp-vlc/README.md](mediamp-vlc/README.md)
+
+Follow the detailed guide below if you need more information.
+
+## Detailed Installation
+
+The latest
+version
+is: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)
+
+### 1. Add Version Catalog
 
 In `settings.gradle.kts`, add:
 
@@ -48,27 +93,83 @@ dependencyResolutionManagement {
 }
 ```
 
-then reload the project in the IDE.
+After adding the version catalog, please re-sync the project in the IDE to get completion support
+for the catalog `mediampLibs`.
 
-### 2. Add Dependencies
+The catalog provides all the libraries you can use in your project:
 
-You will need to add the `libs.mediamp.api` to your data/domain layer,
-`libs.mediamp.compose` to your UI layer, and choose a backend for each target platform:
+- `mediampLibsLibs.api`: The common API for MediaMP. It does not depend on Compose, and thus can be
+  used in non-UI modules.
+- `mediampLibsLibs.compose`: Common Compose UI entrypoint like the `MediampPlayer` composable. It
+  does not work alone, and requires a backend.
+
+The catalog also provides accesses to backends.
+
+- `mediampLibsLibs.exoplayer`: ExoPlayer backend for Android.
+- `mediampLibsLibs.vlc`: VLC backend for JVM.
+
+### 2. Add API dependencies
+
+#### For multi-module apps
+
+For app that is architected in a multi-module way, i.e. with separate modules for data/domain and
+UI:
+
+- Add `mediampLibs.api` to the data/domain layer, and
+- Add `mediampLibs.compose` to the UI layer.
 
 ```kotlin
+// data-layer/build.gradle.kts
 kotlin {
     sourceSets.commonMain.dependencies {
-        implementation(libs.mediamp.api) // for data-layer, does not depend on Compose
-        implementation(libs.mediamp.compose) // for Compose UI
+        implementation(mediampLibs.api)
     }
-    sourceSets.androidMain.dependencies {
-        implementation(libs.mediamp.exoplayer)
-    }
-    sourceSets.jvmMain.dependencies { // Desktop JVM
-        implementation(libs.mediamp.vlc)
+}
+
+// ui-layer/build.gradle.kts
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation(mediampLibs.compose)
     }
 }
 ```
+
+#### For single-module apps
+
+For single-module apps, add both to the same module:
+
+```kotlin
+// app/build.gradle.kts
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation(mediampLibs.api)
+        implementation(mediampLibs.compose)
+    }
+}
+```
+
+### 3. Add Backend dependencies
+
+Mediamp supports different backends for different platforms.
+No backends are included by default, and a backend must be manually selected for each platform.
+The currently recommended backends are ExoPlayer for Android, and VLC for JVM.
+
+```kotlin
+kotlin {
+    sourceSets.androidMain.dependencies {
+        implementation(mediampLibs.exoplayer)
+
+        // If needed, include additional ExoPlayer libraries
+        implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
+        implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
+    }
+    sourceSets.jvmMain.dependencies { // Desktop JVM
+        // See below
+    }
+}
+```
+
+- Using VLC on desktop JVM: [mediamp-vlc/README.md](mediamp-vlc/README.md)
 
 ## Usage
 

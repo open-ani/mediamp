@@ -26,6 +26,7 @@ include(":mediamp-api")
 include(":mediamp-compose")
 
 include(":mediamp-vlc")
+include(":mediamp-vlc-loader")
 include(":mediamp-vlc-compose")
 include(":mediamp-exoplayer")
 include(":mediamp-exoplayer-compose")
