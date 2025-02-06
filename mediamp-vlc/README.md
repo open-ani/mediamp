@@ -21,23 +21,16 @@ Add the following to your `build.gradle.kts`:
 kotlin {
     sourceSets.jvmMain.dependencies { // desktop JVM only
         implementation(mediampLibs.vlc)
-        implementation(mediampLibs.vlc.loader) // Automatic library loading. Requires binaries, see below
+        implementation(mediampLibs.vlc.loader) // Automatically load the binaries configured as below
     }
 }
 ```
 
-The VLC backend requires the VLC binaries at runtime. Binaries must be prepared manually.
+The Mediamp VLC backend requires VLC binaries (e.g. `dll`s and `dylib`s) at runtime. Binaries must be prepared manually.
 
-We recommend shipping the VLC binaries with your application using the appResources from Compose
-Gradle plugin.
-
-### Official VLC binaries
-
-Mediamp only uses VLC as a library, and we don't provide prebuilt VLC binaries.
-VLC binaries can be downloaded from
-the [official website](https://www.videolan.org/vlc/).
-A well-tested VLC version is `3.0.20`. Please consider sticking to this version for the best
-compatibility.
+Mediamp do not provide prebuilt VLC binaries, so usually you will use official VLC binaries.
+We recommend shipping the VLC binaries along with your application using the appResources from Compose
+Gradle plugin. Please follow the remaining steps below.
 
 ### Automatic Library Loading (Recommended)
 
@@ -48,6 +41,12 @@ both development environment and distribution. To use this feature, follow these
    `$triple`
    must be exactly one of: `macos-x64`, `macos-arm64`, `windows-x64`, `windows-arm64`,
    `linux-arm64`, `linux-x64`.
+
+   VLC binaries can be downloaded from the [official website](https://www.videolan.org/vlc/).
+   
+   A well-tested VLC version is `3.0.20`.
+   Please consider sticking to this version for the best compatibility.
+
 2. So far, your file tree should look like this:
    ```
    desktopApp/
@@ -81,7 +80,8 @@ both development environment and distribution. To use this feature, follow these
    ```
    Compose automatically selects the correct directory (e.g. `windows-x64`) based on the platform
    you are building for.
-4. Now your app should work when packaged.
+4. Now your app should work when packaged (e.g., `./gradlew createReleaseDistributable`).
+
 
 To make it work also in the development environment, you can
 either:
