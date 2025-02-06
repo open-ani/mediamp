@@ -98,15 +98,15 @@ for the catalog `mediampLibs`.
 
 The catalog provides all the libraries you can use in your project:
 
-- `mediampLibsLibs.api`: The common API for MediaMP. It does not depend on Compose, and thus can be
+- `mediampLibs.api`: The common API for MediaMP. It does not depend on Compose, and thus can be
   used in non-UI modules.
-- `mediampLibsLibs.compose`: Common Compose UI entrypoint like the `MediampPlayer` composable. It
+- `mediampLibs.compose`: Common Compose UI entrypoint like the `MediampPlayer` composable. It
   does not work alone, and requires a backend.
 
 The catalog also provides accesses to backends.
 
-- `mediampLibsLibs.exoplayer`: ExoPlayer backend for Android.
-- `mediampLibsLibs.vlc`: VLC backend for JVM.
+- `mediampLibs.exoplayer`: ExoPlayer backend for Android.
+- `mediampLibs.vlc`: VLC backend for JVM.
 
 ### 2. Add API dependencies
 
