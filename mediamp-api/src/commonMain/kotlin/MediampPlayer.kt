@@ -19,13 +19,16 @@ import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
+import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.reflect.KClass
 
 /**
@@ -37,74 +40,6 @@ import kotlin.reflect.KClass
  *
  * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
  *
- * ## Lifecycle
- * 
- * MediampPlayer uses [PlaybackState] to represent the current state of the player.
- * 
- * MediampPlayer implementations (with VLC or MPV, or any others) are required to respect to the following state transition mechanism.
- * 
- * > Hint: You may toggle off doc rendering in IDE if diagram glitches
- * 
- * ```
- * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
- * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
- * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
- *       |            |           |            |            |          |            |             |
- *       |            |-----------+------------+----------->*<---------+------------+-------------|  setMediaData
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |----------+----------->|             |  resume
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |          |            |------------>|  (buffering) 
- *       |            |           |            |            |          |            |             |  seekTo/skip
- *       |            |           |            |            |          |            |             |  
- *       |            |           |            |            |          |            |<------------|  (buffer complete)
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |          |<-----------+-------------|  pause
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |<-----------+----------+------------+-------------|  stopPlayback
- *       |            |           |            |            |          |            |             |  (or playback finished)
- *       |            |           |            |            |          |            |             |
- *       |            |<----------+------------+------------+----------+------------+-------------|  (error)
- *       |            |           |            |            |          |            |             |
- *       |<-----------+-----------+------------+------------+----------+------------+-------------|  close
- *       |            |           |            |            |          |            |             |
- * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
- * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
- * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
- * 
- * ```
- * Calling the function labelled to the right of the diagram, at any state included in the path, 
- * will transform the state to the destination state pointed by arrow.
- * 
- * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
- * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
- *
- * ### Invalid calls are ignored
- *
- * Calls to any method while not at its state transformation path will be ignored.
- * 
- * For example, calling [stopPlayback] at state [FINISHED][PlaybackState.FINISHED], [CREATED][PlaybackState.CREATED], 
- * [ERROR][PlaybackState.ERROR] and [DESTROYED][PlaybackState.DESTROYED] will be ignored and take no effect.
- *
- * ### State transform directly to target state
- * 
- * Although each method has its transformation path, calling will not produce intermediate state.
- * 
- * For example, call [close] at [PLAYING][PlaybackState.PLAYING] will directly transform state to [DESTROYED][PlaybackState.DESTROYED].
- * Any state of `state >= ERROR && state <= PAUSED` will be emitted.
- *
- * ### [setMediaData] is special
- *
- * [setMediaData] has special transformation path. It will always transform state into [READY][PlaybackState.READY].
- * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED],
- * including [READY][PlaybackState.READY] itself.
- * 
- * ### Error can occurred at any time
- * 
- * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
- *
- * Error state has high priority. If an error occurred at background while calling a method, final state should be [ERROR][PlaybackState.ERROR].
- * 
  * ## Additional Features
  *
  * - [org.openani.mediamp.features.AudioLevelController]: Controls the audio volume and mute state.
@@ -119,7 +54,7 @@ import kotlin.reflect.KClass
  * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
  * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
  *
- * All methods in this interface are expected to be called from the **UI thread** on Android.
+ * All functions in this interface are expected to be called from the **UI thread** on Android.
  * Calls from illegal threads will cause an exception.
  *
  * On other platforms, calls are not required to be on the UI thread but should still be called from a single thread.
@@ -134,9 +69,6 @@ public interface MediampPlayer : AutoCloseable {
     /**
      * The underlying player implementation.
      * It can be cast to the actual player implementation to access additional features that are not yet ported by Mediamp.
-     * 
-     * *WARNING*: You should not access methods which may change playback state.
-     * Otherwise the state of [MediampPlayer] will be inconsistent with the actual state of the player, which will cause unexpected behaviours.
      *
      * Refer to platform-specific inheritor of [MediampPlayer] for the actual type of this property.
      */
@@ -148,9 +80,6 @@ public interface MediampPlayer : AutoCloseable {
      * States might be changed either by user interaction ([resume]) or by the player itself (e.g. decoder errors).
      *
      * To retrieve the current state without suspension, use [getCurrentPlaybackState].
-     * 
-     * `Implementation notes`: New state must be emitted only when the call to the delegated player finishes an transition. 
-     * For example, emit `PlaybackState.PLAYING` only if `ExoPlayer.resume()` succeeds.
      *
      * @see getCurrentPlaybackState
      */
@@ -313,12 +242,38 @@ public suspend fun MediampPlayer.playUri(uri: String): Unit =
  * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
  */
 public fun MediampPlayer.togglePause() {
-    val currentState = getCurrentPlaybackState()
-    if (currentState == PlaybackState.PLAYING) {
+    if (getCurrentPlaybackState().isPlaying) {
         pause()
-    } else if (currentState == PlaybackState.PAUSED) {
+    } else {
         resume()
     }
+}
+
+
+public enum class PlaybackState(
+    public val isPlaying: Boolean,
+) {
+    /**
+     * Player is loaded and will be playing as soon as metadata and first frame is available.
+     */
+    READY(isPlaying = false),
+
+    /**
+     * 用户主动暂停. buffer 继续充, 但是充好了也不要恢复 [PLAYING].
+     */
+    PAUSED(isPlaying = false),
+
+    PLAYING(isPlaying = true),
+
+    /**
+     * 播放中但因没 buffer 就暂停了. buffer 填充后恢复 [PLAYING].
+     */
+    PAUSED_BUFFERING(isPlaying = false),
+
+    FINISHED(isPlaying = false),
+
+    ERROR(isPlaying = false),
+    ;
 }
 
 /**
