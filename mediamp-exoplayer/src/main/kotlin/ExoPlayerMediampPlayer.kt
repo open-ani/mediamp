@@ -31,16 +31,12 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.trackselection.TrackSelection
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
@@ -76,186 +72,245 @@ import androidx.media3.common.Player as Media3Player
 class ExoPlayerMediampPlayer @UiThread constructor(
     context: Context,
     parentCoroutineContext: CoroutineContext,
-) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(Dispatchers.Default) {
-    
+) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(parentCoroutineContext) {
     class ExoPlayerData(
         mediaData: MediaData,
         releaseResource: () -> Unit,
-        val setMedia: () -> Unit,
+        val setMedia: suspend () -> Unit,
     ) : Data(mediaData, releaseResource)
 
-    private val backgroundScope: CoroutineScope = CoroutineScope(
-        parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
-    ).apply {
-        coroutineContext.job.invokeOnCompletion {
-            close()
+    override suspend fun startPlayer(data: ExoPlayerData) {
+        withContext(Dispatchers.Main.immediate) {
+            data.setMedia()
+            exoPlayer.prepare()
+            exoPlayer.play()
         }
     }
-    
-    private val trackSelector = object : DefaultTrackSelector(context) {
-        override fun selectTextTrack(
-            mappedTrackInfo: MappedTrackInfo,
-            rendererFormatSupports: Array<out Array<IntArray>>,
-            params: Parameters,
-            selectedAudioLanguage: String?
-        ): Pair<ExoTrackSelection.Definition, Int>? {
-            val preferred = mediaMetadataFeature.subtitleTracks.selected.value
-                ?: return super.selectTextTrack(
-                    mappedTrackInfo,
-                    rendererFormatSupports,
-                    params,
-                    selectedAudioLanguage,
-                )
 
-            infix fun SubtitleTrack.matches(group: TrackGroup): Boolean {
-                if (this.internalId == group.id) return true
-
-                if (this.labels.isEmpty()) return false
-                for (index in 0 until group.length) {
-                    val format = group.getFormat(index)
-                    if (format.labels.isEmpty()) {
-                        continue
-                    }
-                    if (this.labels.any { it.value == format.labels.first().value }) {
-                        return true
-                    }
-                }
-                return false
-            }
-
-            // 备注: 这个实现可能并不好, 他只是恰好能跑
-            for (rendererIndex in 0 until mappedTrackInfo.rendererCount) {
-                if (C.TRACK_TYPE_TEXT != mappedTrackInfo.getRendererType(rendererIndex)) continue
-
-                val groups = mappedTrackInfo.getTrackGroups(rendererIndex)
-                for (groupIndex in 0 until groups.length) {
-                    val trackGroup = groups[groupIndex]
-                    if (preferred matches trackGroup) {
-                        return Pair(
-                            ExoTrackSelection.Definition(
-                                trackGroup,
-                                IntArray(trackGroup.length) { it }, // 如果选择所有字幕会闪烁
-                                TrackSelection.TYPE_UNSET,
-                            ),
-                            rendererIndex,
+    override suspend fun setDataImpl(data: MediaData): ExoPlayerData = when (data) {
+        is UriMediaData -> {
+            ExoPlayerData(
+                data,
+                releaseResource = {
+                    data.close()
+                },
+                setMedia = {
+                    val headers = data.headers
+                    val item = MediaItem.Builder().apply {
+                        setUri(data.uri)
+                        setSubtitleConfigurations(
+                            data.extraFiles.subtitles.map {
+                                MediaItem.SubtitleConfiguration.Builder(
+                                    Uri.parse(it.uri),
+                                ).apply {
+                                    it.label?.let { label -> setLabel(label) }
+                                    it.mimeType?.let { mimeType -> setMimeType(mimeType) }
+                                    it.language?.let { language -> setLanguage(language) }
+                                }.build()
+                            },
+                        )
+                    }.build()
+                    withContext(Dispatchers.Main.immediate) {
+                        exoPlayer.setMediaSource(
+                            DefaultMediaSourceFactory(
+                                DefaultHttpDataSource.Factory()
+                                    .setUserAgent(
+                                        headers["User-Agent"]
+                                            ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
+                                    )
+                                    .setDefaultRequestProperties(headers)
+                                    .setConnectTimeoutMs(30_000),
+                            ).createMediaSource(item),
                         )
                     }
-                }
+                },
+            )
+        }
+
+        is SeekableInputMediaData -> {
+            val file = withContext(Dispatchers.IO) {
+                data.createInput()
             }
-            return super.selectTextTrack(
-                mappedTrackInfo,
-                rendererFormatSupports,
-                params,
-                selectedAudioLanguage,
+            val factory = ProgressiveMediaSource.Factory {
+                SeekableInputDataSource(data, file)
+            }
+
+            ExoPlayerData(
+                data,
+                releaseResource = {
+                    file.close()
+                    data.close()
+                },
+                setMedia = {
+                    exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(data.uri)))
+                },
             )
         }
     }
-    
-    private val mediaListener = object : Media3Player.Listener {
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            playbackState.value = PlaybackState.READY
-            buffering.isBuffering.value = false
-        }
 
-        override fun onTracksChanged(tracks: Tracks) {
-            val newSubtitleTracks =
-                tracks.groups.asSequence()
-                    .filter { it.type == C.TRACK_TYPE_TEXT }
-                    .flatMapIndexed { groupIndex: Int, group: Tracks.Group ->
-                        group.getSubtitleTracks()
+    private val exoPlayer: ExoPlayer = run {
+        ExoPlayer.Builder(context).apply {
+            setTrackSelector(
+                object : DefaultTrackSelector(context) {
+                    override fun selectTextTrack(
+                        mappedTrackInfo: MappedTrackInfo,
+                        rendererFormatSupports: Array<out Array<IntArray>>,
+                        params: Parameters,
+                        selectedAudioLanguage: String?
+                    ): Pair<ExoTrackSelection.Definition, Int>? {
+                        val preferred = mediaMetadataFeature.subtitleTracks.selected.value
+                            ?: return super.selectTextTrack(
+                                mappedTrackInfo,
+                                rendererFormatSupports,
+                                params,
+                                selectedAudioLanguage,
+                            )
+
+                        infix fun SubtitleTrack.matches(group: TrackGroup): Boolean {
+                            if (this.internalId == group.id) return true
+
+                            if (this.labels.isEmpty()) return false
+                            for (index in 0 until group.length) {
+                                val format = group.getFormat(index)
+                                if (format.labels.isEmpty()) {
+                                    continue
+                                }
+                                if (this.labels.any { it.value == format.labels.first().value }) {
+                                    return true
+                                }
+                            }
+                            return false
+                        }
+
+                        // 备注: 这个实现可能并不好, 他只是恰好能跑
+                        for (rendererIndex in 0 until mappedTrackInfo.rendererCount) {
+                            if (C.TRACK_TYPE_TEXT != mappedTrackInfo.getRendererType(rendererIndex)) continue
+
+                            val groups = mappedTrackInfo.getTrackGroups(rendererIndex)
+                            for (groupIndex in 0 until groups.length) {
+                                val trackGroup = groups[groupIndex]
+                                if (preferred matches trackGroup) {
+                                    return Pair(
+                                        ExoTrackSelection.Definition(
+                                            trackGroup,
+                                            IntArray(trackGroup.length) { it }, // 如果选择所有字幕会闪烁
+                                            TrackSelection.TYPE_UNSET,
+                                        ),
+                                        rendererIndex,
+                                    )
+                                }
+                            }
+                        }
+                        return super.selectTextTrack(
+                            mappedTrackInfo,
+                            rendererFormatSupports,
+                            params,
+                            selectedAudioLanguage,
+                        )
                     }
-                    .toList()
-            // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
-            if (newSubtitleTracks != mediaMetadataFeature.subtitleTracks.candidates.value) {
-                mediaMetadataFeature.subtitleTracks.candidates.value = newSubtitleTracks
-                mediaMetadataFeature.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
-            }
-
-            mediaMetadataFeature.audioTracks.candidates.value =
-                tracks.groups.asSequence()
-                    .filter { it.type == C.TRACK_TYPE_AUDIO }
-                    .flatMapIndexed { groupIndex: Int, group: Tracks.Group ->
-                        group.getAudioTracks()
-                    }
-                    .toList()
-        }
-
-        override fun onPlayerError(error: PlaybackException) {
-            playbackState.value = PlaybackState.ERROR
-            println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
-            error.printStackTrace()
-        }
-
-        override fun onVideoSizeChanged(videoSize: VideoSize) {
-            super.onVideoSizeChanged(videoSize)
-            updateVideoProperties()
-        }
-
-        @MainThread
-        private fun updateVideoProperties(): Boolean {
-            val video = exoPlayer.videoFormat ?: return false
-            val audio = exoPlayer.audioFormat ?: return false
-            val data = openResource.value?.mediaData ?: return false
-            val title = exoPlayer.mediaMetadata.title
-            val duration = exoPlayer.duration
-
-            // 注意, 要把所有 UI 属性全都读出来然后 captured 到 background -- ExoPlayer 所有属性都需要在主线程
-            mediaProperties.value = MediaProperties(
-                title = title?.toString(),
-                durationMillis = duration,
+                },
             )
-            return true
-        }
-
-        /**
-         * STATE_READY 会在当前帧缓冲结束时设置
-         *
-         * exoplayer 的 STATE_READY 是不符合 [PlaybackState.READY] 预期的，所以不能在这里设置
-         *
-         * [PlaybackState.READY] 会在 [onMediaItemTransition] 中设置
-         */
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            when (playbackState) {
-                Media3Player.STATE_BUFFERING -> {
-                    buffering.isBuffering.value = true
-                }
-
-                Media3Player.STATE_ENDED -> {
-                    this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.FINISHED
-                    buffering.isBuffering.value = false
-                }
-
-                Media3Player.STATE_READY -> {
-                    this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.READY
-                    buffering.isBuffering.value = false
-                }
-            }
-            updateVideoProperties()
-        }
-
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying) {
-                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PLAYING
-                buffering.isBuffering.value = false
-            } else {
-                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PAUSED
-            }
-        }
-
-        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
-            super.onPlaybackParametersChanged(playbackParameters)
-            playbackSpeed.valueFlow.value = playbackParameters.speed
-        }
-    }
-
-    private val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
-        .apply { setTrackSelector(trackSelector) }
-        .build()
-        .apply {
+        }.build().apply {
             playWhenReady = true
-            addListener(mediaListener)
+            addListener(
+                object : Media3Player.Listener {
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.READY
+                        buffering.isBuffering.value = false
+                    }
+
+                    override fun onTracksChanged(tracks: Tracks) {
+                        val newSubtitleTracks =
+                            tracks.groups.asSequence()
+                                .filter { it.type == C.TRACK_TYPE_TEXT }
+                                .flatMapIndexed { groupIndex: Int, group: Tracks.Group ->
+                                    group.getSubtitleTracks()
+                                }
+                                .toList()
+                        // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
+                        if (newSubtitleTracks != mediaMetadataFeature.subtitleTracks.candidates.value) {
+                            mediaMetadataFeature.subtitleTracks.candidates.value = newSubtitleTracks
+                            mediaMetadataFeature.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
+                        }
+
+                        mediaMetadataFeature.audioTracks.candidates.value =
+                            tracks.groups.asSequence()
+                                .filter { it.type == C.TRACK_TYPE_AUDIO }
+                                .flatMapIndexed { groupIndex: Int, group: Tracks.Group ->
+                                    group.getAudioTracks()
+                                }
+                                .toList()
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.ERROR
+                        println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
+                        error.printStackTrace()
+                    }
+
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        super.onVideoSizeChanged(videoSize)
+                        updateVideoProperties()
+                    }
+
+                    @MainThread
+                    private fun updateVideoProperties(): Boolean {
+                        val video = videoFormat ?: return false
+                        val audio = audioFormat ?: return false
+                        val data = openResource.value?.mediaData ?: return false
+                        val title = mediaMetadata.title
+                        val duration = duration
+
+                        // 注意, 要把所有 UI 属性全都读出来然后 captured 到 background -- ExoPlayer 所有属性都需要在主线程
+                        mediaProperties.value = MediaProperties(
+                            title = title?.toString(),
+                            durationMillis = duration,
+                        )
+                        return true
+                    }
+
+                    /**
+                     * STATE_READY 会在当前帧缓冲结束时设置
+                     *
+                     * exoplayer 的 STATE_READY 是不符合 [PlaybackState.READY] 预期的，所以不能在这里设置
+                     *
+                     * [PlaybackState.READY] 会在 [onMediaItemTransition] 中设置
+                     */
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        when (playbackState) {
+                            Media3Player.STATE_BUFFERING -> {
+                                buffering.isBuffering.value = true
+                            }
+
+                            Media3Player.STATE_ENDED -> {
+                                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.FINISHED
+                                buffering.isBuffering.value = false
+                            }
+
+                            Media3Player.STATE_READY -> {
+                                buffering.isBuffering.value = false
+                            }
+                        }
+                        updateVideoProperties()
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        if (isPlaying) {
+                            this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PLAYING
+                            buffering.isBuffering.value = false
+                        } else {
+                            this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PAUSED
+                        }
+                    }
+
+                    override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                        super.onPlaybackParametersChanged(playbackParameters)
+                        playbackSpeed.valueFlow.value = playbackParameters.speed
+                    }
+                },
+            )
         }
-    
+    }
     override val impl: ExoPlayer get() = exoPlayer
 
     override val mediaProperties = MutableStateFlow<MediaProperties?>(null)
@@ -286,7 +341,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             while (currentCoroutineContext().isActive) {
                 currentPositionMillis.value = exoPlayer.currentPosition
                 buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
-                delay(0.1.seconds) // 10 tps
+                delay(0.1.seconds) // 10 fps
             }
         }
         backgroundScope.launch(Dispatchers.Main) {
@@ -298,83 +353,6 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             }
         }
     }
-    
-    override suspend fun setMediaDataImpl(data: MediaData): ExoPlayerData = when (data) {
-        is UriMediaData -> {
-            val headers = data.headers
-            val item = MediaItem.Builder().apply {
-                setUri(data.uri)
-                setSubtitleConfigurations(
-                    data.extraFiles.subtitles.map {
-                        MediaItem.SubtitleConfiguration.Builder(
-                            Uri.parse(it.uri),
-                        ).apply {
-                            it.label?.let { label -> setLabel(label) }
-                            it.mimeType?.let { mimeType -> setMimeType(mimeType) }
-                            it.language?.let { language -> setLanguage(language) }
-                        }.build()
-                    },
-                )
-            }.build()
-            
-            ExoPlayerData(
-                data,
-                setMedia = {
-                    exoPlayer.setMediaSource(
-                        DefaultMediaSourceFactory(
-                            DefaultHttpDataSource.Factory()
-                                .setUserAgent(
-                                    headers["User-Agent"]
-                                        ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
-                                )
-                                .setDefaultRequestProperties(headers)
-                                .setConnectTimeoutMs(30_000),
-                        ).createMediaSource(item),
-                    )
-                },
-                releaseResource = {
-                    data.close()
-                },
-            )
-        }
-
-        is SeekableInputMediaData -> {
-            val file = withContext(Dispatchers.IO) {
-                data.createInput()
-            }
-            val factory = ProgressiveMediaSource.Factory {
-                SeekableInputDataSource(data, file)
-            }
-
-            ExoPlayerData(
-                data,
-                setMedia = {
-                    exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(data.uri)))
-                },
-                releaseResource = {
-                    file.close()
-                    data.close()
-                },
-            )
-        }
-    }
-
-    override fun resumeImpl() {
-        when (playbackState.value) {
-            PlaybackState.READY -> {
-                val media = openResource.value ?: return // TODO: log
-                
-                media.setMedia()
-                exoPlayer.prepare()
-                exoPlayer.play()
-            }
-            PlaybackState.PAUSED -> {
-                exoPlayer.playWhenReady = true
-                exoPlayer.play()
-            }
-            else -> { }
-        }
-    }
 
     override fun seekTo(positionMillis: Long) {
         currentPositionMillis.value = positionMillis
@@ -383,21 +361,14 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     override fun getCurrentPositionMillis(): Long = exoPlayer.currentPosition
 
-    override fun pauseImpl() {
+    override fun pause() {
         exoPlayer.playWhenReady = false
         exoPlayer.pause()
     }
 
-    override fun stopPlaybackImpl() {
-        exoPlayer.stop()
-        exoPlayer.clearMediaItems()
-        currentPositionMillis.value = 0
-    }
-
-
-    override fun closeImpl() {
-        exoPlayer.stop()
-        exoPlayer.release()
+    override fun resume() {
+        exoPlayer.playWhenReady = true
+        exoPlayer.play()
     }
 
     private fun Tracks.Group.getSubtitleTracks() = sequence {
@@ -430,6 +401,18 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                 ),
             )
         }
+    }
+
+    override fun stopPlaybackImpl() {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        currentPositionMillis.value = 0
+    }
+
+
+    override fun closeImpl() {
+        exoPlayer.stop()
+        exoPlayer.release()
     }
 }
 

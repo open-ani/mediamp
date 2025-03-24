@@ -33,9 +33,6 @@ include(":mediamp-exoplayer-compose")
 include(":mediamp-mpv")
 include(":mediamp-mpv-compose")
 
-include(":mediamp-test")
-include(":mediamp-api-test")
-
 //include(":mediamp-preview")
 include(":mediamp-source-ktxio")
 
