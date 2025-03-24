@@ -50,7 +50,7 @@ public class TestMediampPlayer(
 
     override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
 
-    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(10_000L)
+    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
     override fun getCurrentPositionMillis(): Long {
         return currentPositionMillis.value
     }
