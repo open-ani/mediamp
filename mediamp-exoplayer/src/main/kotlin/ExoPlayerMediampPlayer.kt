@@ -25,6 +25,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.FileDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -51,6 +52,7 @@ import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MutableTrackGroup
+import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
 import org.openani.mediamp.metadata.MediaProperties
@@ -128,21 +130,38 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
 
         is SeekableInputMediaData -> {
-            val file = withContext(Dispatchers.IO) {
-                data.createInput()
-            }
-            val factory = ProgressiveMediaSource.Factory {
-                SeekableInputDataSource(data, file)
-            }
-
+            var file: SeekableInput? = null
             ExoPlayerData(
                 data,
                 releaseResource = {
-                    file.close()
+                    file?.close()
                     data.close()
                 },
                 setMedia = {
-                    exoPlayer.setMediaSource(factory.createMediaSource(MediaItem.fromUri(data.uri)))
+                    if (data.uri.startsWith("file://")) {
+                        val factory = DefaultMediaSourceFactory {
+                            FileDataSource()
+                        }
+
+                        exoPlayer.setMediaSource(
+                            factory.createMediaSource(
+                                MediaItem.fromUri(data.uri),
+                            ),
+                        )
+                    } else {
+                        file = withContext(Dispatchers.IO) {
+                            data.createInput()
+                        }
+                        val factory = ProgressiveMediaSource.Factory {
+                            SeekableInputDataSource(data, file)
+                        }
+
+                        exoPlayer.setMediaSource(
+                            factory.createMediaSource(
+                                MediaItem.fromUri(data.uri),
+                            ),
+                        )
+                    }
                 },
             )
         }
