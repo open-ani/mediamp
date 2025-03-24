@@ -1,6 +1,6 @@
 [versions]
 gradle-maven-publish-plugin = "0.28.0"
-kotlin = "2.1.0"
+kotlin = "2.1.20"
 # kotlinx
 coroutines = "1.9.0" # https://github.com/Kotlin/kotlinx.coroutines/releases
 serialization = "1.7.3" # https://github.com/Kotlin/kotlinx.serialization/releases
@@ -11,9 +11,9 @@ kotlinx-collections-immutable = "0.3.8" # https://github.com/Kotlin/kotlinx.coll
 #
 jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
 
-android-gradle-plugin = "8.5.2"
+android-gradle-plugin = "8.9.1"
 androidx-annotation = "1.9.1"
-androidx-media3 = "1.4.1"
+androidx-media3 = "1.5.1"
 androidx-lifecycle = "2.8.7"
 
 junit4 = "4.13.2"
