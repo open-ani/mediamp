@@ -145,6 +145,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
 
+    @OptIn(ExperimentalMediampApi::class)
     override suspend fun setDataImpl(data: MediaData): VlcjData = when (data) {
         is UriMediaData -> {
             VlcjData(
@@ -178,7 +179,10 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     setPlay = {
                         val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
                         player.controls().stop()
-                        player.media().play(new)
+                        player.media().play(
+                            new,
+                            *data.options.toTypedArray(),
+                        )
                         lastMedia = new
                     },
                     releaseResource = {

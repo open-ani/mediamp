@@ -38,6 +38,7 @@ internal class SystemFileMediaDataImpl(
     override val file: Path,
     override val extraFiles: MediaExtraFiles,
     override val uri: String,
+    override val options: List<String>,
     private val bufferSize: Int = 8 * 1024,
 ) : SystemFileMediaData {
     @Throws(IOException::class)
@@ -58,11 +59,13 @@ internal class SystemFileMediaDataImpl(
 public fun SystemFileMediaData(
     path: Path,
     extraFiles: MediaExtraFiles = MediaExtraFiles.EMPTY,
+    options: List<String> = emptyList(),
 ): SystemFileMediaData {
     val resolve = SystemFileSystem.resolve(path)
     return SystemFileMediaDataImpl(
         path,
         extraFiles,
         uri = "file://$resolve",
+        options,
     )
 }

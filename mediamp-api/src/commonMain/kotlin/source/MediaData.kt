@@ -27,6 +27,14 @@ public sealed interface MediaData {
     public val extraFiles: MediaExtraFiles
 
     /**
+     * Raw options to pass to the player.
+     *
+     * Note that this is implementation-specific. Some implementations may ignore this.
+     */
+    @ExperimentalMediampApi
+    public val options: List<String>
+
+    /**
      * Closes any the underlying resources held by this media data, if any.
      * This method should be idempotent. Calling it multiple times should have no effect.
      *
