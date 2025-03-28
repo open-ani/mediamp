@@ -19,7 +19,7 @@ plugins {
 }
 
 kotlin {
-    jvmToolchain(8)
+    jvmToolchain(17)
 }
 
 val hostOS: OS by lazy {

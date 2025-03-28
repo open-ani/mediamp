@@ -14,6 +14,7 @@ plugins {
     id("com.android.library")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
+    `mpp-lib-targets`
 
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
@@ -22,19 +23,6 @@ description = "MediaMP backend using ExoPlayer"
 
 android {
     namespace = "org.openani.mediamp.exoplayer.compose"
-    compileSdk = property("android.compile.sdk").toString().toInt()
-    defaultConfig {
-        minSdk = getIntProperty("android.min.sdk")
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-}
-
-kotlin {
-    jvmToolchain(8)
 }
 
 dependencies {

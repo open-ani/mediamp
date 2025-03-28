@@ -35,14 +35,6 @@ description = "Compose integration for MediaMP"
 
 android {
     namespace = "org.openani.mediamp.compose"
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-}
-
-kotlin {
-    jvmToolchain(8)
 }
 
 kotlin {

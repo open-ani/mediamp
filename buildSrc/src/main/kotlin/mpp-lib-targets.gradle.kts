@@ -14,7 +14,11 @@ import org.jetbrains.compose.ComposePlugin
 import org.jetbrains.compose.ExperimentalComposeLibrary
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.HasConfigurableKotlinCompilerOptions
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinBaseExtension
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmCompilerOptions
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
@@ -55,9 +59,12 @@ kotlinMultiplatformExtension?.apply {
         // no x86
     }
     if (android != null) {
-        jvm("desktop")
+        jvm("desktop") {
+            configureJvmOptions()
+        }
         androidTarget {
             instrumentedTestVariant.sourceSetTree.set(KotlinSourceSetTree.instrumentedTest)
+            configureJvmOptions()
         }
 
         applyDefaultHierarchyTemplate {
@@ -74,7 +81,9 @@ kotlinMultiplatformExtension?.apply {
         }
 
     } else {
-        jvm()
+        jvm {
+            configureJvmOptions()
+        }
 
         applyDefaultHierarchyTemplate()
     }
@@ -120,13 +129,28 @@ kotlinMultiplatformExtension?.apply {
     }
 }
 
+fun HasConfigurableKotlinCompilerOptions<KotlinJvmCompilerOptions>.configureJvmOptions() {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_1_8)
+    }
+}
+
 (extensions.findByType<KotlinBaseExtension>() as? HasConfigurableKotlinCompilerOptions<*>)?.apply {
     compilerOptions {
         freeCompilerArgs.add("-Xexpect-actual-classes")
     }
 }
 
+extensions.findByType<KotlinJvmExtension>()?.apply {
+    configureJvmOptions()
+}
+
+extensions.findByType<KotlinAndroidExtension>()?.apply {
+    configureJvmOptions()
+}
+
 configure<KotlinBaseExtension> {
+    jvmToolchain(17)
     val androidTestExtVersion = versionCatalogs.named("libs").findVersion("androidx-test-ext-junit").get()
 
     when {
@@ -182,7 +206,7 @@ if (android != null) {
         }
     }
     if (composeExtension != null) {
-        tasks.named("generateComposeResClass") {
+        tasks.matching { it.name == "generateComposeResClass" }.all {
             dependsOn("generateResourceAccessorsForAndroidUnitTest")
         }
         tasks.withType(KotlinCompilationTask::class) {
@@ -213,6 +237,10 @@ if (android != null) {
             if (composeExtension != null) {
                 compose = true
             }
+        }
+        compileOptions {
+            sourceCompatibility = JavaVersion.VERSION_1_8
+            targetCompatibility = JavaVersion.VERSION_1_8
         }
     }
 }

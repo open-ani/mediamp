@@ -12,7 +12,6 @@ import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SonatypeHost
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 plugins {
@@ -38,13 +37,6 @@ val archs = buildList {
 }
 
 kotlin {
-    jvmToolchain(11)
-    androidTarget {
-        compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_1_8)
-        }
-    }
-
     sourceSets {
 //        androidMain {
 //            kotlin.srcDirs(listOf("gen/java"))
@@ -67,9 +59,7 @@ kotlin {
 
 android {
     namespace = "org.openani.mediamp.mpv"
-    compileSdk = property("android.compile.sdk").toString().toInt()
     defaultConfig {
-        minSdk = getIntProperty("android.min.sdk")
         ndk {
             // Specifies the ABI configurations of your native
             // libraries Gradle should build and package with your app.
@@ -91,10 +81,6 @@ android {
         cmake {
             path = projectDir.resolve("CMakeLists.txt")
         }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
     }
 }
 

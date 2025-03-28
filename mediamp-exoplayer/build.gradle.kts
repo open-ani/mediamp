@@ -21,19 +21,6 @@ description = "MediaMP backend using ExoPlayer"
 
 android {
     namespace = "org.openani.mediamp.exoplayer"
-    compileSdk = property("android.compile.sdk").toString().toInt()
-    defaultConfig {
-        minSdk = getIntProperty("android.min.sdk")
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-}
-
-kotlin {
-    jvmToolchain(8)
 }
 
 dependencies {

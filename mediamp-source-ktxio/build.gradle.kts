@@ -21,16 +21,7 @@ description = "MediaMP data source implementation for Kotlinx IO"
 
 android {
     namespace = "org.openani.mediamp.source.ktxio"
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
 }
-
-kotlin {
-    jvmToolchain(8)
-}
-
 
 kotlin {
     explicitApi()

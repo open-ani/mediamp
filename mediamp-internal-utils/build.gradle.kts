@@ -23,14 +23,9 @@ description = "MediaMP Internal Utils"
 
 android {
     namespace = "org.openani.mediamp.internal.utils"
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
 }
 
 kotlin {
-    jvmToolchain(8)
     sourceSets {
         commonMain.dependencies {
         }

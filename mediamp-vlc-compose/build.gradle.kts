@@ -15,6 +15,7 @@ plugins {
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
+    `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
@@ -24,10 +25,6 @@ dependencies {
     api(projects.mediampApi)
     api(projects.mediampCompose)
     api(projects.mediampVlc)
-}
-
-kotlin {
-    jvmToolchain(8)
 }
 
 mavenPublishing {
