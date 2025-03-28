@@ -58,9 +58,6 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.compose.ui.tooling.preview)
             implementation(libs.androidx.compose.ui.tooling)
-            implementation(libs.compose.material3.adaptive.core.get().toString()) {
-                exclude("androidx.window.core", "window-core")
-            }
             implementation(libs.androidx.media3.ui)
             implementation(libs.androidx.media3.exoplayer)
             implementation(libs.androidx.media3.exoplayer.dash)
