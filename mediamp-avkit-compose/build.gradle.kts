@@ -12,6 +12,8 @@ import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     kotlin("multiplatform")
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
@@ -19,23 +21,14 @@ plugins {
 description = "MediaMP backend using Apple AVKit"
 
 dependencies {
-    commonMainApi(projects.mediampApi)
+    commonMainApi(projects.mediampAvkit)
+    commonMainApi(projects.mediampCompose)
 }
 
 kotlin {
     iosArm64()
     iosSimulatorArm64()
     explicitApi()
-
-    listOf(
-        iosArm64(),
-        iosSimulatorArm64(),
-    ).forEach { target ->
-        target.compilations.getByName("main") {
-            // The default file path is src/nativeInterop/cinterop/<interop-name>.def
-            val nskeyvalueobserving by cinterops.creating
-        }
-    }
 }
 
 mavenPublishing {

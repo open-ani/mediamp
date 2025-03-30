@@ -439,3 +439,13 @@ private inline fun <T : NSObject> T.observeValue(
     )
     return observer
 }
+
+///////////////////////////////////////////////////////////////////////////
+// Compatibility, remove when the new state design is merged.
+///////////////////////////////////////////////////////////////////////////
+
+private val PlaybackState.Companion.CREATED
+    get() = PlaybackState.READY
+
+private val PlaybackState.Companion.DESTROYED
+    get() = PlaybackState.FINISHED
