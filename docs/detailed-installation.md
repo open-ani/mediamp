@@ -45,7 +45,7 @@ kotlin {
 }
 ```
 
-- Shipping VLC binaries: [mediamp-vlc/README.md](mediamp-vlc/README.md)
+- Shipping VLC binaries: [mediamp-vlc/README.md](../mediamp-vlc/README.md)
 
 Follow the detailed guide below if you need more information.
 
