@@ -53,12 +53,12 @@ import platform.AVFoundation.seekToTime
 import platform.AVFoundation.timeControlStatus
 import platform.Foundation.NSKeyValueChangeNewKey
 import platform.Foundation.NSKeyValueObservingOptionNew
+import platform.Foundation.NSKeyValueObservingProtocol
 import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSURL.Companion.URLWithString
 import platform.Foundation.addObserver
 import platform.Foundation.removeObserver
 import platform.darwin.NSObject
-import platform.foundation.NSKeyValueObservingProtocol
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 

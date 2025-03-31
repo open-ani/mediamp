@@ -1,4 +1,4 @@
-package = platform.foundation
+package = platform.Foundation
 language = Objective-C
 
 ---
