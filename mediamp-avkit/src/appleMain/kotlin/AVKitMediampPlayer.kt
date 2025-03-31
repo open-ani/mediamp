@@ -172,7 +172,7 @@ public class AVKitMediampPlayer : MediampPlayer {
             }
 
             // Observe its status
-            playerItemStatusObserver = playerItem.observeValue(
+            playerItemStatusObserver = impl.observeValue(
                 keyPath = "status",
             ) {
                 when (impl.status) {
