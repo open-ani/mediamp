@@ -35,10 +35,6 @@ A unified MPV backend is in active development, and will be available soon.
 The latest version
 is: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)](https://img.shields.io/maven-central/v/org.openani.mediamp/mediamp-api)
 
-> [!TIP]
-> For multi-module projects, consider detailed
-> installation: [Detailed Installation](docs/detailed-installation.md).
-
 ### Version Catalogs
 
 ```toml
@@ -68,7 +64,9 @@ The `-all` bundle includes:
 > The VLC backend requires VLC to be installed on the user's OS.
 > See [mediamp-vlc/README.md](mediamp-vlc/README.md) for shipping VLC binaries with your app.
 
-> [!WARN]
+> [!WARNING]
+> **Compatibility Warning**
+>
 > `-all` bundle exposes transitive dependencies to recommend backends.
 > If, in the future, we develop new backend and believe it's a better choice, the `-all` may be
 > updated to the new backend. This should generally be fine unless your app accesses
@@ -82,6 +80,10 @@ dependencies {
     commonMainApi("org.openani.mediamp:mediamp-all:0.0.23")
 }
 ```
+
+> [!TIP]
+> For multi-module projects, consider detailed
+> installation: [Detailed Installation](docs/detailed-installation.md).
 
 ## Usage
 
