@@ -21,20 +21,37 @@ Add the following to your `build.gradle.kts`:
 kotlin {
     sourceSets.jvmMain.dependencies { // desktop JVM only
         implementation(mediampLibs.vlc)
+        implementation(mediampLibs.vlc.compose)
+    }
+}
+```
+
+The Mediamp VLC backend requires VLC binaries (e.g. `dll`s and `dylib`s) at runtime.
+
+The above configuration will work only if the users have VLC installed on their systems (and
+hopefully at a common location so that automatic lookup works).
+However, that's not always the case. You may want to ship the VLC binaries along with your app.
+
+## Shipping VLC binaries with your app
+
+```kotlin
+kotlin {
+    sourceSets.jvmMain.dependencies { // desktop JVM only
+        implementation(mediampLibs.vlc)
+        implementation(mediampLibs.vlc.compose)
         implementation(mediampLibs.vlc.loader) // Automatically load the binaries configured as below
     }
 }
 ```
 
-The Mediamp VLC backend requires VLC binaries (e.g. `dll`s and `dylib`s) at runtime. Binaries must be prepared manually.
-
 Mediamp do not provide prebuilt VLC binaries, so usually you will use official VLC binaries.
-We recommend shipping the VLC binaries along with your application using the appResources from Compose
+We recommend shipping the VLC binaries along with your application using the `appResources` from
+Compose
 Gradle plugin. Please follow the remaining steps below.
 
-### Automatic Library Loading (Recommended)
+### Automatic Library Loading (Recommended) with Compose Gradle Plugin
 
-Mediamp VLC loader supports automatic loading of VLC binaries from the appResources directory for
+Mediamp VLC loader supports automatic loading of VLC binaries from the `appResources` directory for
 both development environment and distribution. To use this feature, follow these steps:
 
 1. Download VLC pre-built binaries for **each platform separately** into `appResources/$triple/`.
@@ -43,9 +60,9 @@ both development environment and distribution. To use this feature, follow these
    `linux-arm64`, `linux-x64`.
 
    VLC binaries can be downloaded from the [official website](https://www.videolan.org/vlc/).
-   
+
    A well-tested VLC version is `3.0.20`.
-   Please consider sticking to this version for the best compatibility.
+   We strongly recommend sticking to this version for the best compatibility.
 
 2. So far, your file tree should look like this:
    ```
@@ -65,6 +82,9 @@ both development environment and distribution. To use this feature, follow these
     |  |  |- lib/
     |  |  |  |- libvlc.dll
     |  |  |  |- plugins/
+    |  |- linux-x64/
+    |  |  |- lib/
+    |  |  |  |- libvlc.so
     |- src/
     |- build.gradle.kts
    ```
@@ -80,10 +100,13 @@ both development environment and distribution. To use this feature, follow these
    ```
    Compose automatically selects the correct directory (e.g. `windows-x64`) based on the platform
    you are building for.
-4. Now your app should work when packaged (e.g., `./gradlew createReleaseDistributable`).
+4. Now your app should work (if and only if) it is packaged (e.g.,
+   `./gradlew createReleaseDistributable`).
 
+#### Development Runs
 
-To make it work also in the development environment, you can
+To make it work also in the development environment,
+you can
 either:
 
 - Set the `compose.application.resources.dir` system property to the `appResources`

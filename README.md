@@ -15,6 +15,8 @@ Supported targets and backends:
 |    Android     | Any             | ExoPlayer      |
 | JVM on Windows | x86_64          | VLC            |
 |  JVM on macOS  | x86_64, AArch64 | VLC            |
+|  JVM on Linux  | x86_64          | VLC            |
+|      iOS       | AArch64         | AVKit          |
 
 Platforms that are not listed above are not supported yet. Feel free to file an issue if you need
 them.
@@ -42,7 +44,7 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         create("mediampLibs") {
-            from("org.openani.mediamp:catalog:0.0.4") // replace with the latest version
+            from("org.openani.mediamp:catalog:0.0.22") // replace with the latest version
         }
     }
 }
@@ -54,19 +56,26 @@ kotlin {
         implementation(mediampLibs.compose) // In UI-layer
     }
     sourceSets.androidMain.dependencies {
-        implementation(mediampLibs.exoplayer) // To use ExoPlayer on Android
+        implementation(mediampLibs.exoplayer)
+        implementation(mediampLibs.exoplayer.compose)
 
-        // If needed, include additional ExoPlayer libraries
+        // If needed, include additional ExoPlayer libraries for streaming. No configuration required.
         implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
         implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     }
     sourceSets.jvmMain.dependencies {
-        // See below
+        implementation(mediampLibs.vlc)
+        implementation(mediampLibs.vlc.compose)
+        // VLC must be installed on user OS. See below for shipping VLC binaries with your app.
+    }
+    sourceSets.iosMain.dependencies {
+        implementation(mediampLibs.avkit)
+        implementation(mediampLibs.avkit.compose)
     }
 }
 ```
 
-- Using VLC on desktop JVM: [mediamp-vlc/README.md](mediamp-vlc/README.md)
+- Shipping VLC binaries: [mediamp-vlc/README.md](mediamp-vlc/README.md)
 
 Follow the detailed guide below if you need more information.
 
@@ -87,7 +96,7 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         create("mediampLibs") {
-            from("org.openani.mediamp:catalog:0.0.4") // replace with the latest version
+            from("org.openani.mediamp:catalog:0.0.22") // replace with the latest version
         }
     }
 }
@@ -102,18 +111,19 @@ The catalog provides all the libraries you can use in your project:
   used in non-UI modules.
 - `mediampLibs.compose`: Common Compose UI entrypoint like the `MediampPlayer` composable. It
   does not work alone, and requires a backend.
-
-The catalog also provides accesses to backends.
-
 - `mediampLibs.exoplayer`: ExoPlayer backend for Android.
+- `mediampLibs.exoplayer.compose`: Compose support for ExoPlayer
 - `mediampLibs.vlc`: VLC backend for JVM.
+- `mediampLibs.vlc.compose`: Compose support for VLC.
+- `mediampLibs.avkit`: AVKit backend for iOS.
+- `mediampLibs.avkit.compose`: Compose support for AVKit.
 
 ### 2. Add API dependencies
 
 #### For multi-module apps
 
-For app that is architected in a multi-module way, i.e. with separate modules for data/domain and
-UI:
+For apps that are architected in a multi-module way, i.e. with separate modules for data/domain and
+UI, you may:
 
 - Add `mediampLibs.api` to the data/domain layer, and
 - Add `mediampLibs.compose` to the UI layer.
@@ -159,12 +169,18 @@ kotlin {
     sourceSets.androidMain.dependencies {
         implementation(mediampLibs.exoplayer)
 
-        // If needed, include additional ExoPlayer libraries
+        // If needed, include additional ExoPlayer libraries for streaming. No configuration required.
         implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
         implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     }
     sourceSets.jvmMain.dependencies { // Desktop JVM
-        // See below
+        implementation(mediampLibs.vlc)
+        implementation(mediampLibs.vlc.compose)
+        // VLC must be installed on user OS. See below for shipping VLC binaries with your app.
+    }
+    sourceSets.iosMain.dependencies {
+        implementation(mediampLibs.avkit)
+        implementation(mediampLibs.avkit.compose)
     }
 }
 ```
@@ -178,7 +194,7 @@ fun main() = singleWindowApplication {
     val player = rememberMediampPlayer()
     Column {
         Button(onClick = {
-            player.playUrl("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4")
+            player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4")
         }) {
             Text("Play")
         }
