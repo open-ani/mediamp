@@ -323,7 +323,7 @@ public class AVKitMediampPlayer : MediampPlayer {
     // ------------------------------------------------------------------------------------
     private fun removePlayerItemObservers() {
         playerItemStatusObserver?.let {
-            impl.removeObserver(it, forKeyPath = "status")
+            lastPlayerItem?.removeObserver(it, forKeyPath = "status")
         }
         playerItemStatusObserver = null
         lastPlayerItem = null
