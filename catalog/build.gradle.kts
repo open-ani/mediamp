@@ -32,6 +32,7 @@ catalog {
         library("mediamp-avkit", group, "mediamp-avkit").versionRef("mediamp")
         library("mediamp-avkit-compose", group, "mediamp-avkit-compose").versionRef("mediamp")
         library("mediamp-test", group, "mediamp-test").versionRef("mediamp")
+        library("mediamp-all", group, "mediamp-all").versionRef("mediamp")
 
         library("mediamp-api", group, "mediamp-api").versionRef("mediamp")
         library("mediamp-compose", group, "mediamp-compose").versionRef("mediamp")

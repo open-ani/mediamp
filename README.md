@@ -125,6 +125,44 @@ Column {
 }
 ```
 
+### Unit Testing
+
+> [!NOTE]
+> The unit testing API is **experimental** and will be changed in the future. Use at your own risk.
+
+Add dependency:
+
+```toml
+[libraries]
+mediamp-test = { module = "org.openani.mediamp:mediamp-test", version.ref = "mediamp" }
+```
+
+```kotlin
+dependencies {
+    commonTestApi(libs.mediamp.source.ktxio)
+}
+```
+
+A mock player `TestMediampPlayer` is provided for unit testing.
+It implements all the features and follow the same specification (e.g. state transitions) as the
+real
+player.
+
+```kotlin
+import kotlinx.coroutines.test.runTest
+
+class MyTest {
+    private val player = TestMediampPlayer()
+
+    fun test() = runTest {
+        player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4") // Will not actually make network requests
+        player.currentPositionMillis.value = 1000L // Move playback position to 1s
+
+        assertEquals(PlaybackState.PLAYING, player.getCurrentPlaybackState())
+    }
+}
+```
+
 ## Advanced Usages
 
 ### Custom Media Data
@@ -151,6 +189,21 @@ fun main() = singleWindowApplication {
 fun createMediaData(): SeekableInputMediaData {
     // Implement SeekableInputMediaData. 
     // It's like implementing a kotlinx-io Input with random-access seeking.
+}
+```
+
+If you use kotlinx-io, you might consider the `BufferedSeekableInput` provided by
+`mediamp-source-ktxio` in helping the
+custom implementation of I/O operations:
+
+```toml
+[libraries]
+mediamp-source-ktxio = { module = "org.openani.mediamp:mediamp-source-ktxio", version.ref = "mediamp" }
+```
+
+```kotlin
+dependencies {
+    commonMainApi(libs.mediamp.source.ktxio)
 }
 ```
 
