@@ -9,9 +9,9 @@
 package org.openani.mediamp.features
 
 /**
- * An optional feature of the [org.openani.mediamp.core.MediampPlayer].
+ * An optional feature of the [org.openani.mediamp.MediampPlayer].
  *
- * Instances can be obtained using [PlayerFeatures.get] from the [org.openani.mediamp.core.MediampPlayer.features].
+ * Instances can be obtained using [PlayerFeatures.get] from the [org.openani.mediamp.MediampPlayer.features].
  */
 public interface Feature
 

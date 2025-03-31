@@ -31,6 +31,8 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
  * 如果开了 android, 就会配置 desktop + android, 否则只配置 jvm.
  */
 
+val enableJvmTarget = project.findProperty("mediamp.jvm.target")?.toString()?.toBooleanStrict() ?: true
+
 val android = extensions.findByType(LibraryExtension::class)
 val composeExtension = extensions.findByType(ComposeExtension::class)
 
@@ -59,8 +61,10 @@ kotlinMultiplatformExtension?.apply {
         // no x86
     }
     if (android != null) {
-        jvm("desktop") {
-            configureJvmOptions()
+        if (enableJvmTarget) {
+            jvm("desktop") {
+                configureJvmOptions()
+            }
         }
         androidTarget {
             instrumentedTestVariant.sourceSetTree.set(KotlinSourceSetTree.instrumentedTest)
@@ -81,8 +85,10 @@ kotlinMultiplatformExtension?.apply {
         }
 
     } else {
-        jvm {
-            configureJvmOptions()
+        if (enableJvmTarget) {
+            jvm {
+                configureJvmOptions()
+            }
         }
 
         applyDefaultHierarchyTemplate()
@@ -109,22 +115,22 @@ kotlinMultiplatformExtension?.apply {
         }
     }
 
-    if (composeExtension != null) {
+    if (composeExtension != null && enableJvmTarget) {
         sourceSets.getByName("desktopMain").dependencies {
             val compose = ComposePlugin.Dependencies(project)
             implementation(compose.desktop.uiTestJUnit4)
         }
     }
 
-    if (project.findProperty("mediamp.enable.ios")?.toString()?.toBoolean() != false) {
+    if (project.findProperty("mediamp.ios.target")?.toString()?.toBoolean() != false) {
         // ios testing workaround
         // https://developer.squareup.com/blog/kotlin-multiplatform-shared-test-resources/
-        tasks.register<Copy>("copyiOSTestResources") {
+        val copyiOSTestResources = tasks.register<Copy>("copyiOSTestResources") {
             from("src/commonTest/resources")
             into("build/bin/iosSimulatorArm64/debugTest/resources")
         }
         tasks.named("iosSimulatorArm64Test") {
-            dependsOn("copyiOSTestResources")
+            dependsOn(copyiOSTestResources)
         }
     }
 }

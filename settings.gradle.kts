@@ -35,6 +35,8 @@ include(":mediamp-mpv-compose")
 include(":mediamp-avkit")
 include(":mediamp-avkit-compose")
 
+include(":mediamp-all")
+
 //include(":mediamp-preview")
 include(":mediamp-source-ktxio")
 

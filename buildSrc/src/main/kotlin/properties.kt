@@ -41,4 +41,4 @@ fun Project.getLocalProperty(key: String): String? {
 fun Project.getIntProperty(name: String) = getProperty(name).toInt()
 
 val Project.enableIos
-    get() = getPropertyOrNull("mediamp.enable.ios")?.toBooleanStrict() ?: true
+    get() = getPropertyOrNull("mediamp.ios.target")?.toBooleanStrict() ?: true

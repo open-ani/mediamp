@@ -13,6 +13,7 @@ import com.vanniktech.maven.publish.SonatypeHost
 plugins {
     kotlin("multiplatform")
 
+    `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
