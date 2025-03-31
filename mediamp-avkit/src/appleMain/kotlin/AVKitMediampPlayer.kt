@@ -125,6 +125,7 @@ public class AVKitMediampPlayer : MediampPlayer {
 
     // KVO Observations
     private var timeControlStatusObserver: NSObject? = null
+    private var lastPlayerItem: AVPlayerItem? = null
     private var playerItemStatusObserver: NSObject? = null
 
     private val notificationCenter = NSNotificationCenter.defaultCenter
@@ -172,7 +173,8 @@ public class AVKitMediampPlayer : MediampPlayer {
             }
 
             // Observe its status
-            playerItemStatusObserver = impl.observeValue(
+            lastPlayerItem = playerItem
+            playerItemStatusObserver = playerItem.observeValue(
                 keyPath = "status",
             ) {
                 when (impl.status) {
@@ -324,6 +326,7 @@ public class AVKitMediampPlayer : MediampPlayer {
             impl.removeObserver(it, forKeyPath = "status")
         }
         playerItemStatusObserver = null
+        lastPlayerItem = null
 
         timeControlStatusObserver?.let {
             impl.removeObserver(it, forKeyPath = "timeControlStatus")
