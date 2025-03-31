@@ -67,10 +67,10 @@ The `-all` bundle includes:
 > [!WARNING]
 > **Compatibility Warning**
 >
-> `-all` bundle exposes transitive dependencies to recommend backends.
-> If, in the future, we develop new backend and believe it's a better choice, the `-all` may be
+> `-all` bundle exposes transitive dependencies on recommend backends.
+> If, in the future, we develop a new backend and believe it is a better choice, the `-all` may be
 > updated to the new backend. This should generally be fine unless your app accesses
-> low-level APIs. Be mindful of this when using `-all` bundle.
+> low-level APIs. Be mindful of this when updating `-all` bundles to newer versions.
 
 ### One-liner
 
