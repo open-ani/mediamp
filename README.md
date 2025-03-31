@@ -141,7 +141,7 @@ mediamp-test = { module = "org.openani.mediamp:mediamp-test", version.ref = "med
 
 ```kotlin
 dependencies {
-    commonTestApi(libs.mediamp.source.ktxio)
+    commonTestApi(libs.mediamp.test)
 }
 ```
 
