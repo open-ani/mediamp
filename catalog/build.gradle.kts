@@ -29,6 +29,8 @@ catalog {
         library("mediamp-mpv-compose", group, "mediamp-mpv-compose").versionRef("mediamp")
         library("mediamp-vlc", group, "mediamp-vlc").versionRef("mediamp")
         library("mediamp-vlc-compose", group, "mediamp-vlc-compose").versionRef("mediamp")
+        library("mediamp-avkit", group, "mediamp-avkit").versionRef("mediamp")
+        library("mediamp-avkit-compose", group, "mediamp-avkit-compose").versionRef("mediamp")
         library("mediamp-test", group, "mediamp-test").versionRef("mediamp")
 
         library("mediamp-api", group, "mediamp-api").versionRef("mediamp")

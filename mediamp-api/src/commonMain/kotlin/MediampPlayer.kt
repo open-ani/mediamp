@@ -275,6 +275,9 @@ public enum class PlaybackState(
 
     ERROR(isPlaying = false),
     ;
+
+    // TODO: This is internal for AVKitMediampPlayer. Remove when the new state design has been merged.
+    public companion object
 }
 
 /**

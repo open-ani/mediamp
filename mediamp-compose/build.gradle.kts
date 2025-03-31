@@ -65,6 +65,9 @@ kotlin {
             implementation(libs.jna)
             implementation(libs.jna.platform)
         }
+        iosMain.dependencies {
+            implementation(projects.mediampInternalUtils)
+        }
     }
     androidTarget {
         publishLibraryVariants("release")

@@ -44,6 +44,7 @@ kotlin {
         }
         iosMain.dependencies {
             implementation(libs.androidx.annotation)
+            implementation(projects.mediampInternalUtils)
         }
         androidMain.dependencies {
             api(libs.androidx.annotation)
