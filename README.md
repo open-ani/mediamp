@@ -1,6 +1,6 @@
 # MediaMP
 
-MediaMP is a media player for Compose Multiplatform. It is an
+MediaMP is a media player for Compose Multiplatform. It is a
 wrapper over popular media player libraries like ExoPlayer on each platform.
 
 The goal is to provide a **unified** media player abstraction for
