@@ -145,6 +145,11 @@ extensions.findByType<KotlinJvmExtension>()?.apply {
     configureJvmOptions()
 }
 
+extensions.findByType<JavaPluginExtension>()?.apply {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
 extensions.findByType<KotlinAndroidExtension>()?.apply {
     configureJvmOptions()
 }
