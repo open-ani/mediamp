@@ -21,7 +21,7 @@ public class AVKitMediampPlayerFactory : MediampPlayerFactory<AVKitMediampPlayer
         parentCoroutineContext: CoroutineContext
     ): AVKitMediampPlayer {
         // TODO: 2025/3/30 use parentCoroutineContext
-        return AVKitMediampPlayer()
+        return AVKitMediampPlayer(parentCoroutineContext)
     }
 }
 

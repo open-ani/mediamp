@@ -13,7 +13,9 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -59,11 +61,15 @@ import platform.Foundation.NSURL.Companion.URLWithString
 import platform.Foundation.addObserver
 import platform.Foundation.removeObserver
 import platform.darwin.NSObject
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 @OptIn(InternalForInheritanceMediampApi::class, ExperimentalForeignApi::class)
-public class AVKitMediampPlayer : MediampPlayer {
+public class AVKitMediampPlayer(
+    parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
+) : MediampPlayer {
 
     /**
      * The underlying [AVPlayer].
@@ -120,8 +126,8 @@ public class AVKitMediampPlayer : MediampPlayer {
     // ------------------------------------------------------------------------------------
 
     // Holds the job we use for updating position, plus watchers. We cancel them all in [close].
-    private val supervisor = SupervisorJob()
-    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default + supervisor)
+    private val coroutineScope: CoroutineScope =
+        CoroutineScope(Dispatchers.Main + SupervisorJob(parentCoroutineContext[Job]))
 
     // KVO Observations
     private var timeControlStatusObserver: NSObject? = null
@@ -312,10 +318,16 @@ public class AVKitMediampPlayer : MediampPlayer {
         _playbackState.value = PlaybackState.DESTROYED
         stopPlayback() // stop / free any item
         removePlayerItemObservers()
+
+        timeControlStatusObserver?.let {
+            impl.removeObserver(it, forKeyPath = "timeControlStatus")
+        }
+        timeControlStatusObserver = null
+
         // free the player
         impl.pause()
         // Cancel coroutines
-        supervisor.cancel()
+        coroutineScope.cancel()
     }
 
     // ------------------------------------------------------------------------------------
@@ -327,11 +339,6 @@ public class AVKitMediampPlayer : MediampPlayer {
         }
         playerItemStatusObserver = null
         lastPlayerItem = null
-
-        timeControlStatusObserver?.let {
-            impl.removeObserver(it, forKeyPath = "timeControlStatus")
-        }
-        timeControlStatusObserver = null
 
         didPlayToEndObserver?.let {
             notificationCenter.removeObserver(it)
@@ -349,12 +356,14 @@ public class AVKitMediampPlayer : MediampPlayer {
     @OptIn(ExperimentalMediampApi::class)
     private fun updatePlaybackStateFromTimeControlStatus(player: AVPlayer) {
         when (player.timeControlStatus) {
-            AVPlayerTimeControlStatusPlaying -> {
+            // 2
+            AVPlayerTimeControlStatusPlaying -> {   
                 // If we haven't reached READY yet, interpret this as we are now PLAYING
                 _playbackState.value = PlaybackState.PLAYING
                 bufferingFeature.isBuffering.value = false
             }
 
+            // 0
             AVPlayerTimeControlStatusPaused -> {
                 // Could be paused or not started. 
                 // If we are not yet READY, do not set to PAUSED. 
@@ -364,6 +373,7 @@ public class AVKitMediampPlayer : MediampPlayer {
                 bufferingFeature.isBuffering.value = false
             }
 
+            // 1
             AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate -> {
                 // iOS is waiting => buffering
                 if (_playbackState.value >= PlaybackState.READY) {
