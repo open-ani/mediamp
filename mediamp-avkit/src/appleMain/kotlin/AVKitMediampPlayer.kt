@@ -70,11 +70,6 @@ import kotlin.time.Duration.Companion.seconds
 public class AVKitMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
 ) : MediampPlayer {
-
-    /**
-     * The underlying [AVPlayer].
-     * Use cast bridging to [AVPlayer] if you need direct AVKit calls.
-     */
     override val impl: AVPlayer = AVPlayer()
 
     // ------------------------------------------------------------------------------------
@@ -107,8 +102,7 @@ public class AVKitMediampPlayer(
         }
     }
 
-    // Minimal example features: just a Buffering feature to illustrate usage.
-    @ExperimentalMediampApi
+    @OptIn(ExperimentalMediampApi::class)
     private val bufferingFeature = object : Buffering {
         override val isBuffering = MutableStateFlow(false)
         override val bufferedPercentage = MutableStateFlow(0)
@@ -116,8 +110,6 @@ public class AVKitMediampPlayer(
 
     @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
-        // We only add the buffering feature for demonstration.
-        // Add more advanced features (speed, metadata, etc.) in a similar way.
         add(Buffering, bufferingFeature)
     }
 
@@ -125,7 +117,6 @@ public class AVKitMediampPlayer(
     // Internal Setup
     // ------------------------------------------------------------------------------------
 
-    // Holds the job we use for updating position, plus watchers. We cancel them all in [close].
     private val coroutineScope: CoroutineScope =
         CoroutineScope(Dispatchers.Main + SupervisorJob(parentCoroutineContext[Job]))
 
