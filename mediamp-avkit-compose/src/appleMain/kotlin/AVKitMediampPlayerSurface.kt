@@ -51,23 +51,16 @@ public fun AVKitMediampPlayerSurface(
     )
 }
 
-/**
- * A simple UIView whose layer is an AVPlayerLayer, so we can attach an AVPlayer.
- * Compose will embed this view in the hierarchy.
- */
 @ExportObjCClass
-private class PlayerUIView : UIView {
-    companion object : UIViewMeta() {
-        /**
-         * Tells iOS that the backing CALayer of this UIView should be an AVPlayerLayer.
-         */
+public class PlayerUIView : UIView {
+    public companion object : UIViewMeta() {
         override fun layerClass(): ObjCClass = AVPlayerLayer
     }
 
-    constructor(frame: CValue<CGRect>) : super(frame)
-    constructor(coder: NSCoder) : super(coder)
+    public constructor(frame: CValue<CGRect>) : super(frame)
+    public constructor(coder: NSCoder) : super(coder)
 
-    var player: AVPlayer?
+    public var player: AVPlayer?
         get() = (layer as? AVPlayerLayer)?.player
         set(value) {
             (layer as? AVPlayerLayer)?.player = value
