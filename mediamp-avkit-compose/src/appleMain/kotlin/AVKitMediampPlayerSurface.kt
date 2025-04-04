@@ -37,6 +37,7 @@ public fun AVKitMediampPlayerSurface(
             // Create the custom UIView that displays AVPlayerLayer
             val playerView = PlayerUIView(frame = cValue<CGRect>()).apply {
                 player = mediampPlayer.impl
+                backgroundColor = platform.UIKit.UIColor.blackColor
             }
             playerView
         },
