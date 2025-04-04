@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.InternalForInheritanceMediampApi
 
 /**
- * An optional feature of the [org.openani.mediamp.core.MediampPlayer]
+ * An optional feature of the [org.openani.mediamp.MediampPlayer]
  * that allows controlling the output audio volume and mute state.
  */
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
