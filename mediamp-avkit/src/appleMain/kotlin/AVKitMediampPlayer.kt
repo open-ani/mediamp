@@ -31,6 +31,7 @@ import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.MediaProperties
@@ -51,10 +52,11 @@ import platform.AVFoundation.currentTime
 import platform.AVFoundation.duration
 import platform.AVFoundation.isMuted
 import platform.AVFoundation.pause
-import platform.AVFoundation.play
+import platform.AVFoundation.playImmediatelyAtRate
 import platform.AVFoundation.replaceCurrentItemWithPlayerItem
 import platform.AVFoundation.seekToTime
 import platform.AVFoundation.setMuted
+import platform.AVFoundation.setRate
 import platform.AVFoundation.timeControlStatus
 import platform.AVFoundation.volume
 import platform.Foundation.NSKeyValueChangeNewKey
@@ -150,9 +152,25 @@ public class AVKitMediampPlayer(
     }
 
     @OptIn(ExperimentalMediampApi::class)
+    private val playbackSpeedFeature = object : PlaybackSpeed {
+        private val _value = MutableStateFlow(
+            1.0f, // AVPlayer impl.rate default is 0.0f, so we set 1.0f as default to align with other platforms.
+        )
+
+        override val valueFlow: Flow<Float> get() = _value
+        override val value: Float get() = _value.value
+
+        override fun set(speed: Float) {
+            _value.value = speed
+            impl.setRate(speed)
+        }
+    }
+
+    @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(Buffering, bufferingFeature)
         add(AudioLevelController, audioLevelController)
+        add(PlaybackSpeed, playbackSpeedFeature)
     }
 
     // ------------------------------------------------------------------------------------
@@ -269,7 +287,7 @@ public class AVKitMediampPlayer(
          */
         when (val st = _playbackState.value) {
             PlaybackState.READY, PlaybackState.PAUSED -> {
-                impl.play()
+                impl.playImmediatelyAtRate(playbackSpeedFeature.value)
             }
 
             else -> {
