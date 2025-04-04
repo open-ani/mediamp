@@ -29,6 +29,7 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.buildPlayerFeatures
@@ -48,11 +49,14 @@ import platform.AVFoundation.AVURLAsset
 import platform.AVFoundation.currentItem
 import platform.AVFoundation.currentTime
 import platform.AVFoundation.duration
+import platform.AVFoundation.isMuted
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
 import platform.AVFoundation.replaceCurrentItemWithPlayerItem
 import platform.AVFoundation.seekToTime
+import platform.AVFoundation.setMuted
 import platform.AVFoundation.timeControlStatus
+import platform.AVFoundation.volume
 import platform.Foundation.NSKeyValueChangeNewKey
 import platform.Foundation.NSKeyValueObservingOptionNew
 import platform.Foundation.NSKeyValueObservingProtocol
@@ -108,9 +112,47 @@ public class AVKitMediampPlayer(
         override val bufferedPercentage = MutableStateFlow(0)
     }
 
+    /**
+     * Implement AudioLevelController feature by bridging to [AVPlayer.volume] and [AVPlayer.isMuted].
+     */
+    @OptIn(ExperimentalMediampApi::class)
+    private val audioLevelController = object : AudioLevelController {
+        private val _volume = MutableStateFlow(impl.volume.coerceIn(0f, 1f))
+        private val _isMute = MutableStateFlow(impl.isMuted())
+
+        override val volume: StateFlow<Float> get() = _volume
+        override val maxVolume: Float = 1.0f
+        override val isMute: StateFlow<Boolean> get() = _isMute
+
+        override fun setMute(mute: Boolean) {
+            impl.setMuted(mute)
+            _isMute.value = mute
+        }
+
+        override fun setVolume(volume: Float) {
+            val coerced = volume.coerceIn(0f, maxVolume)
+            impl.volume = coerced
+            // If we're unmuting by setting volume > 0, also ensure isMuted is false.
+            if (coerced > 0f && impl.isMuted()) {
+                impl.setMuted(false)
+                _isMute.value = false
+            }
+            _volume.value = coerced
+        }
+
+        override fun volumeUp(value: Float) {
+            setVolume(_volume.value + value)
+        }
+
+        override fun volumeDown(value: Float) {
+            setVolume(_volume.value - value)
+        }
+    }
+
     @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(Buffering, bufferingFeature)
+        add(AudioLevelController, audioLevelController)
     }
 
     // ------------------------------------------------------------------------------------
@@ -348,7 +390,7 @@ public class AVKitMediampPlayer(
     private fun updatePlaybackStateFromTimeControlStatus(player: AVPlayer) {
         when (player.timeControlStatus) {
             // 2
-            AVPlayerTimeControlStatusPlaying -> {   
+            AVPlayerTimeControlStatusPlaying -> {
                 // If we haven't reached READY yet, interpret this as we are now PLAYING
                 _playbackState.value = PlaybackState.PLAYING
                 bufferingFeature.isBuffering.value = false
