@@ -16,8 +16,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.util.fastCoerceAtLeast
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.vlc.VlcMediampPlayer
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 @Composable
@@ -45,54 +47,42 @@ fun VlcMediampPlayerSurface(
 }
 
 
-private class FrameSizeCalculator {
+internal class FrameSizeCalculator {
     private var lastImageSize: IntSize = IntSize.Zero
-    private var lastFrameSize: Size = Size.Zero
+    private var lastFrameSizePx: IntSize = IntSize.Zero
 
-    // no boxing
     var dstSize: IntSize = IntSize.Zero
+        private set
     var dstOffset: IntOffset = IntOffset.Zero
+        private set
 
-    private fun calculateImageSizeAndOffsetToFillFrame(
-        imageWidth: Int,
-        imageHeight: Int,
-        frameWidth: Float,
-        frameHeight: Float
+    private fun calculateFitInside(
+        imageSize: IntSize,
+        frameSize: Size
     ) {
-        // 计算图片和画框的宽高比
-        val imageAspectRatio = imageWidth.toFloat() / imageHeight.toFloat()
+        val scale = min(
+            frameSize.width / imageSize.width,
+            frameSize.height / imageSize.height,
+        )
 
-        // 初始化最终的宽度和高度
-        val finalHeight = frameWidth / imageAspectRatio
-        if (finalHeight > frameHeight) {
-            // 如果高度超出了画框的高度，那么就使用高度来计算宽度
-            val finalHeight2 = frameHeight
-            val finalWidth2 = frameHeight * imageAspectRatio
-            dstSize = IntSize(finalWidth2.roundToInt(), finalHeight2.roundToInt())
-            dstOffset = IntOffset(((frameWidth - finalWidth2) / 2).roundToInt().coerceAtLeast(0), 0)
-            return
-        }
+        val scaledW = (imageSize.width * scale).roundToInt()
+        val scaledH = (imageSize.height * scale).roundToInt()
 
-        // 计算左上角的偏移量
-        val offsetY = (frameHeight - finalHeight) / 2
+        dstSize = IntSize(scaledW, scaledH)
 
-        dstSize = IntSize(frameWidth.roundToInt(), finalHeight.roundToInt())
-        dstOffset = IntOffset(0, offsetY.roundToInt().coerceAtLeast(0))
+        val offsetX = ((frameSize.width - scaledW) / 2f).fastCoerceAtLeast(0f).roundToInt()
+        val offsetY = ((frameSize.height - scaledH) / 2f).fastCoerceAtLeast(0f).roundToInt()
+        dstOffset = IntOffset(offsetX, offsetY)
     }
 
-    fun calculate(
-        imageSize: IntSize,
-        frameSize: Size,
-    ) {
-        // 缓存上次计算结果, 因为这个函数会每帧绘制都调用
-        if (lastImageSize == imageSize && lastFrameSize == frameSize) {
-            return
-        }
-        calculateImageSizeAndOffsetToFillFrame(
-            imageWidth = imageSize.width, imageHeight = imageSize.height,
-            frameWidth = frameSize.width, frameHeight = frameSize.height,
-        )
+    fun calculate(imageSize: IntSize, frameSize: Size) {
+        val frameSizePx = IntSize(frameSize.width.roundToInt(), frameSize.height.roundToInt())
+
+        if (lastImageSize == imageSize && lastFrameSizePx == frameSizePx) return
+
+        calculateFitInside(imageSize, frameSize)
+
         lastImageSize = imageSize
-        lastFrameSize = frameSize
+        lastFrameSizePx = frameSizePx
     }
 }

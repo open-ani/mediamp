@@ -25,6 +25,7 @@ dependencies {
     api(projects.mediampApi)
     api(projects.mediampCompose)
     api(projects.mediampVlc)
+    testImplementation(kotlin("test"))
 }
 
 mavenPublishing {
