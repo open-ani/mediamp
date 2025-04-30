@@ -63,23 +63,21 @@ private class FrameSizeCalculator {
         val imageAspectRatio = imageWidth.toFloat() / imageHeight.toFloat()
 
         // 初始化最终的宽度和高度
-        val finalWidth = frameWidth
         val finalHeight = frameWidth / imageAspectRatio
         if (finalHeight > frameHeight) {
             // 如果高度超出了画框的高度，那么就使用高度来计算宽度
             val finalHeight2 = frameHeight
             val finalWidth2 = frameHeight * imageAspectRatio
             dstSize = IntSize(finalWidth2.roundToInt(), finalHeight2.roundToInt())
-            dstOffset = IntOffset(((frameWidth - finalWidth2) / 2).roundToInt(), 0)
+            dstOffset = IntOffset(((frameWidth - finalWidth2) / 2).roundToInt().coerceAtLeast(0), 0)
             return
         }
 
         // 计算左上角的偏移量
-        val offsetX = 0
         val offsetY = (frameHeight - finalHeight) / 2
 
-        dstSize = IntSize(finalWidth.roundToInt(), finalHeight.roundToInt())
-        dstOffset = IntOffset(offsetX, offsetY.roundToInt())
+        dstSize = IntSize(frameWidth.roundToInt(), finalHeight.roundToInt())
+        dstOffset = IntOffset(0, offsetY.roundToInt().coerceAtLeast(0))
     }
 
     fun calculate(
