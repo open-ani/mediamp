@@ -16,14 +16,12 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.cef.CefApp
 import org.cef.CefClient
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
-import org.cef.browser.CefRendering
 import org.cef.callback.CefQueryCallback
 import org.cef.handler.CefMessageRouterHandlerAdapter
 import org.intellij.lang.annotations.Language
@@ -45,33 +43,31 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.Subtitle
 import org.openani.mediamp.source.UriMediaData
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import java.io.File
 import javax.swing.SwingUtilities
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.suspendCoroutine
 
 /**
- * Desktop‑JVM backend built on the **raw JCEF** bundled with JetBrains Runtime 23.
+ * Desktop-JVM backend built on the **raw JCEF** bundled with JetBrains Runtime 23.
  *
- * It embeds an HTML5 `<video>` element inside a [CefBrowser] and translates DOM
- * callbacks to [MediampPlayer] state through a `CefMessageRouter` bridge.
+ * It embeds an HTML5 `<video>` element inside a [CefBrowser] and translates DOM callbacks to
+ * [MediampPlayer] state through a `CefMessageRouter` bridge.
  */
 public class CefMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
     private val cefApp: CefApp = CefApp.getInstance(),
 ) : AbstractMediampPlayer<CefMediampPlayer.BrowserData>(parentCoroutineContext) {
 
-    // region Mutable state ----------------------------------------------------------------------
+    // ────────────────────── State ────────────────────────────────────────────────────────────────
     private val _mediaProperties = MutableStateFlow<MediaProperties?>(null)
     override val mediaProperties: StateFlow<MediaProperties?> get() = _mediaProperties
 
     private val _currentPositionMillis = MutableStateFlow(0L)
     override val currentPositionMillis: StateFlow<Long> get() = _currentPositionMillis
 
-    // endregion
-
-    // region Features ---------------------------------------------------------------------------
+    // ────────────────────── Features ────────────────────────────────────────────────────────────
     private val bufferingFeature = CefBuffering()
     private val playbackSpeedFeature = CefPlaybackSpeed()
     private val mediaMetadataFeature = CefMediaMetadata()
@@ -81,60 +77,53 @@ public class CefMediampPlayer(
         add(PlaybackSpeed, playbackSpeedFeature)
         add(MediaMetadata, mediaMetadataFeature)
     }
-    // endregion
 
-    // The underlying CEF entities (created lazily in [setDataImpl])
+    // ────────────────────── CEF objects ─────────────────────────────────────────────────────────
     private var cefClient: CefClient? = null
     private var cefBrowser: CefBrowser? by mutableStateOf(null)
     private var messageRouter: CefMessageRouter? = null
 
     override val impl: Any get() = cefBrowser ?: Unit
 
-    // --------------------------------------------------------------------------------------------
+    // ────────────────────── Data holder ─────────────────────────────────────────────────────────
     public class BrowserData(
         mediaData: MediaData,
         public val browser: CefBrowser,
         public val loadMedia: suspend () -> Unit,
-        public val dispose: () -> Unit,
+        dispose: () -> Unit,
     ) : Data(mediaData, dispose)
 
-    // --------------------------------------------------------------------------------------------
-    // Media‑source resolver ----------------------------------------------------------------------
+    // ────────────────────── Media-source resolver ───────────────────────────────────────────────
     override suspend fun setDataImpl(data: MediaData): BrowserData = when (data) {
-        is UriMediaData -> suspendCancellableCoroutine { cont ->
-            SwingUtilities.invokeLater {
-                cont.resumeWith(runCatching { createBrowserData(data) })
-            }
-        }
+        is UriMediaData -> createBrowserDataOnEdt(data)
+        else -> throw UnsupportedOperationException("Unsupported MediaData: ${data::class.simpleName}")
+    }
 
-        else -> throw UnsupportedOperationException("Unsupported MediaData type: ${data::class.simpleName}")
+    private suspend fun createBrowserDataOnEdt(data: UriMediaData): BrowserData = suspendCoroutine { cont ->
+        SwingUtilities.invokeLater {
+            cont.resumeWith(runCatching { createBrowserData(data) })
+        }
     }
 
     private fun createBrowserData(data: UriMediaData): BrowserData {
-        val app = cefApp // already initialised by JetBrains Runtime
-        val client = app.createClient()
-
-        // Message router                      
-        val routerConfig = CefMessageRouter.CefMessageRouterConfig()
-        val router = CefMessageRouter.create(routerConfig)
+        val client = cefApp.createClient()
+        val router = CefMessageRouter.create(CefMessageRouter.CefMessageRouterConfig())
         val handler = BridgeHandler()
         router.addHandler(handler, true)
         client.addMessageRouter(router)
 
-        val browser = client.createBrowser(
-            "about:blank",
-            CefRendering.DEFAULT,
-            true,
-        )
+        val html = buildPlayerHtml(data.uri, data.extraFiles.subtitles)
+        val temp = File.createTempFile("mediamp-player", ".html").apply {
+            writeText(html)
+            deleteOnExit()
+        }
+        val browser = client.createBrowser(temp.toURI().toString(), false, false)
 
         return BrowserData(
             mediaData = data,
             browser = browser,
             loadMedia = {
-                // Build HTML and load through data‑url
-                val html = buildPlayerHtml(data.uri, data.extraFiles.subtitles)
-                val encoded = URLEncoder.encode(html, StandardCharsets.UTF_8)
-                browser.loadURL("data:text/html;charset=utf-8,$encoded")
+                // Must be run on EDT
             },
             dispose = {
                 router.removeHandler(handler)
@@ -144,80 +133,88 @@ public class CefMediampPlayer(
                 data.close()
             },
         ).also {
-            // Keep references for control methods
             cefClient = client
             cefBrowser = browser
             messageRouter = router
         }
     }
 
-    // --------------------------------------------------------------------------------------------
-    // HTML generator & JS bridge ----------------------------------------------------------------
+    // ────────────────────── HTML generator ─────────────────────────────────────────────────────
     private fun buildPlayerHtml(mediaUri: String, subtitles: List<Subtitle>): String = buildString {
-        fun appendHtml(@Language("html") s: String) {
-            append(s)
+        fun h(@Language("html") s: String) = append(s)
+
+        val typeAttr = if (mediaUri.endsWith(".m3u8")) {
+//            "type='application/x-mpegURL'"
+            ""
+        } else {
+            ""
         }
-        appendHtml("""<!DOCTYPE html><html><head><meta charset='utf-8'>""")
-        appendHtml(
+
+        h(
             """
-            <style>
-              html,body{margin:0;background:#000;height:100%;overflow:hidden;}
-              video{width:100%;height:100%;outline:none;}
-            </style>
-            </head><body>
-            <h1>Test video</h1>
-            <video id='player' controls autoplay crossorigin='anonymous'>
-               <source src='$mediaUri'>
-            """,
-        )
-        subtitles.forEach {
-            appendHtml("<track kind='subtitles' src='${it.uri}'")
-            it.label?.let { l -> appendHtml(" label='${l}'") }
-            it.language?.let { lang -> appendHtml(" srclang='${lang}'") }
-            appendHtml(" />")
+<!DOCTYPE html>
+<html>
+<link href="https://vjs.zencdn.net/7.2.3/video-js.css" rel="stylesheet">
+
+<head>
+    <meta charset='utf-8'>
+    <style>html, body {
+        margin: 0;
+        background: #000;
+        color: #fff;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    video {
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+    }</style>
+</head>
+<body>
+<h1>$mediaUri</h1>
+<video id='player' autoplay>
+    <source src='$mediaUri' $typeAttr>
+</video>
+
+<script src="https://vjs.zencdn.net/7.2.3/video.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/videojs-contrib-hls/5.14.1/videojs-contrib-hls.js"></script>
+
+<script>
+    var player = videojs('player');
+    player.play();
+</script>
+
+<script>
+    const p = document.getElementById('player');
+    const send = (t, v) => window.cefQuery({request: `${'$'}{t}:${'$'}{v}`});
+    p.addEventListener('timeupdate', () => send('pos', Math.floor(p.currentTime * 1000)));
+    p.addEventListener('progress', () => {
+        if (p.buffered.length > 0 && p.duration > 0) {
+            send('buf', Math.floor(p.buffered.end(p.buffered.length - 1) / p.duration * 100));
         }
-        appendHtml("</video>")
-
-        appendHtml(
-            """
-            <script>
-              const player = document.getElementById('player');
-              const send = (t,v)=> window.cefQuery({request:`${'$'}{t}:${'$'}{v}`});
-
-              // position / buffered
-              player.addEventListener('timeupdate', ()=> send('pos', Math.floor(player.currentTime*1000)));
-              player.addEventListener('progress', ()=> {
-                 if(player.buffered.length>0 && player.duration>0){
-                   const perc = Math.floor(player.buffered.end(player.buffered.length-1)/player.duration*100);
-                   send('buf', perc);
-                 }
-              });
-
-              // state
-              player.addEventListener('waiting', ()=> send('state','buffering'));
-              player.addEventListener('playing', ()=> send('state','playing'));
-              player.addEventListener('pause',   ()=> send('state','paused'));
-              player.addEventListener('ended',   ()=> send('state','ended'));
-
-              // metadata
-              player.addEventListener('loadedmetadata', ()=> send('dur', Math.floor(player.duration*1000)));
-
-              // rate
-              player.addEventListener('ratechange', ()=> send('rate', player.playbackRate));
-            </script></body></html>
-            """,
+    });
+    p.addEventListener('waiting', () => send('state', 'buffering'));
+    p.addEventListener('playing', () => send('state', 'playing'));
+    p.addEventListener('pause', () => send('state', 'paused'));
+    p.addEventListener('ended', () => send('state', 'ended'));
+    p.addEventListener('loadedmetadata', () => {
+        send('dur', Math.floor(p.duration * 1000));
+        if (p.autoplay) {
+            p.play().catch(() => {
+            });
+        }
+    });
+    p.addEventListener('ratechange', () => send('rate', p.playbackRate));
+</script>
+</body>
+</html>
+        """.trimIndent(),
         )
     }
 
-    /**
-     * Receives messages from the JS bridge via `window.cefQuery`.
-     * Supported messages (all `String`):
-     * * `pos:<millis>`          – current position
-     * * `dur:<millis>`          – total duration
-     * * `buf:<percent>`         – buffered percentage 0‑100
-     * * `state:<playing|paused|buffering|ended>`
-     * * `rate:<float>`          – playback rate
-     */
+    // ────────────────────── Message bridge ────────────────────────────────────────────────────
     private inner class BridgeHandler : CefMessageRouterHandlerAdapter() {
         override fun onQuery(
             browser: CefBrowser?,
@@ -227,27 +224,26 @@ public class CefMediampPlayer(
             persistent: Boolean,
             callback: CefQueryCallback?
         ): Boolean {
-            println("CefMediampPlayer.onQuery: $request")
             try {
-                handleMessage(request ?: "")
+                print("CefMediampPlayer: $request")
+                handle(request ?: "")
                 callback?.success("OK")
             } catch (e: Exception) {
                 callback?.failure(0, e.message)
             }
-            return true // handled
+            return true
         }
 
-        private fun handleMessage(msg: String) {
-            val idx = msg.indexOf(":")
-            if (idx == -1) return
-            val type = msg.substring(0, idx)
-            val payload = msg.substring(idx + 1)
+        private fun handle(msg: String) {
+            val sep = msg.indexOf(":")
+            if (sep == -1) return
+            val type = msg.substring(0, sep)
+            val payload = msg.substring(sep + 1)
             when (type) {
                 "pos" -> _currentPositionMillis.value = payload.toLongOrNull() ?: 0L
                 "dur" -> {
                     val dur = payload.toLongOrNull() ?: 0L
-                    val title =
-                        openResource.value?.mediaData?.let { (it as? UriMediaData)?.uri?.substringAfterLast('/') }
+                    val title = (openResource.value?.mediaData as? UriMediaData)?.uri?.substringAfterLast('/')
                     _mediaProperties.value = MediaProperties(title = title, durationMillis = dur)
                 }
 
@@ -255,14 +251,12 @@ public class CefMediampPlayer(
                 "rate" -> playbackSpeedFeature.valueFlow.value = payload.toFloatOrNull() ?: 1f
                 "state" -> when (payload) {
                     "playing" -> {
-                        playbackState.value = PlaybackState.PLAYING
-                        bufferingFeature.isBuffering.value = false
+                        playbackState.value = PlaybackState.PLAYING; bufferingFeature.isBuffering.value = false
                     }
 
                     "paused" -> playbackState.value = PlaybackState.PAUSED
                     "buffering" -> {
-                        playbackState.value = PlaybackState.PAUSED_BUFFERING
-                        bufferingFeature.isBuffering.value = true
+                        playbackState.value = PlaybackState.PAUSED_BUFFERING; bufferingFeature.isBuffering.value = true
                     }
 
                     "ended" -> playbackState.value = PlaybackState.FINISHED
@@ -271,16 +265,13 @@ public class CefMediampPlayer(
         }
     }
 
-    // --------------------------------------------------------------------------------------------
-    // Start/stop/close ---------------------------------------------------------------------------
+    // ────────────────────── Lifecycle ─────────────────────────────────────────────────────────
     override suspend fun startPlayer(data: BrowserData) {
-        withContext(Dispatchers.Main.immediate) {
-            data.loadMedia()
-        }
+        withContext(Dispatchers.Main.immediate) { data.loadMedia() }
     }
 
     override fun stopPlaybackImpl() {
-        execJS("const p=document.getElementById('player'); if(p){p.pause();p.removeAttribute('src');p.load();}")
+        execJS("const v=document.getElementById('player'); if(v){v.pause();v.removeAttribute('src');v.load();}")
         _currentPositionMillis.value = 0L
         playbackState.value = PlaybackState.PAUSED
     }
@@ -292,53 +283,44 @@ public class CefMediampPlayer(
         messageRouter = null
     }
 
-    // --------------------------------------------------------------------------------------------
-    // Player commands ----------------------------------------------------------------------------
-    private fun execJS(code: String) {
-        cefBrowser?.executeJavaScript(code, cefBrowser?.url ?: "about:blank", 0)
-    }
-
+    // ────────────────────── Player commands ───────────────────────────────────────────────────
+    private fun execJS(code: String) = cefBrowser?.executeJavaScript(code, cefBrowser?.url ?: "about:blank", 0)
     override fun resume() {
-        execJS("document.getElementById('player')?.play();")
-        playbackState.value = PlaybackState.PLAYING
+        execJS("document.getElementById('player')?.play();"); playbackState.value = PlaybackState.PLAYING
     }
 
     override fun pause() {
-        execJS("document.getElementById('player')?.pause();")
-        playbackState.value = PlaybackState.PAUSED
+        execJS("document.getElementById('player')?.pause();"); playbackState.value = PlaybackState.PAUSED
     }
 
     override fun seekTo(positionMillis: Long) {
-        execJS("const p=document.getElementById('player'); if(p){p.currentTime=${'$'}{positionMillis.toDouble()/1000};}")
-        _currentPositionMillis.value = positionMillis
+        execJS("const p=document.getElementById('player'); if(p){p.currentTime=${'$'}{positionMillis/1000.0};}"); _currentPositionMillis.value =
+            positionMillis
     }
 
-    // --------------------------------------------------------------------------------------------
-    // Sync helpers -------------------------------------------------------------------------------
+    // ────────────────────── Accessors ─────────────────────────────────────────────────────────
     override fun getCurrentMediaProperties(): MediaProperties? = _mediaProperties.value
     override fun getCurrentPlaybackState(): PlaybackState = playbackState.value
     override fun getCurrentPositionMillis(): Long = _currentPositionMillis.value
 
-    // --------------------------------------------------------------------------------------------
-    // Feature impls ------------------------------------------------------------------------------
+    // ────────────────────── Feature impls ─────────────────────────────────────────────────────
     private class CefBuffering : Buffering {
-        override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
-        override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+        override val isBuffering = MutableStateFlow(false);
+        override val bufferedPercentage = MutableStateFlow(0)
     }
 
     private inner class CefPlaybackSpeed : PlaybackSpeed {
-        override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
-        override val value: Float get() = valueFlow.value
+        override val valueFlow = MutableStateFlow(1f);
+        override val value get() = valueFlow.value;
         override fun set(speed: Float) {
-            val s = speed.coerceAtLeast(0f)
-            valueFlow.value = s
-            execJS("document.getElementById('player').playbackRate=${'$'}s;")
+            val s = speed.coerceAtLeast(0f); valueFlow.value =
+                s; execJS("document.getElementById('player').playbackRate=${'$'}s;")
         }
     }
 
     private class CefMediaMetadata : MediaMetadata {
-        override val subtitleTracks: MutableTrackGroup<SubtitleTrack> = MutableTrackGroup()
-        override val audioTracks: MutableTrackGroup<AudioTrack> = MutableTrackGroup()
+        override val subtitleTracks = MutableTrackGroup<SubtitleTrack>();
+        override val audioTracks = MutableTrackGroup<AudioTrack>();
         override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(emptyList())
     }
 }
