@@ -43,11 +43,11 @@ public expect fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineC
 @Stable
 internal class RememberedMediampPlayer(val player: MediampPlayer) : RememberObserver {
     override fun onAbandoned() {
-        player.stopPlayback()
+        player.close()
     }
 
     override fun onForgotten() {
-        player.stopPlayback()
+        player.close()
     }
 
     override fun onRemembered() {
