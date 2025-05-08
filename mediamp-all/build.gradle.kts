@@ -30,20 +30,16 @@ kotlin {
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
             api(projects.mediampApi)
-            api(projects.mediampCompose)
         }
         desktopMain.dependencies {
             api(projects.mediampVlc)
-            api(projects.mediampVlcCompose)
             api(projects.mediampVlcLoader)
         }
         iosMain.dependencies {
             api(projects.mediampAvkit)
-            api(projects.mediampAvkitCompose)
         }
         androidMain.dependencies {
             api(projects.mediampExoplayer)
-            api(projects.mediampExoplayerCompose)
             api(libs.androidx.media3.exoplayer.hls)
         }
     }

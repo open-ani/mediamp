@@ -12,6 +12,8 @@ import com.vanniktech.maven.publish.SonatypeHost
 plugins {
     kotlin("android")
     id("com.android.library")
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
@@ -26,6 +28,7 @@ android {
 dependencies {
     api(projects.mediampApi)
     implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
 }
 
 mavenPublishing {

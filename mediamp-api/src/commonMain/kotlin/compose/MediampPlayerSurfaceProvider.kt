@@ -14,12 +14,12 @@ import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
 import kotlin.reflect.KClass
 
-interface MediampPlayerSurfaceProvider<T : MediampPlayer> {
-    val forClass: KClass<T>
+public interface MediampPlayerSurfaceProvider<T : MediampPlayer> {
+    public val forClass: KClass<T>
 
     @Composable
     @NonRestartableComposable
-    fun Surface(
+    public fun Surface(
         mediampPlayer: T,
         modifier: Modifier
     )

@@ -14,9 +14,8 @@ import org.openani.mediamp.MediampPlayer
 import kotlin.coroutines.CoroutineContext
 
 @Composable
-actual fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineContext): MediampPlayer {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    return remember(context) {
-        RememberedMediampPlayer(MediampPlayer(context, parentCoroutineContext()))
+public actual fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineContext): MediampPlayer {
+    return remember {
+        RememberedMediampPlayer(MediampPlayer(Unit, parentCoroutineContext()))
     }.player
 }

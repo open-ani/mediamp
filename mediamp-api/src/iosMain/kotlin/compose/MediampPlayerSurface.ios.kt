@@ -14,9 +14,9 @@ import androidx.compose.ui.Modifier
 import org.openani.mediamp.MediampPlayer
 
 @Composable
-actual fun MediampPlayerSurface(
+public actual fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
-    modifier: Modifier
+    modifier: Modifier,
 ) {
     val factory = remember(mediampPlayer) {
         MediampPlayerSurfaceProviderLoader.getByInstance(mediampPlayer)
@@ -24,4 +24,3 @@ actual fun MediampPlayerSurface(
 
     factory.Surface(mediampPlayer, modifier)
 }
-

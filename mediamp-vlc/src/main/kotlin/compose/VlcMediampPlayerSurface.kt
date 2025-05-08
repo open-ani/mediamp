@@ -23,7 +23,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 @Composable
-fun VlcMediampPlayerSurface(
+public fun VlcMediampPlayerSurface(
     mediampPlayer: VlcMediampPlayer,
     modifier: Modifier = Modifier,
 ) {

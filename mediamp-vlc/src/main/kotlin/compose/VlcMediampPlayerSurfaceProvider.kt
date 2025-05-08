@@ -14,7 +14,7 @@ import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
 import org.openani.mediamp.vlc.VlcMediampPlayer
 import kotlin.reflect.KClass
 
-class VlcMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<VlcMediampPlayer> {
+public class VlcMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<VlcMediampPlayer> {
     override val forClass: KClass<VlcMediampPlayer> = VlcMediampPlayer::class
 
     @Composable

@@ -23,10 +23,10 @@ description = "MediaMP backend using VLC"
 
 dependencies {
     api(projects.mediampApi)
-    api(projects.mediampCompose)
     api(libs.vlcj)
     implementation(libs.jna)
     implementation(libs.jna.platform)
+    testImplementation(kotlin("test"))
 }
 
 kotlin {

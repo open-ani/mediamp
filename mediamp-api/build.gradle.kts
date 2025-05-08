@@ -13,6 +13,8 @@ import com.vanniktech.maven.publish.SonatypeHost
 plugins {
     kotlin("multiplatform")
     id("com.android.library")
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     `mpp-lib-targets`
     kotlin("plugin.serialization")
@@ -32,6 +34,7 @@ kotlin {
             implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
             compileOnly(libs.androidx.annotation)
             api(libs.kotlinx.coroutines.core)
+            api(compose.runtime)
         }
         commonTest.dependencies {
             api(kotlin("test"))

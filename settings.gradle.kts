@@ -23,17 +23,12 @@ plugins {
 
 include(":mediamp-internal-utils")
 include(":mediamp-api")
-include(":mediamp-compose")
 
 include(":mediamp-vlc")
 include(":mediamp-vlc-loader")
-include(":mediamp-vlc-compose")
 include(":mediamp-exoplayer")
-include(":mediamp-exoplayer-compose")
 include(":mediamp-mpv")
-include(":mediamp-mpv-compose")
 include(":mediamp-avkit")
-include(":mediamp-avkit-compose")
 
 include(":mediamp-all")
 

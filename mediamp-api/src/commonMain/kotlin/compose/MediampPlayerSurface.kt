@@ -28,7 +28,7 @@ import kotlin.coroutines.EmptyCoroutineContext
  * The surface is center-aligned, fitting the available space while maintaining the aspect ratio.
  */
 @Composable
-expect fun MediampPlayerSurface(
+public expect fun MediampPlayerSurface(
     mediampPlayer: MediampPlayer,
     modifier: Modifier = Modifier,
 )
@@ -37,7 +37,7 @@ expect fun MediampPlayerSurface(
  * Remembers a [MediampPlayer] instance that will be stopped when the composable is no longer in the composition.
  */
 @Composable
-expect fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineContext = { EmptyCoroutineContext }): MediampPlayer
+public expect fun rememberMediampPlayer(parentCoroutineContext: () -> CoroutineContext = { EmptyCoroutineContext }): MediampPlayer
 
 
 @Stable

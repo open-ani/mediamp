@@ -12,6 +12,8 @@ import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     kotlin("multiplatform")
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
