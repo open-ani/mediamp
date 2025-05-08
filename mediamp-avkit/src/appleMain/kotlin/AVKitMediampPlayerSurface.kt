@@ -12,7 +12,7 @@ package org.openani.mediamp.avkit
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.interop.UIKitView
+import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -23,6 +23,7 @@ import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerLayer
 import platform.CoreGraphics.CGRect
 import platform.Foundation.NSCoder
+import platform.UIKit.UIColor
 import platform.UIKit.UIView
 import platform.UIKit.UIViewMeta
 
@@ -32,15 +33,15 @@ public fun AVKitMediampPlayerSurface(
     modifier: Modifier = Modifier,
 ) {
     UIKitView(
-        modifier = modifier,
         factory = {
             // Create the custom UIView that displays AVPlayerLayer
             val playerView = PlayerUIView(frame = cValue<CGRect>()).apply {
                 player = mediampPlayer.impl
-                backgroundColor = platform.UIKit.UIColor.blackColor
+                backgroundColor = UIColor.blackColor
             }
             playerView
         },
+        modifier = modifier,
         update = {
             // Whenever recomposed, make sure the UIView’s AVPlayer is the latest
             it.player = mediampPlayer.impl
