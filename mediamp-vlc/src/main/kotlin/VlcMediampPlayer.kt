@@ -578,8 +578,8 @@ internal class VlcPlaybackSpeed(
 internal class VlcAudioLevelController(
     private val player: MediaPlayer
 ) : AudioLevelController {
-    override val volume: MutableStateFlow<Float> = MutableStateFlow(1f)
-    override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    override val volume: MutableStateFlow<Float> = MutableStateFlow(player.audio().volume() / 100f)
+    override val isMute: MutableStateFlow<Boolean> = MutableStateFlow(player.audio().isMute)
     override val maxVolume: Float = 2f
 
     override fun setMute(mute: Boolean) {
