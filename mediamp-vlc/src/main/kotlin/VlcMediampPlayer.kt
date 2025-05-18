@@ -219,7 +219,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 //        player.media().play/*OR .start*/(data.videoData.file.absolutePath)
     }
 
-    override fun getCurrentPositionMillis(): Long = player.status().time()
+    override fun getCurrentPositionMillis(): Long = currentPositionMillis.value
 
     override fun pause() {
         player.submit {
