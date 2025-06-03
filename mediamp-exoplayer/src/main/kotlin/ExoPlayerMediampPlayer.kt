@@ -276,7 +276,6 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                     private fun updateVideoProperties(): Boolean {
                         val video = videoFormat ?: return false
                         val audio = audioFormat ?: return false
-                        val data = openResource.value?.mediaData ?: return false
                         val title = mediaMetadata.title
                         val duration = duration
 
