@@ -153,7 +153,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                             data.createInput()
                         }
                         val factory = ProgressiveMediaSource.Factory {
-                            SeekableInputDataSource(data, file)
+                            SeekableInputDataSource(data, file!!)
                         }
 
                         exoPlayer.setMediaSource(
@@ -164,6 +164,10 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                     }
                 },
             )
+        }
+
+        else -> {
+            throw IllegalArgumentException("Unsupported MediaData type: $data")
         }
     }
 
