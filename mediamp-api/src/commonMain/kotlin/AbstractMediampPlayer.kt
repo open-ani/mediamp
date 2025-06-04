@@ -60,9 +60,9 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
             if (properties.durationMillis == 0L) {
                 return@combine 0f
             }
-            (duration / properties.durationMillis).toFloat().coerceIn(0f, 1f)
+            (duration.toFloat() / properties.durationMillis.toFloat()).coerceIn(0f, 1f)
         }
-
+    
     private val closed = MutableStateFlow(false)
 
     private val setVideoSourceMutex = Mutex()
