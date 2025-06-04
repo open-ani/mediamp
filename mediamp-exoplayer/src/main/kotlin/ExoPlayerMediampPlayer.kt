@@ -165,10 +165,6 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                 },
             )
         }
-
-        else -> {
-            throw IllegalArgumentException("Unsupported MediaData type: $data")
-        }
     }
 
     private val exoPlayer: ExoPlayer = run {
