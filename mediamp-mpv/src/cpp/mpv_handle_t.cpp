@@ -3,9 +3,13 @@
 #include "method_cache.h"
 #include "compatible_thread.h"
 #include "global_lock.h"
+#include <vector>
+#include <chrono>
+#include <thread>
 
 extern "C" {
 #include <libavcodec/jni.h>
+#include <mpv/render.h>
 }
 
 #define CHECK_HANDLE() if (!handle_) { \
@@ -161,6 +165,73 @@ bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
 #endif
 }
 
+bool mpv_handle_t::attach_buffer_renderer(JNIEnv *env, jobject renderer) {
+    FP;
+#if defined(_WIN32)
+    CHECK_HANDLE();
+    if (render_context_)
+        detach_buffer_renderer(env);
+
+    jni_cache_classes(env);
+    if (env->IsInstanceOf(renderer, mediampv::jni_mediamp_clazz_MpvBufferRenderer) != JNI_TRUE) {
+        LOG("renderer is not MpvBufferRenderer");
+        return false;
+    }
+
+    buffer_renderer_ = env->NewGlobalRef(renderer);
+
+    mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_SW)},
+            {MPV_RENDER_PARAM_ADVANCED_CONTROL, &(int){1}},
+            {0}
+    };
+    if (mpv_render_context_create(&render_context_, handle_, params) < 0) {
+        env->DeleteGlobalRef(buffer_renderer_);
+        buffer_renderer_ = nullptr;
+        return false;
+    }
+
+    mpv_render_context_set_update_callback(render_context_, [](void *ctx) {
+        auto *self = static_cast<mpv_handle_t *>(ctx);
+        self->render_update_ = true;
+    }, this);
+
+    render_loop_request_exit = false;
+    render_thread_ = std::make_shared<mediampv::compatible_thread>([this] { render_loop(nullptr); });
+    return render_thread_->create();
+#else
+    (void)env; (void)renderer;
+    LOG("attach_buffer_renderer is only implemented on Windows");
+    return false;
+#endif
+}
+
+bool mpv_handle_t::detach_buffer_renderer(JNIEnv *env) {
+    FP;
+#if defined(_WIN32)
+    if (!render_context_)
+        return false;
+    render_loop_request_exit = true;
+    render_update_ = true;
+    mpv_wakeup(handle_);
+    if (render_thread_)
+        render_thread_->join();
+    render_thread_.reset();
+    mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
+    mpv_render_context_free(render_context_);
+    render_context_ = nullptr;
+    if (buffer_renderer_) {
+        env->DeleteGlobalRef(buffer_renderer_);
+        buffer_renderer_ = nullptr;
+    }
+    return true;
+#else
+    (void)env;
+    LOG("detach_buffer_renderer is only implemented on Windows");
+    return false;
+#endif
+}
+
 bool mpv_handle_t::destroy(JNIEnv *env) {
     FP;
     CHECK_HANDLE()
@@ -176,8 +247,59 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     
     if (event_listener_) env->DeleteGlobalRef(*event_listener_);
     mpv_terminate_destroy(handle_);
-    
+
     return true;
+}
+
+void *mpv_handle_t::render_loop(void *arg) {
+#if defined(_WIN32)
+    (void)arg;
+    if (!jvm_ || !render_context_)
+        return nullptr;
+
+    JNIEnv *env = nullptr;
+    if (jvm_->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) != JNI_OK)
+        return nullptr;
+
+    std::vector<uint8_t> buffer;
+    while (!render_loop_request_exit) {
+        if (!render_context_)
+            break;
+        if (!render_update_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        render_update_ = false;
+        uint64_t flags = mpv_render_context_update(render_context_);
+        if (flags & MPV_RENDER_UPDATE_FRAME) {
+            int64_t w = 0, h = 0;
+            get_property("dwidth", MPV_FORMAT_INT64, &w);
+            get_property("dheight", MPV_FORMAT_INT64, &h);
+            if (w > 0 && h > 0) {
+                size_t stride = (size_t)w * 4;
+                buffer.resize((size_t)w * (size_t)h * 4);
+                int size[2] = {(int)w, (int)h};
+                mpv_render_param params[] = {
+                        {MPV_RENDER_PARAM_SW_SIZE, size},
+                        {MPV_RENDER_PARAM_SW_FORMAT, (void *)"0rgb"},
+                        {MPV_RENDER_PARAM_SW_STRIDE, &stride},
+                        {MPV_RENDER_PARAM_SW_POINTER, buffer.data()},
+                        {0}
+                };
+                if (mpv_render_context_render(render_context_, params) >= 0) {
+                    jbyteArray arr = env->NewByteArray(buffer.size());
+                    env->SetByteArrayRegion(arr, 0, buffer.size(), reinterpret_cast<jbyte*>(buffer.data()));
+                    env->CallVoidMethod(buffer_renderer_, jni_mediamp_method_MpvBufferRenderer_onFrame,
+                                       (jint)w, (jint)h, arr);
+                    env->DeleteLocalRef(arr);
+                    mpv_render_context_report_swap(render_context_);
+                }
+            }
+        }
+    }
+    jvm_->DetachCurrentThread();
+#endif
+    return nullptr;
 }
 
 } // namespace mediampv

@@ -25,9 +25,13 @@ void jni_cache_classes(JNIEnv *env) {
     jni_mediamp_method_EventListener_onPropertyChange_STRING =
             env->GetMethodID(jni_mediamp_clazz_EventListener, "onPropertyChange", "(Ljava/lang/String;Ljava/lang/String;)V");
 #ifdef __ANDROID__
-    jni_mediamp_clazz_android_Surface = 
+    jni_mediamp_clazz_android_Surface =
             reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass("android/view/Surface")));
 #endif
+    jni_mediamp_clazz_MpvBufferRenderer =
+            reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass("org/openani/mediamp/mpv/MpvBufferRenderer")));
+    jni_mediamp_method_MpvBufferRenderer_onFrame =
+            env->GetMethodID(jni_mediamp_clazz_MpvBufferRenderer, "onFrame", "(II[B)V");
     
     jni_class_cached = true;
 }

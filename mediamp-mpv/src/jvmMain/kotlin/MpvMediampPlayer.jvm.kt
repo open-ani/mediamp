@@ -100,7 +100,11 @@ actual class MpvMediampPlayer (
         // handle.option("gpu-shader-cache-dir", File(cacheDir, "mpv_gpu_cache").absolutePath)
         // handle.option("icc-cache-dir", File(cacheDir, "mpv_icc_cache").absolutePath)
         handle.option("profile", "fast")
-        handle.option("vo", "gpu-next")
+        if (currentPlatform() is Platform.Android) {
+            handle.option("vo", "gpu-next")
+        } else {
+            handle.option("vo", "libmpv")
+        }
 
         when (currentPlatform()) {
             is Platform.Android -> {

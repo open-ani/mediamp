@@ -9,11 +9,19 @@
 
 package org.openani.mediamp.mpv
 
+import org.openani.mediamp.InternalMediampApi
+
+@InternalMediampApi
+external fun nAttachDesktopBufferRenderer(ptr: Long, renderer: MpvBufferRenderer): Boolean
+
+@InternalMediampApi
+external fun nDetachDesktopBufferRenderer(ptr: Long): Boolean
 
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
-    TODO("Not yet implemented")
+    require(surface is MpvBufferRenderer) { "surface must implement MpvBufferRenderer" }
+    return nAttachDesktopBufferRenderer(ptr, surface)
 }
 
 internal actual fun detachSurface(ptr: Long): Boolean {
-    TODO()
+    return nDetachDesktopBufferRenderer(ptr)
 }

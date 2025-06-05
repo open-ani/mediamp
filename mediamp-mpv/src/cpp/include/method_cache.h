@@ -20,6 +20,8 @@ UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_STRING;
 #ifdef __ANDROID__
 UTIL_EXTERN jclass jni_mediamp_clazz_android_Surface;
 #endif
+UTIL_EXTERN jclass jni_mediamp_clazz_MpvBufferRenderer;
+UTIL_EXTERN jmethodID jni_mediamp_method_MpvBufferRenderer_onFrame;
 
 
 static bool jni_class_cached = false;

@@ -34,7 +34,10 @@ public:
     
     bool attach_android_surface(JNIEnv *env, jobject surface);
     bool detach_android_surface(JNIEnv *env);
-    
+
+    bool attach_buffer_renderer(JNIEnv *env, jobject renderer);
+    bool detach_buffer_renderer(JNIEnv *env);
+
 private:
     JavaVM *jvm_;
     mpv_handle *handle_;
@@ -49,7 +52,14 @@ private:
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
     bool event_loop_request_exit = false;
 
+    mpv_render_context *render_context_ = nullptr;
+    std::shared_ptr<mediampv::compatible_thread> render_thread_;
+    bool render_loop_request_exit = false;
+    jobject buffer_renderer_ = nullptr;
+    bool render_update_ = false;
+
     void *event_loop(void *arg);
+    void *render_loop(void *arg);
 };
 
 } // namespace mediampv
