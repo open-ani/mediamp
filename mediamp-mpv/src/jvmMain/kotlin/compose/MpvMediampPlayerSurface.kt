@@ -29,21 +29,6 @@ public fun MpvMediampPlayerSurface(
             object : SkiaLayer() {
                 init {
                     renderApi = GraphicsApi.OPENGL
-//                    renderDelegate = object : SkikoRenderDelegate {
-//                        override fun onRender(
-//                            canvas: org.jetbrains.skia.Canvas,
-//                            width: Int,
-//                            height: Int,
-//                            nanoTime: Long
-//                        ) {
-//                            canvas._ptr
-//                            val gl = OpenGLApi.instance
-//                            val fbo = gl.glGetIntegerv(gl.GL_DRAW_FRAMEBUFFER_BINDING)
-//                            mediampPlayer.renderFrame(fbo, width, height)
-//                        }
-//
-////                        override fun onReshape(width: Int, height: Int) {}
-//                    }
                 }
 
                 override fun addNotify() {
