@@ -69,6 +69,8 @@ if (NOT ANDROID)
     set(JAVA_JVM_LIBRARY NotNeeded) # todo
     find_package(JNI REQUIRED)
     include_directories(${JNI_INCLUDE_DIRS})
+
+    find_package(OpenGL REQUIRED)
 endif()
 
 set(SRC_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/src/cpp")
@@ -98,22 +100,14 @@ if (ANDROID)
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
 else()
-    # 假设 JNI_INCLUDE_DIRS 是一个包含多个路径的列表
-    set(FILTERED_JNI_LIBRARIES "")
-
-    # 遍历 JNI_INCLUDE_DIRS，移除包含 "NotNeeded" 的值
-    foreach(dir ${JNI_LIBRARIES})
-        if(NOT dir MATCHES "NotNeeded")
-            list(APPEND FILTERED_JNI_LIBRARIES ${dir})
-        endif()
-    endforeach()
+    set(FILTERED_JNI_LIBRARIES ${JNI_LIBRARIES})
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
             ${FILTERED_JNI_LIBRARIES}
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_NAME}"
-            $<$<PLATFORM_ID:Windows>:opengl32>)
+            ${OPENGL_gl_LIBRARY})
 endif()
 
 # 查找所有动态库文件
@@ -138,7 +132,6 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         ${MPV_LIBS_DEPS}
         ${MPV_OUTPUT_LIBS_DIR}
 )
-
 
 message(STATUS "MPV library path: ${MPV_LIB_PATH}")
 message(STATUS "MPV library name: ${MPV_LIB_NAME}")
