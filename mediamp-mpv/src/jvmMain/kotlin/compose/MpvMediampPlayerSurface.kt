@@ -29,7 +29,6 @@ public fun MpvMediampPlayerSurface(
             object : SkiaLayer() {
                 init {
                     renderApi = GraphicsApi.OPENGL
-                    mediampPlayer.attachRenderSurface(contentHandle)
 //                    renderDelegate = object : SkikoRenderDelegate {
 //                        override fun onRender(
 //                            canvas: org.jetbrains.skia.Canvas,
@@ -47,9 +46,14 @@ public fun MpvMediampPlayerSurface(
 //                    }
                 }
 
-                override fun dispose() {
-                    super.dispose()
+                override fun addNotify() {
+                    super.addNotify()
+                    mediampPlayer.attachRenderSurface(contentHandle)
+                }
+
+                override fun removeNotify() {
                     mediampPlayer.detachRenderSurface()
+                    super.removeNotify()
                 }
             }
         },
