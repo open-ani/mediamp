@@ -168,6 +168,11 @@ actual class MpvMediampPlayer (
         return detachSurface(handle.ptr)
     }
 
+    @InternalMediampApi
+    fun renderFrame(fbo: Int, width: Int, height: Int): Boolean {
+        return handle.renderFrame(fbo, width, height)
+    }
+
     override suspend fun setDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
             val headers = data.headers

@@ -39,6 +39,14 @@ extern "C" {
     // renderer
     JNIEXPORT jboolean JNICALL FN_ANDROID(nAttachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr, jobject surface);
     JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+#ifdef _WIN32
+JNIEXPORT jboolean JNICALL FN(nAttachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr, jlong hwnd);
+JNIEXPORT jboolean JNICALL FN(nDetachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+#endif
+
+JNIEXPORT jboolean JNICALL FN(nCreateRenderContext)(JNIEnv *env, jclass clazz, jlong ptr);
+JNIEXPORT jboolean JNICALL FN(nDestroyRenderContext)(JNIEnv *env, jclass clazz, jlong ptr);
+JNIEXPORT jboolean JNICALL FN(nRenderFrame)(JNIEnv *env, jclass clazz, jlong ptr, jint fbo, jint width, jint height);
     
 /**
  * 关闭此 mpv_handle_t 实例
@@ -232,6 +240,55 @@ JNIEXPORT jboolean JNICALL FN_ANDROID(nAttachAndroidSurface)(JNIEnv *env, jclass
 JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr) {
     auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
     return instance->detach_android_surface(env);
+}
+
+#ifdef _WIN32
+JNIEXPORT jboolean JNICALL FN(nAttachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr, jlong hwnd) {
+    auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+    return instance->attach_window_surface(hwnd);
+}
+
+JNIEXPORT jboolean JNICALL FN(nDetachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr) {
+    auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+    return instance->detach_window_surface();
+}
+#endif
+
+JNIEXPORT jboolean
+JNICALL FN(nCreateRenderContext)(JNIEnv * env, jclass
+clazz,
+jlong ptr
+) {
+auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+return instance->
+
+create_render_context();
+
+}
+
+JNIEXPORT jboolean
+JNICALL FN(nDestroyRenderContext)(JNIEnv * env, jclass
+clazz,
+jlong ptr
+) {
+auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+return instance->
+
+destroy_render_context();
+
+}
+
+JNIEXPORT jboolean
+JNICALL FN(nRenderFrame)(JNIEnv * env, jclass
+clazz,
+jlong ptr, jint
+fbo,
+jint width, jint
+height) {
+auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+return instance->
+render_frame(fbo, width, height
+);
 }
 
 JNIEXPORT jboolean JNICALL FN(nDestroy)(JNIEnv *env, jclass clazz, jlong ptr) {

@@ -8,6 +8,8 @@
 
 package org.openani.mediamp.mpv
 
+import org.openani.mediamp.InternalMediampApi
+
 @OptIn(ExperimentalStdlibApi::class)
 class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
@@ -83,6 +85,16 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
         return nDestroy(ptr)
     }
 
+    @InternalMediampApi
+    fun createRenderContext(): Boolean = createRenderContext(ptr)
+
+    @InternalMediampApi
+    fun destroyRenderContext(): Boolean = destroyRenderContext(ptr)
+
+    @InternalMediampApi
+    fun renderFrame(fbo: Int, width: Int, height: Int): Boolean =
+        renderFrame(ptr, fbo, width, height)
+
     override fun close() {
         nFinalize(ptr)
     }
@@ -143,3 +155,18 @@ internal expect fun detachSurface(ptr: Long): Boolean
 
 private external fun nDestroy(ptr: Long): Boolean
 private external fun nFinalize(ptr: Long)
+
+/**
+ * Desktop only
+ */
+internal expect fun createRenderContext(ptr: Long): Boolean
+
+/**
+ * Desktop only
+ */
+internal expect fun destroyRenderContext(ptr: Long): Boolean
+
+/**
+ * Desktop only
+ */
+internal expect fun renderFrame(ptr: Long, fbo: Int, width: Int, height: Int): Boolean
