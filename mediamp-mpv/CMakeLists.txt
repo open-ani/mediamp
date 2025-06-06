@@ -85,6 +85,8 @@ add_library(${PROJECT_NAME} SHARED
     "${SRC_PREFIX}/include/mpv_handle_t.h"
     "${SRC_PREFIX}/mpv_handle_t.cpp"
     "${SRC_PREFIX}/jni.cpp"
+    "${SRC_PREFIX}/opengl_extra.cpp"
+    "${SRC_PREFIX}/offscreen.cpp"
 )
 target_include_directories(${PROJECT_NAME} PRIVATE "${SRC_PREFIX}/include")
 
@@ -110,7 +112,8 @@ else()
             ${FILTERED_JNI_LIBRARIES}
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
-            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
+            "${MPV_LIB_PATH}/${MPV_LIB_NAME}"
+            $<$<PLATFORM_ID:Windows>:opengl32>)
 endif()
 
 # 查找所有动态库文件
