@@ -15,3 +15,15 @@ internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
 internal actual fun detachSurface(ptr: Long): Boolean {
     TODO()
 }
+
+actual fun createRenderContext(ptr: Long): Boolean {
+    error("only implemented on desktop")
+}
+
+actual fun destroyRenderContext(ptr: Long): Boolean {
+    error("only implemented on desktop")
+}
+
+actual fun renderFrame(ptr: Long, fbo: Int, width: Int, height: Int): Boolean {
+    error("only implemented on desktop")
+}

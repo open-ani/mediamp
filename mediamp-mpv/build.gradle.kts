@@ -18,6 +18,9 @@ plugins {
     kotlin("multiplatform")
     id("com.android.library")
 
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
+
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
     idea

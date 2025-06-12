@@ -25,7 +25,7 @@ struct function_printer_t {
 #ifdef ENABLE_LOGGING
     std::string name;
     explicit function_printer_t(const std::string &name) : name(name) {
-        LOG("Function %s started", name.c_str());
+        LOG("Function %s started\n", name.c_str());
     }
 #else
     explicit function_printer_t(const std::string &_) {}
@@ -33,7 +33,7 @@ struct function_printer_t {
 
     ~function_printer_t() {
 #ifdef ENABLE_LOGGING
-        LOG("Function %s ended", name.c_str());
+        LOG("Function %s ended\n", name.c_str());
 #endif
     }
 };
