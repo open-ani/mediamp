@@ -65,12 +65,14 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libmpv/include")
 link_directories(${MPV_LIB_PATH})
 
 if (NOT ANDROID) 
-    set(JAVA_AWT_LIBRARY NotNeeded) # todo
-    set(JAVA_JVM_LIBRARY NotNeeded) # todo
+    # set(JAVA_AWT_LIBRARY NotNeeded) # todo
+    # set(JAVA_JVM_LIBRARY NotNeeded) # todo
     find_package(JNI REQUIRED)
     include_directories(${JNI_INCLUDE_DIRS})
 
     find_package(OpenGL REQUIRED)
+    find_package(GLEW REQUIRED)
+    add_compile_definitions(USE_GLEW=1)
 endif()
 
 set(SRC_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/src/cpp")
@@ -107,7 +109,8 @@ else()
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_NAME}"
-            ${OPENGL_gl_LIBRARY})
+            ${OPENGL_gl_LIBRARY}
+            GLEW::GLEW)
 endif()
 
 # 查找所有动态库文件
