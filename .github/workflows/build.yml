@@ -11,10 +11,10 @@ on:
     paths-ignore:
     - '**/*macosDmg.md'
 jobs:
-  build_github-windows-2019:
-    name: 'Build (Windows Server 2019 x86_64)'
+  build_github-windows-2022:
+    name: 'Build (Windows Server 2022 x86_64)'
     runs-on:
-    - 'windows-2019'
+    - 'windows-2022'
     permissions:
       actions: 'write'
     steps:
