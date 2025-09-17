@@ -10,6 +10,7 @@ package org.openani.mediamp.exoplayer.compose
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.media3.common.util.UnstableApi
 import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
 import org.openani.mediamp.exoplayer.ExoPlayerMediampPlayer
 import kotlin.reflect.KClass
@@ -17,6 +18,7 @@ import kotlin.reflect.KClass
 class ExoPlayerMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<ExoPlayerMediampPlayer> {
     override val forClass: KClass<ExoPlayerMediampPlayer> = ExoPlayerMediampPlayer::class
 
+    @UnstableApi
     @Composable
     override fun Surface(mediampPlayer: ExoPlayerMediampPlayer, modifier: Modifier) {
         ExoPlayerMediampPlayerSurface(mediampPlayer, modifier)

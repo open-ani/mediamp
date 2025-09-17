@@ -46,10 +46,12 @@ import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
+import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
+import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.io.SeekableInput
@@ -336,6 +338,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     private val buffering = ExoPlayerBuffering()
     private val mediaMetadataFeature = ExoPlayerMediaMetadata()
     private val playbackSpeed = PlaybackSpeedImpl(exoPlayer)
+    private val videoAspectRatio = ExoPlayerVideoAspectRatio()
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
@@ -344,6 +347,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         add(PlaybackSpeed, playbackSpeed)
         add(Buffering, buffering)
         add(MediaMetadata, mediaMetadataFeature)
+        add(VideoAspectRatio, videoAspectRatio)
     }
 
     override fun getCurrentMediaProperties(): MediaProperties? {
@@ -460,4 +464,13 @@ internal class ExoPlayerMediaMetadata : MediaMetadata {
 internal class ExoPlayerBuffering : Buffering {
     override val isBuffering: MutableStateFlow<Boolean> = MutableStateFlow(false)
     override val bufferedPercentage = MutableStateFlow(0)
+}
+
+@kotlin.OptIn(InternalForInheritanceMediampApi::class)
+internal class ExoPlayerVideoAspectRatio : VideoAspectRatio {
+    override val mode: MutableStateFlow<AspectRatioMode> = MutableStateFlow(AspectRatioMode.FIT)
+
+    override fun setMode(mode: AspectRatioMode) {
+        this.mode.value = mode
+    }
 }

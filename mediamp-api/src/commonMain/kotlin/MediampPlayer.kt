@@ -15,9 +15,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
+import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.AudioTrack
 import org.openani.mediamp.metadata.Chapter
@@ -366,6 +368,15 @@ public class DummyMediampPlayer(
                         Chapter("chapter2", durationMillis = 5_000L, 90_000L),
                     ),
                 )
+            },
+        )
+        add(
+            VideoAspectRatio,
+            object : VideoAspectRatio {
+                override val mode: MutableStateFlow<AspectRatioMode> = MutableStateFlow(AspectRatioMode.FIT)
+                override fun setMode(mode: AspectRatioMode) {
+                    this.mode.value = mode
+                }
             },
         )
     }

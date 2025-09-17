@@ -64,3 +64,11 @@ public val MediampPlayer.subtitleTracks
  */
 public val MediampPlayer.chapters
     get() = features[MediaMetadata]?.chapters
+
+/**
+ * Shortcut to access the [VideoAspectRatio] feature.
+ *
+ * This method is stable, meaning that it always return the same instance for the same input ([this]).
+ */
+public val MediampPlayer.videoAspectRatio
+    get() = features[VideoAspectRatio.Key]

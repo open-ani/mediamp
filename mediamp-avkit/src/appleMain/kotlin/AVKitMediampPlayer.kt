@@ -29,10 +29,12 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
+import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.metadata.MediaProperties
 import org.openani.mediamp.source.MediaData
@@ -167,10 +169,22 @@ public class AVKitMediampPlayer(
     }
 
     @OptIn(ExperimentalMediampApi::class)
+    private val videoAspectRatioFeature = object : VideoAspectRatio {
+        private val _mode = MutableStateFlow(AspectRatioMode.FIT)
+
+        override val mode: StateFlow<AspectRatioMode> get() = _mode
+
+        override fun setMode(mode: AspectRatioMode) {
+            _mode.value = mode
+        }
+    }
+
+    @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(Buffering, bufferingFeature)
         add(AudioLevelController, audioLevelController)
         add(PlaybackSpeed, playbackSpeedFeature)
+        add(VideoAspectRatio, videoAspectRatioFeature)
     }
 
     // ------------------------------------------------------------------------------------
