@@ -36,8 +36,6 @@
 
 
 import Secrets.GITHUB_REPOSITORY
-import Src_main.Arch
-import Src_main.OS
 import io.github.typesafegithub.workflows.actions.actions.Checkout
 import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
@@ -329,8 +327,8 @@ val Runner.isSelfHosted: Boolean
 // Machines for Build and Release
 val buildMatrixInstances = listOf(
     MatrixInstance(
-        runner = Runner.GithubWindowsServer2019,
-        name = "Windows Server 2019 x86_64",
+        runner = Runner.GithubWindowsServer2022,
+        name = "Windows Server 2022 x86_64",
         uploadApk = false,
         composeResourceTriple = "windows-x64",
         gradleHeap = "4g",
@@ -540,7 +538,7 @@ workflow(
         },
     )
 
-    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2019])
+    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022])
     val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15])
 
     addJob(buildMatrixInstances[Runner.GithubMacOS13], needs = listOf(win, macAarch64)) { matrix ->
