@@ -151,11 +151,12 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
             VlcjData(
                 data,
                 setPlay = {
+                    val lowerHeaders = data.headers.mapKeys { it.key.lowercase() }
                     player.media().play(
                         data.uri,
                         *buildList {
-                            add("http-user-agent=${data.headers["User-Agent"] ?: "Mozilla/5.0"}")
-                            val referer = data.headers["Referer"]
+                            add("http-user-agent=${lowerHeaders["user-agent"] ?: "Mozilla/5.0"}")
+                            val referer = lowerHeaders["referer"]
                             if (referer != null) {
                                 add("http-referrer=${referer}")
                             }
