@@ -60,10 +60,10 @@ jobs:
         prerelease: '${{ contains(steps.step-1.outputs.tag, ''-'') }}'
       env:
         GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
-  release_github-windows-2019:
-    name: 'Windows Server 2019 x86_64'
+  release_github-windows-2022:
+    name: 'Windows Server 2022 x86_64'
     runs-on:
-    - 'windows-2019'
+    - 'windows-2022'
     needs:
     - 'create-release'
     steps:
@@ -236,7 +236,7 @@ jobs:
     - 'macos-13'
     needs:
     - 'create-release'
-    - 'release_github-windows-2019'
+    - 'release_github-windows-2022'
     - 'release_self-hosted-macos-15'
     steps:
     - id: 'step-0'
