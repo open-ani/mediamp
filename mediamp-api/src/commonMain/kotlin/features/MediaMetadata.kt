@@ -46,7 +46,7 @@ public interface MediaMetadata : Feature {
  *
  * This method is stable, meaning that it always return the same instance for the same input ([this]).
  */
-public val MediampPlayer.audioTracks
+public val MediampPlayer.audioTracks : TrackGroup<AudioTrack>?
     get() = features[MediaMetadata]?.audioTracks
 
 /**
@@ -54,7 +54,7 @@ public val MediampPlayer.audioTracks
  *
  * This method is stable, meaning that it always return the same instance for the same input ([this]).
  */
-public val MediampPlayer.subtitleTracks
+public val MediampPlayer.subtitleTracks : TrackGroup<SubtitleTrack>?
     get() = features[MediaMetadata]?.subtitleTracks
 
 /**
@@ -62,5 +62,5 @@ public val MediampPlayer.subtitleTracks
  *
  * This method is stable, meaning that it always return the same instance for the same input ([this]).
  */
-public val MediampPlayer.chapters
+public val MediampPlayer.chapters : Flow<List<Chapter>>?
     get() = features[MediaMetadata]?.chapters
