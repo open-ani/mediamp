@@ -78,6 +78,17 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
             return RV32BufferFormat(sourceWidth, sourceHeight)
         }
 
+        override fun newFormatSize(
+            bufferWidth: Int,
+            bufferHeight: Int,
+            displayWidth: Int,
+            displayHeight: Int
+        ) {
+            /*
+            视频高度变化时会调用
+             */
+        }
+
         override fun allocatedBuffers(buffers: Array<ByteBuffer>) {
             frameBytes = buffers[0].run { ByteArray(remaining()).also(::get) }
             imageInfo = ImageInfo(
@@ -90,10 +101,18 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
     }
 
     private inner class SkiaBitmapRenderCallback : RenderCallback {
+        override fun lock(mediaPlayer: MediaPlayer) {
+        }
+
+        override fun unlock(mediaPlayer: MediaPlayer) {
+        }
+
         override fun display(
             mediaPlayer: MediaPlayer,
-            nativeBuffers: Array<ByteBuffer>,
+            nativeBuffers: Array<out ByteBuffer>,
             bufferFormat: BufferFormat,
+            displayWidth: Int,
+            displayHeight: Int
         ) {
             val allowedDrawFramesValue = ALLOWED_DRAW_FRAMES.get(this@SkiaBitmapVideoSurface)
 
