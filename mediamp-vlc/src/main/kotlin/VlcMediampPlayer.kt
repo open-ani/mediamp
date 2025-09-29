@@ -334,12 +334,20 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     playbackState.value = PlaybackState.ERROR
                 }
 
-                override fun positionChanged(mediaPlayer: MediaPlayer?, newPosition: Float) {
+                override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) {
+                    val properties = mediaProperties.value
+                    if (properties != null) {
+                        currentPositionMillis.value = newTime
+                    }
+                }
+                
+                override fun positionChanged(mediaPlayer: MediaPlayer, newPosition: Float) {
                     val properties = mediaProperties.value
                     if (properties != null) {
                         currentPositionMillis.value = (newPosition * properties.durationMillis).toLong()
                     }
                 }
+
             },
         )
 
