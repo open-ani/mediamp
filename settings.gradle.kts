@@ -38,3 +38,5 @@ include(":ci-helper")
 include(":catalog")
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
+
+include(":app:desktop")
