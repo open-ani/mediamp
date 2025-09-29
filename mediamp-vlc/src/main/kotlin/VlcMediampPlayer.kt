@@ -94,7 +94,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 //        "--intf=dummy",
 //        "-v"
 //    )
-
+    
     public val player: EmbeddedMediaPlayer = createPlayerLock.withLock {
         MediaPlayerFactory("-v")
             .mediaPlayers()
@@ -160,6 +160,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                             if (referer != null) {
                                 add("http-referrer=${referer}")
                             }
+                            addAll(data.options)
                         }.toTypedArray(),
                     )
                     lastMedia = null
