@@ -8,6 +8,7 @@
 
 package org.openani.mediamp.exoplayer.compose
 
+import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,7 +21,7 @@ import org.openani.mediamp.exoplayer.ExoPlayerMediampPlayer
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.VideoAspectRatio
 
-@UnstableApi
+@OptIn(UnstableApi::class)
 @Composable
 fun ExoPlayerMediampPlayerSurface(
     mediampPlayer: ExoPlayerMediampPlayer,
