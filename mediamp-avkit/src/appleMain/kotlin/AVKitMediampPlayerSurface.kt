@@ -59,7 +59,7 @@ public fun AVKitMediampPlayerSurface(
             it.videoGravity = when (aspectRatioMode) {
                 AspectRatioMode.FIT -> AVLayerVideoGravityResizeAspect
                 AspectRatioMode.STRETCH -> AVLayerVideoGravityResize
-                AspectRatioMode.FILL -> AVLayerVideoGravityResizeAspectFill
+                AspectRatioMode.CROP -> AVLayerVideoGravityResizeAspectFill
             }
         },
         onRelease = {

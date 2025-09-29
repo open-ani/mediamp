@@ -51,7 +51,7 @@ class AspectRatioModeTest {
         calculator.calculate(
             imageSize = IntSize(1920, 1080),
             frameSize = Size(800f, 600f),
-            aspectRatioMode = AspectRatioMode.FILL
+            aspectRatioMode = AspectRatioMode.CROP
         )
 
         // Should maintain 16:9 aspect ratio, fill width

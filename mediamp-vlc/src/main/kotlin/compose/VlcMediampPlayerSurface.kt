@@ -128,7 +128,7 @@ internal class FrameSizeCalculator {
         when (aspectRatioMode) {
             AspectRatioMode.FIT -> calculateFitInside(imageSize, frameSize)
             AspectRatioMode.STRETCH -> calculateStretch(frameSize)
-            AspectRatioMode.FILL -> calculateFill(imageSize, frameSize)
+            AspectRatioMode.CROP -> calculateFill(imageSize, frameSize)
         }
 
         lastImageSize = imageSize

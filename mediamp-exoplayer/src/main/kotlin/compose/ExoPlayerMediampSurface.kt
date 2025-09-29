@@ -47,7 +47,7 @@ fun ExoPlayerMediampPlayerSurface(
             view.resizeMode = when (aspectRatioMode) {
                 AspectRatioMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                 AspectRatioMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                AspectRatioMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                AspectRatioMode.CROP -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
             }
         },
     )

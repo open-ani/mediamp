@@ -31,7 +31,7 @@ public enum class AspectRatioMode {
      * Fill the container while maintaining the original aspect ratio.
      * The video may be cropped if the aspect ratios don't match.
      */
-    FILL
+    CROP
 }
 
 /**

@@ -33,8 +33,8 @@ class VideoAspectRatioTest {
         aspectRatio.setMode(AspectRatioMode.STRETCH)
         assertEquals(AspectRatioMode.STRETCH, aspectRatio.mode.first())
         
-        aspectRatio.setMode(AspectRatioMode.FILL)
-        assertEquals(AspectRatioMode.FILL, aspectRatio.mode.first())
+        aspectRatio.setMode(AspectRatioMode.CROP)
+        assertEquals(AspectRatioMode.CROP, aspectRatio.mode.first())
         
         aspectRatio.setMode(AspectRatioMode.FIT)
         assertEquals(AspectRatioMode.FIT, aspectRatio.mode.first())
