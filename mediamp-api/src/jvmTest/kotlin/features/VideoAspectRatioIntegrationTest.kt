@@ -51,6 +51,6 @@ class VideoAspectRatioIntegrationTest {
         assertEquals(3, modes.size)
         
         val modeNames = modes.map { it.name }.toSet()
-        assertEquals(setOf("FIT", "STRETCH", "FILL"), modeNames)
+        assertEquals(setOf("FIT", "STRETCH", "CROP"), modeNames)
     }
 }
