@@ -11,6 +11,7 @@ package org.openani.mediamp.vlc.compose
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import org.openani.mediamp.features.AspectRatioMode
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.test.Test
@@ -33,7 +34,7 @@ class FrameSizeCalculatorTest {
         val img = IntSize(1920, 1080)          // 16:9
         val frame = Size(800f, 600f)            // 4:3 – width-limited
 
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
 
         // fits in frame
         assertTrue(c.dstSize.width <= frame.width.roundToInt() + SIZE_EPS)
@@ -61,7 +62,7 @@ class FrameSizeCalculatorTest {
         val img = IntSize(1080, 1920)          // 9:16
         val frame = Size(400f, 900f)            // height-limited
 
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
 
         assertTrue(c.dstSize.width <= frame.width.roundToInt() + SIZE_EPS)
         assertTrue(c.dstSize.height <= frame.height.roundToInt() + SIZE_EPS)
@@ -77,7 +78,7 @@ class FrameSizeCalculatorTest {
         val img = IntSize(1600, 900)          // 16:9
         val frame = Size(300.4f, 200.6f)       // deliberate fractions
 
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
 
         assertTrue(c.dstSize.width <= frame.width.roundToInt() + SIZE_EPS)
         assertTrue(c.dstSize.height <= frame.height.roundToInt() + SIZE_EPS)
@@ -93,7 +94,7 @@ class FrameSizeCalculatorTest {
         val img = IntSize(8000, 6000)
         val frame = Size(1f, 1f)
 
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
 
         assertEquals(IntSize(1, 1), c.dstSize)
         assertEquals(IntOffset(0, 0), c.dstOffset)
@@ -106,12 +107,12 @@ class FrameSizeCalculatorTest {
         val img = IntSize(1920, 1080)
         val frame = Size(500f, 500f)
 
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
         val firstSize = c.dstSize
         val firstOffset = c.dstOffset
 
         // Call again with identical params
-        c.calculate(img, frame)
+        c.calculate(img, frame, AspectRatioMode.FIT)
 
         assertEquals(firstSize, c.dstSize)
         assertEquals(firstOffset, c.dstOffset)
