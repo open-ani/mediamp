@@ -1,31 +1,31 @@
 [versions]
-gradle-maven-publish-plugin = "0.28.0"
-kotlin = "2.1.20"
+gradle-maven-publish-plugin = "0.34.0"
+kotlin = "2.2.20"
 
 ### KOTLINX ###
-kotlinx-coroutines = "1.10.1" # https://github.com/Kotlin/kotlinx.coroutines/releases
-kotlinx-atomicfu = "0.27.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
-kotlinx-io = "0.6.0" # https://github.com/Kotlin/kotlinx-io/releases
+kotlinx-coroutines = "1.10.2" # https://github.com/Kotlin/kotlinx.coroutines/releases
+kotlinx-atomicfu = "0.29.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
+kotlinx-io = "0.8.0" # https://github.com/Kotlin/kotlinx-io/releases
 
 #
-jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
+jna = "5.18.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
 
-android-gradle-plugin = "8.9.2"
+android-gradle-plugin = "8.13.0"
 androidx-annotation = "1.9.1"
-androidx-media3 = "1.5.1"
+androidx-media3 = "1.8.0"
 
 junit4 = "4.13.2"
 
 # Compose
 # https://developer.android.com/jetpack/androidx/releases/compose-material3
-compose-material3 = "1.3.1"
-jetpack-compose = "1.7.6"
+compose-material3 = "1.4.0"
+jetpack-compose = "1.9.2"
 # https://github.com/JetBrains/compose-multiplatform/releases
 # https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-compatibility-and-versioning.html#use-a-developer-version-of-compose-multiplatform-compiler
-compose-multiplatform = "1.7.1"
+compose-multiplatform = "1.9.0"
 
-vlcj = "4.8.2"
-androidx-test-ext-junit = "1.1.2"
+vlcj = "4.11.0"
+androidx-test-ext-junit = "1.3.0"
 
 
 [plugins]

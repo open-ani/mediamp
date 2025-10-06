@@ -8,7 +8,7 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
+
 
 plugins {
     kotlin("multiplatform")
@@ -47,7 +47,7 @@ kotlin {
 
 mavenPublishing {
     configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

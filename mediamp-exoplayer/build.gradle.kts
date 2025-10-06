@@ -7,7 +7,7 @@
  */
 
 import com.vanniktech.maven.publish.AndroidMultiVariantLibrary
-import com.vanniktech.maven.publish.SonatypeHost
+
 
 plugins {
     kotlin("android")
@@ -39,7 +39,7 @@ mavenPublishing {
             includedBuildTypeValues = setOf("debug", "release"),
         ),
     )
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

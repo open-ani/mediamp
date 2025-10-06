@@ -18,7 +18,7 @@ pluginManagement {
 }
 
 plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
 include(":mediamp-internal-utils")
@@ -31,7 +31,6 @@ include(":mediamp-mpv")
 include(":mediamp-avkit")
 
 include(":mediamp-all")
-
 //include(":mediamp-preview")
 include(":mediamp-source-ktxio")
 
@@ -39,3 +38,5 @@ include(":ci-helper")
 include(":catalog")
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
+
+include(":app:desktop")
