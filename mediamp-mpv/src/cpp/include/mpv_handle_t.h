@@ -8,6 +8,11 @@
 #include <iostream>
 #include <jni.h>
 #include <mpv/client.h>
+#include <mpv/render_gl.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "compatible_thread.h"
 #include "log.h"
 
@@ -34,7 +39,19 @@ public:
     
     bool attach_android_surface(JNIEnv *env, jobject surface);
     bool detach_android_surface(JNIEnv *env);
-    
+
+#ifdef _WIN32
+        bool attach_window_surface(int64_t wid);
+        bool detach_window_surface();
+#endif
+
+    // Render API (Windows x64 only)
+    bool create_render_context();
+
+    bool destroy_render_context();
+
+    bool render_frame(int fbo, int w, int h);
+
 private:
     JavaVM *jvm_;
     mpv_handle *handle_;
@@ -48,6 +65,8 @@ private:
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
     bool event_loop_request_exit = false;
+
+        mpv_render_context *render_context_ = nullptr;
 
     void *event_loop(void *arg);
 };

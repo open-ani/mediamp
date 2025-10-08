@@ -3,6 +3,11 @@
 #include "method_cache.h"
 #include "compatible_thread.h"
 #include "global_lock.h"
+#include <mpv/render_gl.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 extern "C" {
 #include <libavcodec/jni.h>
@@ -160,6 +165,73 @@ bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
     return false;
 #endif
 }
+
+#ifdef _WIN32
+    bool mpv_handle_t::attach_window_surface(int64_t wid) {
+        FP;
+        CHECK_HANDLE();
+        return mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
+    }
+    
+    bool mpv_handle_t::detach_window_surface() {
+        FP;
+        CHECK_HANDLE();
+        int64_t wid = 0;
+        return mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
+    }
+#endif
+
+    bool mpv_handle_t::create_render_context() {
+        FP;
+        CHECK_HANDLE()
+
+#ifdef _WIN32
+        if (render_context_)
+            return true;
+    
+        mpv_opengl_init_params gl_init_params{};
+        gl_init_params.get_proc_address = (void *(*)(void *, const char *)) wglGetProcAddress;
+        gl_init_params.get_proc_address_ctx = nullptr;
+    
+        mpv_render_param params[] = {
+                {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
+                {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
+                {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+    
+        if (mpv_render_context_create(&render_context_, handle_, params) < 0) {
+            render_context_ = nullptr;
+            return false;
+        }
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool mpv_handle_t::destroy_render_context() {
+        FP;
+        if (!render_context_)
+            return false;
+
+        mpv_render_context_free(render_context_);
+        render_context_ = nullptr;
+        return true;
+    }
+
+    bool mpv_handle_t::render_frame(int fbo, int w, int h) {
+        FP;
+        if (!render_context_)
+            return false;
+
+        mpv_opengl_fbo fbo_params{fbo, w, h, 0};
+        mpv_render_param params[] = {
+                {MPV_RENDER_PARAM_OPENGL_FBO, &fbo_params},
+                {MPV_RENDER_PARAM_INVALID,    nullptr},
+        };
+        mpv_render_context_render(render_context_, params);
+        return true;
+    }
 
 bool mpv_handle_t::destroy(JNIEnv *env) {
     FP;
