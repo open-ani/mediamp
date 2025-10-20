@@ -30,12 +30,14 @@ import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediampPlayer
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.Screenshots
+import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.metadata.AudioTrack
@@ -239,6 +241,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private val playbackSpeed = VlcPlaybackSpeed(player)
     private val audioLevelController = VlcAudioLevelController(player)
     private val mediaMetadata = VlcMediaMetadata()
+    private val videoAspectRatio = VlcVideoAspectRatio()
 
     @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
@@ -247,6 +250,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         add(AudioLevelController.Key, audioLevelController)
         add(PlaybackSpeed.Key, playbackSpeed)
         add(MediaMetadata, mediaMetadata)
+        add(VideoAspectRatio.Key, videoAspectRatio)
     }
 
     override fun getCurrentPlaybackState(): PlaybackState {
@@ -623,6 +627,15 @@ internal class VlcBuffering(
             delay(1500)
         }
     }.distinctUntilChanged()
+}
+
+@OptIn(InternalForInheritanceMediampApi::class)
+internal class VlcVideoAspectRatio : VideoAspectRatio {
+    override val mode: MutableStateFlow<AspectRatioMode> = MutableStateFlow(AspectRatioMode.FIT)
+
+    override fun setMode(mode: AspectRatioMode) {
+        this.mode.value = mode
+    }
 }
 
 
