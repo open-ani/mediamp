@@ -162,6 +162,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                             if (referer != null) {
                                 add("http-referrer=${referer}")
                             }
+                            addAll(data.options)
                         }.toTypedArray(),
                     )
                     lastMedia = null
