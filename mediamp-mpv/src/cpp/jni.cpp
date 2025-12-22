@@ -6,6 +6,7 @@
 
 #define FN(name) Java_org_openani_mediamp_mpv_MPVHandleKt_##name
 #define FN_ANDROID(name) Java_org_openani_mediamp_mpv_MPVHandleAndroid_##name
+#define FN_DESKTOP(name) Java_org_openani_mediamp_mpv_MPVHandleDesktop_##name
 
 extern "C" {
     JNIEXPORT jboolean JNICALL FN(nGlobalInit)(JNIEnv *env, jclass clazz);
@@ -39,10 +40,18 @@ extern "C" {
     // renderer
     JNIEXPORT jboolean JNICALL FN_ANDROID(nAttachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr, jobject surface);
     JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+
+#ifdef _WIN32
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr, jlong hwnd);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDetachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContext)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContext)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrame)(JNIEnv *env, jclass clazz, jlong ptr, jint fbo, jint width, jint height);
+#endif
     
-/**
- * 关闭此 mpv_handle_t 实例
- */
+	/**
+	 * 关闭此 mpv_handle_t 实例
+	 */
     JNIEXPORT jboolean JNICALL FN(nDestroy)(JNIEnv *env, jclass clazz, jlong ptr);
     /**
      * 被 GC 调用，回收 mpv_handle_t
@@ -232,6 +241,33 @@ JNIEXPORT jboolean JNICALL FN_ANDROID(nAttachAndroidSurface)(JNIEnv *env, jclass
 JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr) {
     auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
     return instance->detach_android_surface(env);
+}
+
+#ifdef _WIN32
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr, jlong hwnd) {
+    auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+    return instance->attach_window_surface(hwnd);
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDetachWindowSurface)(JNIEnv *env, jclass clazz, jlong ptr) {
+    auto* instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+    return instance->detach_window_surface();
+}
+#endif
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContext)(JNIEnv * env, jclass clazz, jlong ptr ) {
+	auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+	return instance->create_render_context();
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContext)(JNIEnv * env, jclass clazz, jlong ptr) {
+	auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+	return instance->destroy_render_context();
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrame)(JNIEnv * env, jclass clazz, jlong ptr, jint fbo, jint width, jint height) {
+	auto *instance = reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+	return instance->render_frame(fbo, width, height);
 }
 
 JNIEXPORT jboolean JNICALL FN(nDestroy)(JNIEnv *env, jclass clazz, jlong ptr) {
