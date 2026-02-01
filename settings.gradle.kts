@@ -27,10 +27,12 @@ include(":mediamp-api")
 include(":mediamp-vlc")
 include(":mediamp-vlc-loader")
 include(":mediamp-exoplayer")
-include(":mediamp-mpv")
+// include(":mediamp-mpv")
 include(":mediamp-avkit")
 
 include(":mediamp-all")
+
+include(":mediamp-test")
 
 //include(":mediamp-preview")
 include(":mediamp-source-ktxio")

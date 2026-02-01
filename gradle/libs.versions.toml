@@ -10,7 +10,7 @@ kotlinx-io = "0.6.0" # https://github.com/Kotlin/kotlinx-io/releases
 #
 jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
 
-android-gradle-plugin = "8.9.2"
+android-gradle-plugin = "8.9.3"
 androidx-annotation = "1.9.1"
 androidx-media3 = "1.5.1"
 
