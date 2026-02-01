@@ -35,6 +35,7 @@ catalog {
         library("mediamp-all", group, "mediamp-all").versionRef("mediamp")
 
         library("mediamp-api", group, "mediamp-api").versionRef("mediamp")
+        library("mediamp-test", group, "mediamp-test").versionRef("mediamp")
         library("mediamp-compose", group, "mediamp-compose").versionRef("mediamp")
 
         library("mediamp-source-ktxio", group, "mediamp-source-ktxio").versionRef("mediamp")

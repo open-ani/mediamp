@@ -1,7 +1,7 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024 OpenAni and contributors.
  *
- * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
+ * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
@@ -27,11 +27,7 @@ actual class MpvMediampPlayer (
     context: Any,
     parentCoroutineContext: CoroutineContext,
 ) : AbstractMediampPlayer<MpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
-    class MPVPlayerData(
-        mediaData: MediaData,
-        val setMedia: () -> Unit,
-        releaseResource: () -> Unit,
-    ) : Data(mediaData, releaseResource)
+    class MPVPlayerData(mediaData: MediaData) : Data(mediaData)
     
     private val handle = MPVHandle(context)
     
@@ -168,7 +164,7 @@ actual class MpvMediampPlayer (
         return detachSurface(handle.ptr)
     }
 
-    override suspend fun setDataImpl(data: MediaData): MPVPlayerData = when (data) {
+    override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
             val headers = data.headers
             
@@ -182,31 +178,35 @@ actual class MpvMediampPlayer (
                 handle.option("http-header-fields", "$key: $value")
             }
 
-            MPVPlayerData(
-                data,
-                setMedia = {
-                    handle.option("pause", "true")
-                    handle.command("loadfile", data.uri)
-                },
-                releaseResource = { data.close() },
-            )
+            MPVPlayerData(data)
         }
         is SeekableInputMediaData -> {
             TODO()
         }
     }
 
-    override suspend fun startPlayer(data: MPVPlayerData) {
-        data.setMedia()
-
+    override fun resumeImpl() {
+        when (playbackState.value) {
+            PlaybackState.READY -> {
+                val media = openResource.value ?: return
+                handle.option("pause", "true")
+                when (val data = media.mediaData) {
+                    is UriMediaData -> {
+                        handle.command("loadfile", data.uri)
+                        playbackState.value = PlaybackState.PLAYING
+                    }
+                    is SeekableInputMediaData -> TODO()
+                    else -> { } // TODO: log unsupported media type
+                }
+            }
+            PlaybackState.PLAYING -> {
+                handle.command("cycle", "pause")
+            }
+            else -> { } // TODO: unreachable
+        }
     }
 
-    override fun resume() {
-        if (playbackState.value == PlaybackState.PLAYING) return
-        handle.command("cycle", "pause")
-    }
-
-    override fun pause() {
+    override fun pauseImpl() {
         if (playbackState.value == PlaybackState.PAUSED) return
         handle.command("cycle", "pause")
     }
@@ -224,6 +224,7 @@ actual class MpvMediampPlayer (
     override fun stopPlaybackImpl() {
         handle.command("stop")
         currentPositionMillis.value = 0L
+        playbackState.value = PlaybackState.FINISHED
     }
     
 

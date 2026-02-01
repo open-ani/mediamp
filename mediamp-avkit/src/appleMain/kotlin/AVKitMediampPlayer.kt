@@ -21,13 +21,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
-import org.openani.mediamp.MediampPlayer
+import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
@@ -71,44 +71,24 @@ import platform.Foundation.removeObserver
 import platform.darwin.NSObject
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
-@OptIn(InternalForInheritanceMediampApi::class, ExperimentalForeignApi::class)
+@OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalForeignApi::class)
 public class AVKitMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
-) : MediampPlayer {
+) : AbstractMediampPlayer<AVKitMediampPlayer.AVKitData>(Dispatchers.Main) {
     override val impl: AVPlayer = AVPlayer()
 
     // ------------------------------------------------------------------------------------
     // State & Flows
     // ------------------------------------------------------------------------------------
-    private val _playbackState = MutableStateFlow(PlaybackState.CREATED)
-    override val playbackState: StateFlow<PlaybackState> get() = _playbackState.asStateFlow()
+    override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
 
-    private val _mediaData = MutableStateFlow<MediaData?>(null)
-    override val mediaData: Flow<MediaData?> get() = _mediaData
+    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
 
-    private val _mediaProperties = MutableStateFlow<MediaProperties?>(null)
-    override val mediaProperties: StateFlow<MediaProperties?> get() = _mediaProperties.asStateFlow()
-
-    private val _currentPositionMillis = MutableStateFlow(0L)
-    override val currentPositionMillis: StateFlow<Long> get() = _currentPositionMillis.asStateFlow()
-
-    // A simple derived flow that (naively) calculates progress from [currentPositionMillis / duration].
-    override val playbackProgress: Flow<Float> = flow {
-        // Re-emit whenever position or total duration changes, by polling.
-        // Alternatively, you can combine flows or do a more direct approach.
-        while (true) {
-            val duration = _mediaProperties.value?.durationMillis?.takeIf { it > 0 }
-            val pos = _currentPositionMillis.value
-            emit(
-                if (duration != null) (pos.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                else 0f,
-            )
-            delay(1.seconds)
-        }
-    }
+    private var hasPlaybackStarted: Boolean = false
 
     @OptIn(ExperimentalMediampApi::class)
     private val bufferingFeature = object : Buffering {
@@ -120,64 +100,13 @@ public class AVKitMediampPlayer(
      * Implement AudioLevelController feature by bridging to [AVPlayer.volume] and [AVPlayer.isMuted].
      */
     @OptIn(ExperimentalMediampApi::class)
-    private val audioLevelController = object : AudioLevelController {
-        private val _volume = MutableStateFlow(impl.volume.coerceIn(0f, 1f))
-        private val _isMute = MutableStateFlow(impl.isMuted())
-
-        override val volume: StateFlow<Float> get() = _volume
-        override val maxVolume: Float = 1.0f
-        override val isMute: StateFlow<Boolean> get() = _isMute
-
-        override fun setMute(mute: Boolean) {
-            impl.setMuted(mute)
-            _isMute.value = mute
-        }
-
-        override fun setVolume(volume: Float) {
-            val coerced = volume.coerceIn(0f, maxVolume)
-            impl.volume = coerced
-            // If we're unmuting by setting volume > 0, also ensure isMuted is false.
-            if (coerced > 0f && impl.isMuted()) {
-                impl.setMuted(false)
-                _isMute.value = false
-            }
-            _volume.value = coerced
-        }
-
-        override fun volumeUp(value: Float) {
-            setVolume(_volume.value + value)
-        }
-
-        override fun volumeDown(value: Float) {
-            setVolume(_volume.value - value)
-        }
-    }
+    private val audioLevelController = AVKitAudioLevelController(impl)
 
     @OptIn(ExperimentalMediampApi::class)
-    private val playbackSpeedFeature = object : PlaybackSpeed {
-        private val _value = MutableStateFlow(
-            1.0f, // AVPlayer impl.rate default is 0.0f, so we set 1.0f as default to align with other platforms.
-        )
-
-        override val valueFlow: Flow<Float> get() = _value
-        override val value: Float get() = _value.value
-
-        override fun set(speed: Float) {
-            _value.value = speed
-            impl.setRate(speed)
-        }
-    }
+    private val playbackSpeedFeature = AVKitPlaybackSpeed(impl)
 
     @OptIn(ExperimentalMediampApi::class)
-    private val videoAspectRatioFeature = object : VideoAspectRatio {
-        private val _mode = MutableStateFlow(AspectRatioMode.FIT)
-
-        override val mode: StateFlow<AspectRatioMode> get() = _mode
-
-        override fun setMode(mode: AspectRatioMode) {
-            _mode.value = mode
-        }
-    }
+    private val videoAspectRatioFeature = AVKitVideoAspectRatio()
 
     @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
@@ -202,11 +131,27 @@ public class AVKitMediampPlayer(
     private val notificationCenter = NSNotificationCenter.defaultCenter
     private var didPlayToEndObserver: Any? = null
 
+    public inner class AVKitData(
+        override val mediaData: MediaData,
+        public val playerItem: AVPlayerItem,
+    ) : Data(mediaData) {
+        override fun release() {
+            removePlayerItemObservers()
+            impl.replaceCurrentItemWithPlayerItem(null)
+            super.release()
+            mediaProperties.value = null
+            currentPositionMillis.value = 0L
+            bufferingFeature.isBuffering.value = false
+            bufferingFeature.bufferedPercentage.value = 0
+            hasPlaybackStarted = false
+        }
+    }
+
     init {
         // Periodically update current position & buffering progress
         coroutineScope.launch {
             while (currentCoroutineContext().isActive) {
-                _currentPositionMillis.value = getCurrentPositionMillis()
+                currentPositionMillis.value = getCurrentPositionMillis()
                 // We do not have an official property for “percentage buffered” from AVPlayer,
                 // so here we leave the Buffering feature’s .bufferedPercentage at 0 or 100.
                 // You can approximate it using 'loadedTimeRanges' from the AVPlayerItem if you wish.
@@ -214,9 +159,7 @@ public class AVKitMediampPlayer(
             }
         }
         // Observe changes in timeControlStatus -> map to PLAYING, PAUSED, or BUFFERING.
-        timeControlStatusObserver = impl.observeValue(
-            keyPath = "timeControlStatus",
-        ) { _ ->
+        timeControlStatusObserver = impl.observeValue(OBSERVATION_KEY_TIME_CONTROL_STATUS) {
             updatePlaybackStateFromTimeControlStatus(impl)
         }
     }
@@ -225,133 +168,72 @@ public class AVKitMediampPlayer(
     // setMediaData
     // ------------------------------------------------------------------------------------
     @OptIn(ExperimentalMediampApi::class)
-    override suspend fun setMediaData(data: MediaData) {
-        // If the same data is already set, ignore per the doc
-        if (_mediaData.value == data) {
-            return
-        }
-        // Stop/cleanup old resource if any
-        stopPlayback() // will set state FINISHED if we were >= READY
+    override suspend fun setMediaDataImpl(data: MediaData): AVKitData {
         removePlayerItemObservers()
+        hasPlaybackStarted = false
+        bufferingFeature.isBuffering.value = false
+        bufferingFeature.bufferedPercentage.value = 0
+        currentPositionMillis.value = 0L
+        mediaProperties.value = null
 
-        // open the new data
-        // if data.open() throws, we set state=ERROR and rethrow
-        try {
-            // Create an AVPlayerItem from the given data
-            val playerItem = when (data) {
-                is UriMediaData -> makePlayerItemFromUriData(data)
-                is SeekableInputMediaData -> makePlayerItemFromSeekableData(data)
-            }
-
-            // Observe its status
-            lastPlayerItem = playerItem
-            playerItemStatusObserver = playerItem.observeValue(
-                keyPath = "status",
-            ) {
-                when (impl.status) {
-                    AVPlayerItemStatusReadyToPlay -> {
-                        // Mark us as READY (if user hasn't called resume() yet, we remain in READY)
-                        _playbackState.value = PlaybackState.READY
-                        bufferingFeature.isBuffering.value = false
-                        // Update mediaProperties if we can parse them now
-                        updateMediaProperties(playerItem)
-                    }
-
-                    AVPlayerItemStatusFailed -> {
-                        // error
-                        _playbackState.value = PlaybackState.ERROR
-                    }
-
-                    else -> {
-                        // .Unknown => do nothing special
-                    }
-                }
-            }
-
-            // Observe "didPlayToEnd" => FINISHED
-            didPlayToEndObserver = notificationCenter.addObserverForName(
-                name = AVPlayerItemDidPlayToEndTimeNotification,
-                `object` = playerItem,
-                queue = null,
-            ) { _ ->
-                _playbackState.value = PlaybackState.FINISHED
-            }
-
-            // Attach new item to the player
-            impl.replaceCurrentItemWithPlayerItem(playerItem)
-            _mediaData.value = data
-
-            // If the doc says setMediaData => we should go to READY eventually:
-            // We will wait for the item’s status to become ReadyToPlay, at which point the flow
-            // will emit PlaybackState.READY. *If* it fails, we set ERROR.
-        } catch (ex: Throwable) {
-            // If there's an error opening the data, we set playbackState=ERROR and rethrow
-            _playbackState.value = PlaybackState.ERROR
-            throw ex
+        val playerItem = when (data) {
+            is UriMediaData -> makePlayerItemFromUriData(data)
+            is SeekableInputMediaData -> makePlayerItemFromSeekableData(data)
         }
+
+        lastPlayerItem = playerItem
+        impl.replaceCurrentItemWithPlayerItem(playerItem)
+
+        awaitPlayerItemReady(playerItem)
+
+        didPlayToEndObserver = notificationCenter.addObserverForName(
+            name = AVPlayerItemDidPlayToEndTimeNotification,
+            `object` = playerItem,
+            queue = null,
+        ) { _ ->
+            playbackState.value = PlaybackState.FINISHED
+            bufferingFeature.isBuffering.value = false
+        }
+
+        return AVKitData(data, playerItem)
     }
 
     // ------------------------------------------------------------------------------------
     // Playback control
     // ------------------------------------------------------------------------------------
-    override fun resume() {
-        /**
-         * Follow the doc’s states:
-         * If we are at READY or PAUSED => we attempt to play.
-         */
-        when (val st = _playbackState.value) {
-            PlaybackState.READY, PlaybackState.PAUSED -> {
-                impl.playImmediatelyAtRate(playbackSpeedFeature.value)
-            }
-
-            else -> {
-                // do nothing if we're not in READY/PAUSED. The doc says calls are ignored otherwise.
-            }
-        }
+    override fun resumeImpl() {
+        hasPlaybackStarted = true
+        impl.playImmediatelyAtRate(playbackSpeedFeature.value)
     }
 
-    override fun pause() {
-        // If no video is playing, do nothing. Otherwise, just call player.pause()
-        if (_mediaData.value == null) return
+    override fun pauseImpl() {
         impl.pause()
-        // We rely on AVPlayer’s KVO to set playbackState -> PAUSED
     }
 
-    override fun stopPlayback() {
-        /**
-         * If state >= READY => transition to FINISHED.
-         * Then detach the item from the player and reset position to 0.
-         * So the doc says: "If call stopPlayback() at state < READY => no effect."
-         */
-        val st = _playbackState.value
-        if (st == PlaybackState.READY ||
-            st == PlaybackState.PAUSED ||
-            st == PlaybackState.PLAYING ||
-            st == PlaybackState.PAUSED_BUFFERING
-        ) {
-            _playbackState.value = PlaybackState.FINISHED
-            removePlayerItemObservers()
-            impl.replaceCurrentItemWithPlayerItem(null)
-            _mediaData.value?.close() // close MediaData
-            _mediaData.value = null
-            _currentPositionMillis.value = 0
-        }
-        // else do nothing
+    override fun stopPlaybackImpl() {
+        hasPlaybackStarted = false
+        bufferingFeature.isBuffering.value = false
+        bufferingFeature.bufferedPercentage.value = 0
+        playbackState.value = PlaybackState.FINISHED
+        currentPositionMillis.value = 0L
+        impl.pause()
+        impl.replaceCurrentItemWithPlayerItem(null)
     }
 
     @OptIn(ExperimentalForeignApi::class)
     override fun seekTo(positionMillis: Long) {
-        val st = _playbackState.value
+        val st = playbackState.value
         if (st < PlaybackState.READY) {
             // doc says ignore if < READY
             return
         }
         val item = impl.currentItem ?: return
         // Convert from ms to CMTime
-        val timeSec = positionMillis.toDouble() / 1000.0
+        val clamped = positionMillis.coerceAtLeast(0L)
+        val timeSec = clamped.toDouble() / 1000.0
         val cmTime = platform.CoreMedia.CMTimeMakeWithSeconds(timeSec, preferredTimescale = 600)
         item.seekToTime(cmTime)
-        _currentPositionMillis.value = positionMillis
+        currentPositionMillis.value = clamped
     }
 
     // skip(deltaMillis) has default implementation in the interface => calls seekTo.
@@ -359,7 +241,7 @@ public class AVKitMediampPlayer(
     // ------------------------------------------------------------------------------------
     // Queries
     // ------------------------------------------------------------------------------------
-    override fun getCurrentPlaybackState(): PlaybackState = _playbackState.value
+    override fun getCurrentPlaybackState(): PlaybackState = playbackState.value
 
     @OptIn(ExperimentalForeignApi::class)
     override fun getCurrentPositionMillis(): Long {
@@ -370,22 +252,17 @@ public class AVKitMediampPlayer(
         return (seconds * 1000).toLong().coerceAtLeast(0)
     }
 
-    override fun getCurrentMediaProperties(): MediaProperties? = _mediaProperties.value
+    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
 
     // ------------------------------------------------------------------------------------
     // Closing
     // ------------------------------------------------------------------------------------
-    override fun close() {
-        // If already destroyed, do nothing
-        if (_playbackState.value == PlaybackState.DESTROYED) return
-
-        // doc says: calling close => state => DESTROYED
-        _playbackState.value = PlaybackState.DESTROYED
-        stopPlayback() // stop / free any item
+    override fun closeImpl() {
+        playbackState.value = PlaybackState.DESTROYED
         removePlayerItemObservers()
 
         timeControlStatusObserver?.let {
-            impl.removeObserver(it, forKeyPath = "timeControlStatus")
+            impl.removeObserver(it, OBSERVATION_KEY_TIME_CONTROL_STATUS)
         }
         timeControlStatusObserver = null
 
@@ -400,7 +277,7 @@ public class AVKitMediampPlayer(
     // ------------------------------------------------------------------------------------
     private fun removePlayerItemObservers() {
         playerItemStatusObserver?.let {
-            lastPlayerItem?.removeObserver(it, forKeyPath = "status")
+            lastPlayerItem?.removeObserver(it, OBSERVATION_KEY_STATUS)
         }
         playerItemStatusObserver = null
         lastPlayerItem = null
@@ -420,20 +297,23 @@ public class AVKitMediampPlayer(
      */
     @OptIn(ExperimentalMediampApi::class)
     private fun updatePlaybackStateFromTimeControlStatus(player: AVPlayer) {
+        val currentState = playbackState.value
+        if (currentState <= PlaybackState.FINISHED) {
+            return
+        }
         when (player.timeControlStatus) {
             // 2
             AVPlayerTimeControlStatusPlaying -> {
-                // If we haven't reached READY yet, interpret this as we are now PLAYING
-                _playbackState.value = PlaybackState.PLAYING
+                playbackState.value = PlaybackState.PLAYING
                 bufferingFeature.isBuffering.value = false
+                hasPlaybackStarted = true
             }
 
             // 0
             AVPlayerTimeControlStatusPaused -> {
-                // Could be paused or not started. 
-                // If we are not yet READY, do not set to PAUSED. 
-                if (_playbackState.value >= PlaybackState.READY) {
-                    _playbackState.value = PlaybackState.PAUSED
+                // Only transition to PAUSED after actual playback started.
+                if (currentState == PlaybackState.PLAYING || currentState == PlaybackState.PAUSED_BUFFERING) {
+                    playbackState.value = PlaybackState.PAUSED
                 }
                 bufferingFeature.isBuffering.value = false
             }
@@ -441,8 +321,10 @@ public class AVKitMediampPlayer(
             // 1
             AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate -> {
                 // iOS is waiting => buffering
-                if (_playbackState.value >= PlaybackState.READY) {
-                    _playbackState.value = PlaybackState.PAUSED_BUFFERING
+                if (currentState == PlaybackState.PLAYING ||
+                    (currentState == PlaybackState.READY && hasPlaybackStarted)
+                ) {
+                    playbackState.value = PlaybackState.PAUSED_BUFFERING
                     bufferingFeature.isBuffering.value = true
                 }
             }
@@ -462,10 +344,63 @@ public class AVKitMediampPlayer(
             value.toDouble() / timescale.toDouble()
         }
         val ms = (durationSec * 1000).toLong().coerceAtLeast(0)
-        _mediaProperties.value = MediaProperties(
+        mediaProperties.value = MediaProperties(
             title = null, // Could parse from metadata if you wish
             durationMillis = ms,
         )
+    }
+
+    private suspend fun awaitPlayerItemReady(playerItem: AVPlayerItem) {
+        suspendCancellableCoroutine { cont ->
+            var awaiting = true
+
+            fun resumeOnce() {
+                if (!awaiting || !cont.isActive) return
+                awaiting = false
+                cont.resume(Unit)
+            }
+
+            fun resumeWithFailure(ex: Throwable) {
+                if (!awaiting || !cont.isActive) return
+                awaiting = false
+                cont.resumeWithException(ex)
+            }
+
+            fun handleStatus() {
+                when (playerItem.status) {
+                    AVPlayerItemStatusReadyToPlay -> {
+                        updateMediaProperties(playerItem)
+                        bufferingFeature.isBuffering.value = false
+                        resumeOnce()
+                    }
+
+                    AVPlayerItemStatusFailed -> {
+                        val error = IllegalStateException("AVPlayerItem failed to load media.")
+                        if (awaiting) {
+                            resumeWithFailure(error)
+                        } else {
+                            playbackState.value = PlaybackState.ERROR
+                        }
+                    }
+
+                    else -> Unit
+                }
+            }
+
+            val observer = playerItem.observeValue(OBSERVATION_KEY_STATUS) {
+                handleStatus()
+            }
+            playerItemStatusObserver = observer
+            cont.invokeOnCancellation {
+                awaiting = false
+                if (playerItemStatusObserver === observer) {
+                    playerItem.removeObserver(observer, OBSERVATION_KEY_STATUS)
+                    playerItemStatusObserver = null
+                }
+            }
+
+            handleStatus()
+        }
     }
 
     // ------------------------------------------------------------------------------------
@@ -486,6 +421,75 @@ public class AVKitMediampPlayer(
         // You must set up a custom AVAssetResourceLoaderDelegate or use a local temp file approach.
         // For demonstration, we just throw NotImplementedError:
         throw UnsupportedOperationException("SeekableInputMediaData is not directly supported in AVKitMediampPlayer yet.")
+    }
+
+    private companion object {
+        const val OBSERVATION_KEY_STATUS = "status"
+        const val OBSERVATION_KEY_TIME_CONTROL_STATUS = "timeControlStatus"
+    }
+}
+
+@OptIn(InternalForInheritanceMediampApi::class)
+internal class AVKitAudioLevelController(
+    private val player: AVPlayer,
+) : AudioLevelController {
+    private val _volume = MutableStateFlow(player.volume.coerceIn(0f, 1f))
+    private val _isMute = MutableStateFlow(player.isMuted())
+
+    override val volume: StateFlow<Float> get() = _volume
+    override val maxVolume: Float = 1.0f
+    override val isMute: StateFlow<Boolean> get() = _isMute
+
+    override fun setMute(mute: Boolean) {
+        player.setMuted(mute)
+        _isMute.value = mute
+    }
+
+    override fun setVolume(volume: Float) {
+        val coerced = volume.coerceIn(0f, maxVolume)
+        player.volume = coerced
+        // If we're unmuting by setting volume > 0, also ensure isMuted is false.
+        if (coerced > 0f && player.isMuted()) {
+            player.setMuted(false)
+            _isMute.value = false
+        }
+        _volume.value = coerced
+    }
+
+    override fun volumeUp(value: Float) {
+        setVolume(_volume.value + value)
+    }
+
+    override fun volumeDown(value: Float) {
+        setVolume(_volume.value - value)
+    }
+}
+
+@OptIn(InternalForInheritanceMediampApi::class)
+internal class AVKitPlaybackSpeed(
+    private val player: AVPlayer
+) : PlaybackSpeed {
+    private val _value = MutableStateFlow(
+        1.0f, // AVPlayer impl.rate default is 0.0f, so we set 1.0f as default to align with other platforms.
+    )
+
+    override val valueFlow: Flow<Float> get() = _value
+    override val value: Float get() = _value.value
+
+    override fun set(speed: Float) {
+        _value.value = speed
+        player.setRate(speed)
+    }
+}
+
+@OptIn(InternalForInheritanceMediampApi::class)
+internal class AVKitVideoAspectRatio : VideoAspectRatio {
+    private val _mode = MutableStateFlow(AspectRatioMode.FIT)
+
+    override val mode: StateFlow<AspectRatioMode> get() = _mode
+
+    override fun setMode(mode: AspectRatioMode) {
+        _mode.value = mode
     }
 }
 
@@ -517,13 +521,3 @@ private inline fun <T : NSObject> T.observeValue(
     )
     return observer
 }
-
-///////////////////////////////////////////////////////////////////////////
-// Compatibility, remove when the new state design is merged.
-///////////////////////////////////////////////////////////////////////////
-
-private val PlaybackState.Companion.CREATED
-    get() = PlaybackState.READY
-
-private val PlaybackState.Companion.DESTROYED
-    get() = PlaybackState.FINISHED
