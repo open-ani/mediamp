@@ -374,7 +374,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         setupGradle()
 
         gradleCheck()
-        uploadMediampBackendMpv()
+        // uploadMediampBackendMpv()
 
         cleanupTempFiles()
     }
@@ -529,7 +529,7 @@ workflow(
 
 
                 // no check
-                uploadMediampBackendMpv()
+                // uploadMediampBackendMpv()
 
                 additionalSteps(matrix)
 
