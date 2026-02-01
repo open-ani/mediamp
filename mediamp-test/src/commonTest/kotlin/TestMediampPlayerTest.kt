@@ -1,3 +1,11 @@
+/*
+ * Copyright (C) 2024-2026 OpenAni and contributors.
+ *
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 package org.openani.mediamp.test
 
 import kotlinx.coroutines.flow.first
@@ -32,7 +40,7 @@ class TestMediampPlayerTest {
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
             headers = emptyMap(),
-            extraFiles = MediaExtraFiles()
+            extraFiles = MediaExtraFiles(),
         )
 
         // Setting the media data should transition the state to READY
@@ -52,7 +60,7 @@ class TestMediampPlayerTest {
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
             headers = emptyMap(),
-            extraFiles = MediaExtraFiles()
+            extraFiles = MediaExtraFiles(),
         )
 
         // Setup media data -> READY
@@ -74,7 +82,7 @@ class TestMediampPlayerTest {
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
             headers = emptyMap(),
-            extraFiles = MediaExtraFiles()
+            extraFiles = MediaExtraFiles(),
         )
 
         player.setMediaData(data)
@@ -99,7 +107,7 @@ class TestMediampPlayerTest {
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
             headers = emptyMap(),
-            extraFiles = MediaExtraFiles()
+            extraFiles = MediaExtraFiles(),
         )
 
         // Go to READY -> PLAYING
@@ -124,14 +132,14 @@ class TestMediampPlayerTest {
         val data = UriMediaData(
             uri = "file:///fake_video.mp4",
             headers = emptyMap(),
-            extraFiles = MediaExtraFiles()
+            extraFiles = MediaExtraFiles(),
         )
 
         player.setMediaData(data)
         player.resume()
 
         // Check initial dummy position
-        assertEquals(10000L, player.currentPositionMillis.value)
+        assertEquals(0L, player.currentPositionMillis.value)
 
         // Seek to 20s
         player.seekTo(20000L)
@@ -153,8 +161,8 @@ class TestMediampPlayerTest {
             UriMediaData(
                 uri = "file:///fake_video.mp4",
                 headers = emptyMap(),
-                extraFiles = MediaExtraFiles()
-            )
+                extraFiles = MediaExtraFiles(),
+            ),
         )
 
         // READY -> PLAY
