@@ -37,7 +37,6 @@
 
 import Secrets.GITHUB_REPOSITORY
 import io.github.typesafegithub.workflows.actions.actions.Checkout
-import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
 import io.github.typesafegithub.workflows.actions.actions.UploadArtifact
 import io.github.typesafegithub.workflows.actions.bhowell2.GithubSubstringAction_Untyped
@@ -541,7 +540,7 @@ workflow(
     val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022])
     val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15])
 
-    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
+    /*addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
         with(WithMatrix(matrix)) {
             listOf(
                 OS.WINDOWS to Arch.X64,
@@ -567,7 +566,7 @@ workflow(
                 ),
             )
         }
-    }
+    }*/
 }
 
 data class GitTag(
