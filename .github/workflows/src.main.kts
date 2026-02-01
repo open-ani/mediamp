@@ -1,7 +1,7 @@
 #!/usr/bin/env kotlin
 
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -257,14 +257,6 @@ sealed class Runner(
         labels = setOf("windows-2022"),
     )
 
-    object GithubMacOS13 : GithubHosted(
-        id = "github-macos-13",
-        displayName = "macOS 13 x86_64 (GitHub)",
-        os = OS.MACOS,
-        arch = Arch.X64,
-        labels = setOf("macos-13"),
-    )
-
     object GithubMacOS14 : GithubHosted(
         id = "github-macos-14",
         displayName = "macOS 14 AArch64 (GitHub)",
@@ -273,8 +265,16 @@ sealed class Runner(
         labels = setOf("macos-14"),
     )
 
-    object GithubMacOS15 : GithubHosted(
-        id = "github-macos-15",
+    object GithubMacOS15Intel : GithubHosted(
+        id = "github-macos-15-intel",
+        displayName = "macOS 15 x86_64 (GitHub)",
+        os = OS.MACOS,
+        arch = Arch.X64,
+        labels = setOf("macos-15-intel"),
+    )
+
+    object GithubMacOS15AppleSilicon : GithubHosted(
+        id = "github-macos-15-apple",
         displayName = "macOS 15 AArch64 (GitHub)",
         os = OS.MACOS,
         arch = Arch.AARCH64,
@@ -339,7 +339,7 @@ val buildMatrixInstances = listOf(
         buildAllAndroidAbis = false,
     ),
     MatrixInstance(
-        runner = Runner.GithubMacOS13,
+        runner = Runner.GithubMacOS15Intel,
         uploadApk = true, // all ABIs
         composeResourceTriple = "macos-x64",
         buildIosFramework = false,
@@ -541,7 +541,7 @@ workflow(
     val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022])
     val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15])
 
-    addJob(buildMatrixInstances[Runner.GithubMacOS13], needs = listOf(win, macAarch64)) { matrix ->
+    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
         with(WithMatrix(matrix)) {
             listOf(
                 OS.WINDOWS to Arch.X64,
