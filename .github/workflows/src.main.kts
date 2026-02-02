@@ -37,7 +37,6 @@
 
 import Secrets.GITHUB_REPOSITORY
 import io.github.typesafegithub.workflows.actions.actions.Checkout
-import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
 import io.github.typesafegithub.workflows.actions.actions.UploadArtifact
 import io.github.typesafegithub.workflows.actions.bhowell2.GithubSubstringAction_Untyped
@@ -543,7 +542,7 @@ workflow(
 
     addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
         with(WithMatrix(matrix)) {
-            listOf(
+            /*listOf(
                 OS.WINDOWS to Arch.X64,
                 OS.MACOS to Arch.AARCH64,
             ).forEach { (os, arch) ->
@@ -555,7 +554,7 @@ workflow(
                 )
             }
 
-            run(command = "ls -l mediamp-mpv/build/native-jars")
+            run(command = "ls -l mediamp-mpv/build/native-jars")*/
             runGradle(
                 tasks = ["publish"],
                 env = mapOf(
