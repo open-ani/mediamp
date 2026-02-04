@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -8,10 +8,33 @@
 
 package org.openani.mediamp.mpv
 
+import org.openani.mediamp.InternalMediampApi
+
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
     TODO("Not yet implemented")
 }
 
 internal actual fun detachSurface(ptr: Long): Boolean {
     TODO()
+}
+
+actual fun createRenderContext(ptr: Long, devicePtr: Long, contextPtr: Long): Boolean {
+    error("only implemented on desktop")
+}
+
+actual fun destroyRenderContext(ptr: Long): Boolean {
+    error("only implemented on desktop")
+}
+
+actual fun createTexture(ptr: Long, width: Int, height: Int): Int {
+    error("only implemented on desktop")
+}
+
+actual fun releaseTexture(ptr: Long): Boolean {
+    error("only implemented on desktop")
+}
+
+@OptIn(InternalMediampApi::class)
+actual fun renderFrameToTexture(ptr: Long): Boolean {
+    error("only implemented on desktop")
 }

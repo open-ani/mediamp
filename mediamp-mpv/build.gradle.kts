@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -17,6 +17,9 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 plugins {
     kotlin("multiplatform")
     id("com.android.library")
+
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
 
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
@@ -47,8 +50,8 @@ kotlin {
                 implementation(projects.mediampInternalUtils)
             }
         }
-        getByName("jvmMain").dependencies { 
-            
+        getByName("jvmMain").dependencies {
+
         }
         desktopMain.dependencies {
             api(libs.jna.platform)

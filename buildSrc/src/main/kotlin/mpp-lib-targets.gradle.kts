@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -137,7 +137,7 @@ kotlinMultiplatformExtension?.apply {
 
 fun HasConfigurableKotlinCompilerOptions<KotlinJvmCompilerOptions>.configureJvmOptions() {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_1_8)
+        jvmTarget.set(JvmTarget.JVM_11)
     }
 }
 
@@ -152,8 +152,8 @@ extensions.findByType<KotlinJvmExtension>()?.apply {
 }
 
 extensions.findByType<JavaPluginExtension>()?.apply {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
 }
 
 extensions.findByType<KotlinAndroidExtension>()?.apply {

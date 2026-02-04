@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -77,7 +77,7 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
     /**
      * Stop this `mpv_context` instance, which will run into the unrecoverable state.
      *
-     * You will not expected to call any method except [close] after calling this function.
+     * You will not expect to call any method except [close] after calling this function.
      */
     fun destroy(): Boolean {
         return nDestroy(ptr)
@@ -143,3 +143,28 @@ internal expect fun detachSurface(ptr: Long): Boolean
 
 private external fun nDestroy(ptr: Long): Boolean
 private external fun nFinalize(ptr: Long)
+
+/**
+ * Desktop only
+ */
+internal expect fun createRenderContext(ptr: Long, devicePtr: Long, contextPtr: Long): Boolean
+
+/**
+ * Desktop only
+ */
+internal expect fun destroyRenderContext(ptr: Long): Boolean
+
+/**
+ * Desktop only
+ */
+internal expect fun createTexture(ptr: Long, width: Int, height: Int): Int
+
+/**
+ * Desktop only
+ */
+internal expect fun releaseTexture(ptr: Long): Boolean
+
+/**
+ * Desktop only
+ */
+internal expect fun renderFrameToTexture(ptr: Long): Boolean

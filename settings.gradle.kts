@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -27,7 +27,7 @@ include(":mediamp-api")
 include(":mediamp-vlc")
 include(":mediamp-vlc-loader")
 include(":mediamp-exoplayer")
-// include(":mediamp-mpv")
+include(":mediamp-mpv")
 include(":mediamp-avkit")
 
 include(":mediamp-all")

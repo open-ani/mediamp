@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project("mediampv" LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # set prebuilt mpv library path for each target
@@ -111,6 +111,10 @@ else()
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
             "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
+    if(WIN32)
+        target_link_libraries(${PROJECT_NAME} PRIVATE
+                opengl32)
+    endif()
 endif()
 
 # 查找所有动态库文件
