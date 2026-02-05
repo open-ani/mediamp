@@ -49,9 +49,6 @@ actual fun MpvMediampPlayerSurface(
     DisposableEffect(components) {
         if (components == null) return@DisposableEffect onDispose { }
 
-        player.createRenderContext(components.glDevice, components.glContext)
-        renderContextInitialized = true
-
         onDispose {
             player.image?.close()
             player.backendTexture?.close()
@@ -67,7 +64,11 @@ actual fun MpvMediampPlayerSurface(
     Canvas(modifier = modifier) {
         interpolator.updateSubscription
 
-        if (!renderContextInitialized || components == null) return@Canvas
+        if (components == null) return@Canvas
+        if (!renderContextInitialized) {
+            renderContextInitialized = player.createRenderContext(components.glDevice, components.glContext)
+            if (!renderContextInitialized) return@Canvas
+        }
         val skiaCanvas = drawContext.canvas.nativeCanvas
 
         if (player.currentSize == null || player.currentSize != size || textureId == 0) {

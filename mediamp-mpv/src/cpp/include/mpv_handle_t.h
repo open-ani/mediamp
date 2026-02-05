@@ -5,7 +5,7 @@
 #ifndef MEDIAMP_MPV_HANDLE_T_H
 #define MEDIAMP_MPV_HANDLE_T_H
 
-#include <iostream>
+#include <memory>
 #include <jni.h>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
@@ -13,6 +13,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <gl/GL.h>
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <GL/glx.h>
 #endif
 #include "compatible_thread.h"
 #include "global_lock.h"
@@ -47,6 +50,7 @@ public:
     bool detach_window_surface();
 #endif
 
+#ifdef _WIN32
     // Render API (Windows x64 only)
     bool create_render_context(HDC device, HGLRC context);
     bool destroy_render_context();
@@ -55,6 +59,17 @@ public:
     bool release_texture();
 
     bool render_frame();
+#endif
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    bool create_render_context(Display* display, GLXContext context);
+    bool destroy_render_context();
+
+    GLuint create_texture(int width, int height);
+    bool release_texture();
+
+    bool render_frame();
+#endif
 
 private:
     JavaVM *jvm_;
@@ -71,6 +86,17 @@ private:
     mpv_render_context *render_context_ = nullptr;
     HGLRC context_ = nullptr;
     HDC device_ = nullptr;
+
+    GLuint fbo_ = 0, texture_ = 0;
+    int width_ = 0, height_ = 0;
+    CREATE_LOCK(texture_lock);
+#endif
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    mpv_render_context *render_context_ = nullptr;
+    Display* display_ = nullptr;
+    GLXContext context_ = nullptr;
+    GLXDrawable drawable_ = 0;
 
     GLuint fbo_ = 0, texture_ = 0;
     int width_ = 0, height_ = 0;

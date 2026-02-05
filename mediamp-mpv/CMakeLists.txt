@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(MPV_LIB_PATH "")
 set(MPV_LIB_NAME "")
+set(MPV_LINK_LIBS "")
+set(MPV_SKIP_COPY FALSE)
 
 if(WIN32)
     add_compile_definitions(_WIN32_WINNT=0x0A00)
@@ -19,6 +21,10 @@ if(WIN32)
         set(MPV_LIB_NAME "libmpv-2.lib")
         set(MPV_LIB_EXTERNAL_AVCODEC_NAME "avcodec-61.lib")
         set(MPV_LIB_EXTERNAL_SWSCALE_NAME "swscale-8.lib")
+        set(MPV_LINK_LIBS
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
     else()
         message(FATAL_ERROR "only support x86_64 on Windows")
     endif()
@@ -35,6 +41,10 @@ elseif(APPLE)
         set(MPV_LIB_NAME "libmpv.2.dylib")
         set(MPV_LIB_EXTERNAL_AVCODEC_NAME "libavcodec.61.19.100.dylib")
         set(MPV_LIB_EXTERNAL_SWSCALE_NAME "libswscale.8.3.100.dylib")
+        set(MPV_LINK_LIBS
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
     endif()
 elseif(ANDROID)
     set(ANDROID_STL c++_shared)
@@ -54,7 +64,19 @@ elseif(ANDROID)
         set(MPV_LIB_NAME "libmpv.so")
         set(MPV_LIB_EXTERNAL_AVCODEC_NAME "libavcodec.so")
         set(MPV_LIB_EXTERNAL_SWSCALE_NAME "libswscale.so")
+        set(MPV_LINK_LIBS
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
+            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
     endif()
+elseif(UNIX)
+    # Linux (and other UNIX-like systems)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+    find_package(OpenGL REQUIRED)
+    find_package(X11 REQUIRED)
+    set(MPV_LINK_LIBS PkgConfig::MPV)
+    set(MPV_SKIP_COPY TRUE)
 else()
     message(FATAL_ERROR "Unknown operating system")
 endif()
@@ -62,7 +84,9 @@ endif()
 # configure project
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libmpv/include")
-link_directories(${MPV_LIB_PATH})
+if (MPV_LIB_PATH)
+    link_directories(${MPV_LIB_PATH})
+endif()
 
 if (NOT ANDROID) 
     set(JAVA_AWT_LIBRARY NotNeeded) # todo
@@ -92,9 +116,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${SRC_PREFIX}/include")
 if (ANDROID)
     target_link_libraries(${PROJECT_NAME} PRIVATE 
             android log
-            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
-            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
-            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
+            ${MPV_LINK_LIBS})
 else()
     # 假设 JNI_INCLUDE_DIRS 是一个包含多个路径的列表
     set(FILTERED_JNI_LIBRARIES "")
@@ -108,37 +130,53 @@ else()
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
             ${FILTERED_JNI_LIBRARIES}
-            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_AVCODEC_NAME}"
-            "${MPV_LIB_PATH}/${MPV_LIB_EXTERNAL_SWSCALE_NAME}"
-            "${MPV_LIB_PATH}/${MPV_LIB_NAME}")
+            ${MPV_LINK_LIBS})
     if(WIN32)
         target_link_libraries(${PROJECT_NAME} PRIVATE
                 opengl32)
     endif()
+    if(UNIX AND NOT APPLE AND NOT ANDROID)
+        if(TARGET OpenGL::GL)
+            target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL)
+        elseif(TARGET OpenGL::OpenGL)
+            target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::OpenGL)
+        endif()
+        if(TARGET OpenGL::GLX)
+            target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GLX)
+        endif()
+        if(TARGET X11::X11)
+            target_link_libraries(${PROJECT_NAME} PRIVATE X11::X11)
+        endif()
+        if(X11_INCLUDE_DIR)
+            target_include_directories(${PROJECT_NAME} PRIVATE ${X11_INCLUDE_DIR})
+        endif()
+    endif()
 endif()
 
-# 查找所有动态库文件
-file(GLOB MPV_LIBS_DEPS
-    "${MPV_LIB_PATH}/*.dylib"  # macOS 动态库
-    "${MPV_LIB_PATH}/*.so"     # Linux 和 Android 动态库
-    "${MPV_LIB_PATH}/*.dll"    # Windows 动态库
-)
+if (NOT MPV_SKIP_COPY)
+    # 查找所有动态库文件
+    file(GLOB MPV_LIBS_DEPS
+        "${MPV_LIB_PATH}/*.dylib"  # macOS 动态库
+        "${MPV_LIB_PATH}/*.so"     # Linux 和 Android 动态库
+        "${MPV_LIB_PATH}/*.dll"    # Windows 动态库
+    )
 
-set(MPV_OUTPUT_LIBS_DIR "")
-if (WIN32 OR ANDROID)
-    set(MPV_OUTPUT_LIBS_DIR $<TARGET_FILE_DIR:${PROJECT_NAME}>)
-else ()
-    set(MPV_OUTPUT_LIBS_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/deps/")
-endif ()
+    set(MPV_OUTPUT_LIBS_DIR "")
+    if (WIN32 OR ANDROID)
+        set(MPV_OUTPUT_LIBS_DIR $<TARGET_FILE_DIR:${PROJECT_NAME}>)
+    else ()
+        set(MPV_OUTPUT_LIBS_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/deps/")
+    endif ()
 
-# 在构建后复制所有动态库文件到目标目录
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Copying dynamic library files..."
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${MPV_OUTPUT_LIBS_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MPV_LIBS_DEPS}
-        ${MPV_OUTPUT_LIBS_DIR}
-)
+    # 在构建后复制所有动态库文件到目标目录
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "Copying dynamic library files..."
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${MPV_OUTPUT_LIBS_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${MPV_LIBS_DEPS}
+            ${MPV_OUTPUT_LIBS_DIR}
+    )
+endif()
 
 
 message(STATUS "MPV library path: ${MPV_LIB_PATH}")
