@@ -8,6 +8,7 @@
 
 package org.openani.mediamp.exoplayer.compose
 
+import android.view.LayoutInflater
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -18,6 +19,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import org.openani.mediamp.exoplayer.ExoPlayerMediampPlayer
+import org.openani.mediamp.exoplayer.R
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.VideoAspectRatio
 
@@ -33,8 +35,8 @@ fun ExoPlayerMediampPlayerSurface(
     
     AndroidView(
         factory = { context ->
-            PlayerView(context).apply {
-                useController = false
+            val view = LayoutInflater.from(context).inflate(R.layout.mediamp_exo_player_view_texture, null) as PlayerView
+            view.apply {
                 this.player = mediampPlayer.impl
                 configuration()
             }
