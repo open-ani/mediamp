@@ -6,40 +6,41 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-import com.vanniktech.maven.publish.AndroidMultiVariantLibrary
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
-    kotlin("android")
-    id("com.android.library")
+    kotlin("multiplatform")
+    id("com.android.kotlin.multiplatform.library")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
-    `mpp-lib-targets`
+    `android-mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
 description = "MediaMP backend using ExoPlayer"
 
-android {
-    namespace = "org.openani.mediamp.exoplayer"
-}
-
-dependencies {
-    api(projects.mediampApi)
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.androidx.media3.ui)
+kotlin {
+    androidLibrary {
+        namespace = "org.openani.mediamp.exoplayer"
+    }
+    
+    sourceSets.androidMain {
+        dependencies {
+            api(projects.mediampApi)
+            implementation(libs.androidx.media3.exoplayer)
+            implementation(libs.androidx.media3.ui)
+        }
+    }
 }
 
 mavenPublishing {
     configure(
-        AndroidMultiVariantLibrary(
-            sourcesJar = true,
-            publishJavadocJar = true,
-            includedBuildTypeValues = setOf("debug", "release"),
-        ),
+        KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")),
     )
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

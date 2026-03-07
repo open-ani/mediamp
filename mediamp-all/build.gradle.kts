@@ -8,11 +8,11 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("multiplatform")
-    id("com.android.library")
+    id("com.android.kotlin.multiplatform.library")
 
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
@@ -20,12 +20,12 @@ plugins {
 
 description = "MediaMP all-in-one bundle for Kotlin Multiplatform targeting Android, iOS, and Desktop."
 
-android {
-    namespace = "org.openani.mediamp.all"
-}
 
 kotlin {
     explicitApi()
+    androidLibrary {
+        namespace = "org.openani.mediamp.all"
+    }
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
@@ -43,14 +43,11 @@ kotlin {
             api(libs.androidx.media3.exoplayer.hls)
         }
     }
-    androidTarget {
-        publishLibraryVariants("debug", "release")
-    }
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

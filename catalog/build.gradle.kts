@@ -8,7 +8,6 @@
 
 @file:OptIn(ExperimentalKotlinGradlePluginApi::class)
 
-import com.vanniktech.maven.publish.SonatypeHost
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 
 plugins {
@@ -31,7 +30,6 @@ catalog {
         library("mediamp-vlc-compose", group, "mediamp-vlc-compose").versionRef("mediamp")
         library("mediamp-avkit", group, "mediamp-avkit").versionRef("mediamp")
         library("mediamp-avkit-compose", group, "mediamp-avkit-compose").versionRef("mediamp")
-        library("mediamp-test", group, "mediamp-test").versionRef("mediamp")
         library("mediamp-all", group, "mediamp-all").versionRef("mediamp")
 
         library("mediamp-api", group, "mediamp-api").versionRef("mediamp")
@@ -44,7 +42,7 @@ catalog {
 
 mavenPublishing {
     configure(com.vanniktech.maven.publish.VersionCatalog())
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

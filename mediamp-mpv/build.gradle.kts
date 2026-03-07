@@ -16,7 +16,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 plugins {
     kotlin("multiplatform")
-    id("com.android.library")
+    id("com.android.kotlin.multiplatform.library")
 
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)

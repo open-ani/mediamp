@@ -30,48 +30,16 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import kotlin.apply
 
 /*
- * 配置 JVM + Android 的 compose 项目. 默认不会配置 resources. 
- * 
- * 该插件必须在 kotlin, compose, android 之后引入.
- * 
- * 如果开了 android, 就会配置 desktop + android, 否则只配置 jvm.
+ * KMP Project 中特化给 Android 库使用, 不配置其他 targets, 只配置 Android Library
  */
-
-val enableJvmTarget = project.findProperty("mediamp.jvm.target")?.toString()?.toBooleanStrict() ?: true
 
 val androidLibraryExtension = extensions.findByType(KotlinMultiplatformExtension::class)
     ?.extensions?.findByType(KotlinMultiplatformAndroidLibraryExtension::class)
 val composeExtension = extensions.findByType(ComposeExtension::class)
 val kotlinMultiplatformExtension = extensions.findByType<KotlinMultiplatformExtension>()
 
-kotlinMultiplatformExtension?.apply { 
-    /**
-     * 平台架构:
-     * ```
-     * common
-     *   - jvm (可访问 JDK, 但不能使用 Android SDK 没有的 API)
-     *     - android (可访问 Android SDK)
-     *     - desktop (可访问 JDK)
-     *   - native
-     *     - apple
-     *       - ios
-     *         - iosArm64
-     *         - iosSimulatorArm64 TODO
-     * ```
-     *
-     * `native - apple - ios` 的架构是为了契合 Kotlin 官方推荐的默认架构. 以后如果万一要添加其他平台, 可方便添加.
-     */
-    if (project.enableIos) {
-        iosArm64()
-        iosSimulatorArm64() // to run tests
-        // no x86
-    }
+kotlinMultiplatformExtension?.apply {
     if (androidLibraryExtension != null) {
-        if (enableJvmTarget) {
-            jvm("desktop") {
-                configureJvmOptions()
-            }
-        }
         androidLibrary {
             compileSdk = getIntProperty("android.compile.sdk")
             minSdk = getIntProperty("android.min.sdk")
@@ -108,12 +76,7 @@ kotlinMultiplatformExtension?.apply {
         applyDefaultHierarchyTemplate {
             common {
                 group("jvm") {
-                    withJvm()
                     group("android")
-                }
-                group("skiko") {
-                    withJvm()
-                    withNative()
                 }
 
                 group("android") {
@@ -123,12 +86,6 @@ kotlinMultiplatformExtension?.apply {
         }
 
     } else {
-        if (enableJvmTarget) {
-            jvm {
-                configureJvmOptions()
-            }
-        }
-
         applyDefaultHierarchyTemplate()
     }
 
@@ -152,24 +109,6 @@ kotlinMultiplatformExtension?.apply {
         // https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-test.html#writing-and-running-tests-with-compose-multiplatform
         if (composeExtension != null) {
             implementation(libs.getLibrary("compose-ui-test"))
-        }
-    }
-
-    if (composeExtension != null && enableJvmTarget) {
-        sourceSets.getByName("desktopMain").dependencies {
-            implementation(libs.getLibrary("compose-ui-test-junit4"))
-        }
-    }
-
-    if (project.findProperty("mediamp.ios.target")?.toString()?.toBoolean() != false) {
-        // ios testing workaround
-        // https://developer.squareup.com/blog/kotlin-multiplatform-shared-test-resources/
-        val copyiOSTestResources = tasks.register<Copy>("copyiOSTestResources") {
-            from("src/commonTest/resources")
-            into("build/bin/iosSimulatorArm64/debugTest/resources")
-        }
-        tasks.named("iosSimulatorArm64Test") {
-            dependsOn(copyiOSTestResources)
         }
     }
 

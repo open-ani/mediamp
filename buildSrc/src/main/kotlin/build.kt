@@ -7,6 +7,9 @@
  */
 
 import com.android.build.api.dsl.CommonExtension
+import com.android.build.api.dsl.KotlinMultiplatformAndroidLibraryTarget
+import com.android.build.gradle.api.KotlinMultiplatformAndroidPlugin
+import org.gradle.api.Action
 import org.gradle.api.JavaVersion
 import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalog
@@ -26,6 +29,7 @@ import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinCommonCompilerOptions
+import org.jetbrains.kotlin.gradle.dsl.KotlinGradlePluginDsl
 import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinProjectExtension
@@ -40,6 +44,7 @@ import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 import java.io.File
+import kotlin.jvm.optionals.getOrNull
 
 fun Project.sharedAndroidProguardRules(): Array<File> {
     val dir = rootProject.projectDir
@@ -56,6 +61,9 @@ private fun Project.versionCatalogLibs(): VersionCatalog =
 
 private operator fun VersionCatalog.get(name: String): String = findVersion(name).get().displayName
 
+fun VersionCatalog.getLibrary(name: String): String = findLibrary(name).getOrNull()?.orNull?.toString()
+    ?: error("Library $name not found in version catalog")
+
 private fun Project.kotlinCommonCompilerOptions(): KotlinCommonCompilerOptions = when (val ext = kotlinExtension) {
     is KotlinJvmProjectExtension -> ext.compilerOptions
     is KotlinAndroidProjectExtension -> ext.compilerOptions
@@ -71,4 +79,14 @@ fun Project.withKotlinTargets(fn: (KotlinTarget) -> Unit) {
                 fn(this)
             }
     }
+}
+
+@KotlinGradlePluginDsl
+internal fun KotlinMultiplatformExtension.androidLibrary(
+    action: Action<KotlinMultiplatformAndroidLibraryTarget>
+) {
+    if (!project.plugins.hasPlugin(KotlinMultiplatformAndroidPlugin::class.java)) {
+        throw IllegalStateException("KMP Android plugin is not applied")
+    }
+    extensions.configure("android", action)
 }
