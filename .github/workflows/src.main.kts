@@ -584,12 +584,7 @@ workflow(
         with(WithMatrix(matrix)) {
             runGradle(
                 name = "Publish",
-                tasks = arrayOf(
-                    "publish",
-                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
-                ),
+                tasks = arrayOf("publish"),
                 env = mavenCentralPublishEnv(),
             )
         }

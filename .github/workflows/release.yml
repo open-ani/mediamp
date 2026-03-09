@@ -358,7 +358,7 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
-      run: './gradlew publish -x :mediamp-ffmpeg:publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
+      run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
     - id: 'step-12'
       name: 'Cleanup temp files'
       continue-on-error: true
