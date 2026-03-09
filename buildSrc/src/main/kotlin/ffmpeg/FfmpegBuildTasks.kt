@@ -108,6 +108,7 @@ private fun registerFfmpegTasks(
         val buildDir = project.layout.buildDirectory.dir("ffmpeg/${target.name}").get().asFile
         val installDir = buildDir.resolve("install")
         val targetSourceDir = project.layout.buildDirectory.dir("ffmpeg-source/${target.name}").get().asFile
+        val targetConfigureFile = targetSourceDir.resolve("configure")
         val configStamp = buildDir.resolve(".config_stamp")
         val buildStamp = buildDir.resolve(".build_stamp")
         val targetSourceTask = project.tasks.register("prepareFfmpegSource${target.name}") {
@@ -115,6 +116,7 @@ private fun registerFfmpegTasks(
             description = "Copy FFmpeg source tree for ${target.name}"
             inputs.dir(ffmpegSrcDir)
             outputs.dir(targetSourceDir)
+            outputs.file(targetConfigureFile)
             doFirst {
                 require(ffmpegSrcDir.resolve("configure").isFile) {
                     "FFmpeg source tree is missing configure at ${ffmpegSrcDir.absolutePath}"
@@ -124,6 +126,9 @@ private fun registerFfmpegTasks(
                 targetSourceDir.deleteRecursively()
                 ffmpegSrcDir.copyRecursively(targetSourceDir, overwrite = true)
                 restoreExecutablePermissions(ffmpegSrcDir, targetSourceDir)
+                require(targetConfigureFile.isFile) {
+                    "Failed to prepare FFmpeg source for ${target.name}: ${targetConfigureFile.absolutePath} was not copied."
+                }
             }
         }
 
@@ -167,9 +172,9 @@ private fun registerFfmpegTasks(
                     addAll(target.extraFlags)
                 }
                 val configurePath = if (hostOs == Os.Windows) {
-                    targetSourceDir.resolve("configure").absolutePath.toMsysPath()
+                    targetConfigureFile.absolutePath.toMsysPath()
                 } else {
-                    targetSourceDir.resolve("configure").absolutePath
+                    targetConfigureFile.absolutePath
                 }
                 val buildDirPath =
                     if (hostOs == Os.Windows) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath

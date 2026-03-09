@@ -80,6 +80,25 @@ internal class FfmpegBuildContext(
 
     val makeJobs: Int = Runtime.getRuntime().availableProcessors()
 
+    val hostMacArchFlag: String?
+        get() = when (hostArch) {
+            Arch.AARCH64 -> "arm64"
+            Arch.X86_64 -> "x86_64"
+            Arch.UNKNOWN -> null
+        }
+
+    val appleHostToolFlags: List<String>
+        get() {
+            val arch = hostMacArchFlag ?: error("Unknown macOS host architecture for Apple FFmpeg build.")
+            val flags = "-arch $arch -mmacosx-version-min=12.0"
+            return listOf(
+                "--host-cc=xcrun --sdk macosx clang",
+                "--host-cflags=$flags",
+                "--host-ld=xcrun --sdk macosx clang",
+                "--host-ldflags=$flags",
+            )
+        }
+
     val commonConfigureFlags: List<String> = buildList {
         add("--disable-static")
         add("--enable-shared")
@@ -199,7 +218,7 @@ internal class FfmpegBuildContext(
             "--cxx=xcrun --sdk iphoneos clang++",
             "--extra-cflags=-arch arm64 -miphoneos-version-min=16.0 -fembed-bitcode",
             "--extra-ldflags=-arch arm64 -miphoneos-version-min=16.0",
-        ),
+        ) + appleHostToolFlags,
         shell = "bash",
         libExtension = "dylib",
     )
@@ -214,7 +233,7 @@ internal class FfmpegBuildContext(
             "--cxx=xcrun --sdk iphonesimulator clang++",
             "--extra-cflags=-arch arm64 -miphonesimulator-version-min=16.0 -fembed-bitcode",
             "--extra-ldflags=-arch arm64 -miphonesimulator-version-min=16.0",
-        ),
+        ) + appleHostToolFlags,
         shell = "bash",
         libExtension = "dylib",
     )
