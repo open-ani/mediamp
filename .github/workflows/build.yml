@@ -134,7 +134,7 @@ jobs:
       run: 'chmod -R 777 .'
     - id: 'step-5'
       name: 'Install dependencies for macOS'
-      run: 'brew install ninja'
+      run: 'brew install nasm'
     - id: 'step-6'
       name: 'Setup Gradle'
       uses: 'gradle/actions/setup-gradle@v3'

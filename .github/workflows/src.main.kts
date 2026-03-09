@@ -839,10 +839,10 @@ class WithMatrix(
     }
 
     fun JobBuilder<*>.installDependencies() {
-        if (matrix.isMacOS && !matrix.selfHosted) {
+        if (matrix.isMacOSX64) {
             run(
                 name = "Install dependencies for macOS",
-                command = shell($$"""brew install ninja"""),
+                command = shell($$"""brew install nasm"""),
             )
         }
     }
