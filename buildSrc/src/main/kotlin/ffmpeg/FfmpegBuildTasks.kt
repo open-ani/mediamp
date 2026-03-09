@@ -1,3 +1,11 @@
+/*
+ * Copyright (C) 2024-2026 OpenAni and contributors.
+ *
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 package ffmpeg
 
 import org.gradle.api.Task
@@ -16,6 +24,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 }
                 registerAndroidTargetsIfAvailable(context)
             }
+
             HostOs.LINUX -> {
                 if (isBuildVariantEnabled("linux")) {
                     registerFfmpegTasks(context, linuxX64Target)
@@ -24,6 +33,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 }
                 registerAndroidTargetsIfAvailable(context)
             }
+
             HostOs.MACOS -> {
                 if (isBuildVariantEnabled("macos")) {
                     registerFfmpegTasks(context, macosArm64Target)
@@ -39,6 +49,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 }
                 registerAndroidTargetsIfAvailable(context)
             }
+
             HostOs.UNKNOWN -> project.logger.warn("Unknown host OS – no FFmpeg build targets registered.")
         }
 
@@ -55,7 +66,6 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
     extraFlags = listOf(
         "--arch=x86_64",
         "--target-os=mingw32",
-        "--cross-prefix=${msys2Dir.resolve("ucrt64/bin/x86_64-w64-mingw32-").absolutePath.toMsysPath()}",
         "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
         "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
     ),
@@ -143,7 +153,8 @@ private fun registerFfmpegTasks(
                     }
                 }
 
-                val prefixPath = if (hostOs == HostOs.WINDOWS) installDir.absolutePath.toMsysPath() else installDir.absolutePath
+                val prefixPath =
+                    if (hostOs == HostOs.WINDOWS) installDir.absolutePath.toMsysPath() else installDir.absolutePath
                 val allFlags = buildList {
                     add("--prefix=$prefixPath")
                     addAll(commonConfigureFlags)
@@ -154,7 +165,8 @@ private fun registerFfmpegTasks(
                 } else {
                     targetSourceDir.resolve("configure").absolutePath
                 }
-                val buildDirPath = if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
+                val buildDirPath =
+                    if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
                 val flagsStr = allFlags.joinToString(" ") { flag -> if (' ' in flag) "'$flag'" else flag }
 
                 execHelper.execOps.exec {
@@ -175,7 +187,8 @@ private fun registerFfmpegTasks(
             outputs.file(buildStamp)
 
             doLast {
-                val buildDirPath = if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
+                val buildDirPath =
+                    if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
                 execHelper.execOps.exec {
                     commandLine(target.shell, "-l", "-c", "cd '$buildDirPath' && make -j$makeJobs && make install")
                     environment(target.env)
@@ -201,13 +214,14 @@ private fun registerFfmpegTasks(
                 ffmpegLibNames.forEach { libName ->
                     candidates.filter { file ->
                         file.name.matches(Regex("${target.libPrefix}${libName}[.-].*\\.${target.libExtension}.*")) ||
-                            file.name == "${target.libPrefix}${libName}.${target.libExtension}"
+                                file.name == "${target.libPrefix}${libName}.${target.libExtension}"
                     }.forEach { src ->
                         src.copyTo(outputDir.resolve(src.name), overwrite = true)
                     }
                 }
 
-                val ffmpegExe = if (target.libExtension == "dll") binDir.resolve("ffmpeg.exe") else binDir.resolve("ffmpeg")
+                val ffmpegExe =
+                    if (target.libExtension == "dll") binDir.resolve("ffmpeg.exe") else binDir.resolve("ffmpeg")
                 if (ffmpegExe.exists()) {
                     ffmpegExe.copyTo(outputDir.resolve(ffmpegExe.name), overwrite = true)
                 }
@@ -355,15 +369,15 @@ private fun collectWindowsRuntimeDlls(context: FfmpegBuildContext, outputDir: Fi
             .map { it.substringAfter("DLL Name:").trim() }
             .filter { dllName ->
                 dllName !in collectedDlls &&
-                    !dllName.startsWith("api-ms-win-") &&
-                    !dllName.equals("KERNEL32.dll", ignoreCase = true) &&
-                    !dllName.equals("USER32.dll", ignoreCase = true) &&
-                    !dllName.equals("ADVAPI32.dll", ignoreCase = true) &&
-                    !dllName.equals("SHELL32.dll", ignoreCase = true) &&
-                    !dllName.equals("ole32.dll", ignoreCase = true) &&
-                    !dllName.equals("bcrypt.dll", ignoreCase = true) &&
-                    ucrt64Bin.resolve(dllName).exists() &&
-                    context.ffmpegLibNames.none { lib -> dllName.startsWith(lib) }
+                        !dllName.startsWith("api-ms-win-") &&
+                        !dllName.equals("KERNEL32.dll", ignoreCase = true) &&
+                        !dllName.equals("USER32.dll", ignoreCase = true) &&
+                        !dllName.equals("ADVAPI32.dll", ignoreCase = true) &&
+                        !dllName.equals("SHELL32.dll", ignoreCase = true) &&
+                        !dllName.equals("ole32.dll", ignoreCase = true) &&
+                        !dllName.equals("bcrypt.dll", ignoreCase = true) &&
+                        ucrt64Bin.resolve(dllName).exists() &&
+                        context.ffmpegLibNames.none { lib -> dllName.startsWith(lib) }
             }
             .forEach { dllName ->
                 collectedDlls.add(dllName)

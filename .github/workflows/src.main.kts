@@ -861,6 +861,12 @@ class WithMatrix(
     }
 
     fun JobBuilder<*>.buildFfmpegArtifacts() {
+        if (matrix.isUbuntu) {
+            run(
+                name = "Install FFmpeg Dependencies for Ubuntu",
+                command = shell("""chmod +x ./ci-helper/install-ffmpeg-deps-ubuntu.sh && ./ci-helper/install-ffmpeg-deps-ubuntu.sh"""),
+            )
+        }
         if (matrix.ffmpegBuildVariant != null) {
             runGradle(
                 name = "Build FFmpeg artifacts",
