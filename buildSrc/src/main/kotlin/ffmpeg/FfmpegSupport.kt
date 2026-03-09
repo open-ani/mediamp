@@ -1,5 +1,14 @@
+/*
+ * Copyright (C) 2024-2026 OpenAni and contributors.
+ *
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
 package ffmpeg
 
+import getPropertyOrNull
 import org.gradle.api.Project
 import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
@@ -48,14 +57,14 @@ internal class FfmpegBuildContext(
     val execHelper: ExecHelper = project.objects.newInstance(ExecHelper::class.java)
 
     val ffmpegSrcDir: File =
-        project.getProjectPropertyOrNull("mediamp.ffmpeg.srcdir")?.let(project::file)
+        project.getPropertyOrNull("mediamp.ffmpeg.srcdir")?.let(project::file)
             ?: System.getenv("MEDIAMP_FFMPEG_SRC_DIR")?.let(project::file)
             ?: project.projectDir.resolve("ffmpeg")
 
     val wrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
 
     val enabledBuildVariantFamilies: Set<String> =
-        project.getProjectPropertyOrNull("mediamp.ffmpeg.buildvariant")
+        project.getPropertyOrNull("mediamp.ffmpeg.buildvariant")
             ?.split(",")
             ?.map { it.trim().lowercase(Locale.getDefault()) }
             ?.filter { it.isNotEmpty() }
@@ -64,7 +73,7 @@ internal class FfmpegBuildContext(
                 val unknown = selected - ALL_BUILD_VARIANT_FAMILIES
                 require(unknown.isEmpty()) {
                     "Unknown values in mediamp.ffmpeg.buildvariant: ${unknown.joinToString()}. " +
-                        "Supported values: ${ALL_BUILD_VARIANT_FAMILIES.joinToString()}."
+                            "Supported values: ${ALL_BUILD_VARIANT_FAMILIES.joinToString()}."
                 }
             }
             ?: ALL_BUILD_VARIANT_FAMILIES
@@ -212,7 +221,8 @@ internal class FfmpegBuildContext(
         libExtension = "dylib",
     )
 
-    fun isBuildVariantEnabled(family: String): Boolean = family.lowercase(Locale.getDefault()) in enabledBuildVariantFamilies
+    fun isBuildVariantEnabled(family: String): Boolean =
+        family.lowercase(Locale.getDefault()) in enabledBuildVariantFamilies
 
     fun execOutput(vararg args: String, workDir: File = project.projectDir): String {
         val stdout = ByteArrayOutputStream()
@@ -226,8 +236,8 @@ internal class FfmpegBuildContext(
     }
 
     fun resolveNdkDir(): File {
-        val explicit = project.getProjectPropertyOrNull("ndk.dir")
-            ?: project.getProjectPropertyOrNull("ANDROID_NDK_HOME")
+        val explicit = project.getPropertyOrNull("ndk.dir")
+            ?: project.getPropertyOrNull("ANDROID_NDK_HOME")
             ?: System.getenv("ANDROID_NDK_HOME")
         if (explicit != null) {
             return project.file(explicit).also {
@@ -235,9 +245,9 @@ internal class FfmpegBuildContext(
             }
         }
 
-        val sdkDir = project.getProjectPropertyOrNull("sdk.dir")
-            ?: project.getProjectPropertyOrNull("ANDROID_HOME")
-            ?: project.getProjectPropertyOrNull("ANDROID_SDK_ROOT")
+        val sdkDir = project.getPropertyOrNull("sdk.dir")
+            ?: project.getPropertyOrNull("ANDROID_HOME")
+            ?: project.getPropertyOrNull("ANDROID_SDK_ROOT")
             ?: System.getenv("ANDROID_HOME")
             ?: System.getenv("ANDROID_SDK_ROOT")
             ?: error("Android SDK/NDK not found. Set ndk.dir or ANDROID_NDK_HOME.")
@@ -304,7 +314,7 @@ internal class FfmpegBuildContext(
     }
 
     val msys2Dir: File by lazy {
-        val path = project.getProjectPropertyOrNull("msys2.dir") ?: "C:\\msys64"
+        val path = project.getPropertyOrNull("msys2.dir") ?: "C:\\msys64"
         val dir = project.file(path)
         require(dir.isDirectory) {
             "MSYS2 directory not found at '$path'. Set Gradle property msys2.dir to your MSYS2 installation root."
@@ -347,11 +357,3 @@ private fun Project.getLocalProperty(key: String): String? {
         null
     }
 }
-
-private fun Project.getProjectPropertyOrNull(name: String): String? =
-    getLocalProperty(name)
-        ?: System.getProperty(name)
-        ?: System.getenv(name)
-        ?: findProperty(name)?.toString()
-        ?: properties[name]?.toString()
-        ?: extensions.extraProperties.runCatching { get(name).toString() }.getOrNull()
