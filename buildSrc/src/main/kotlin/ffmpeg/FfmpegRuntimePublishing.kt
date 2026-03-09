@@ -77,7 +77,7 @@ internal fun configureRuntimePublishing(
     runtimeJarTasks: Map<DesktopRuntimeTarget, TaskProvider<Jar>>,
 ) {
     val deployVersion = context.project.version.toString()
-    val publishedTargets = runtimeJarTasks.keys.toList()
+    val runtimeTargets = context.desktopRuntimeTargets
 
     context.project.extensions.getByType<com.vanniktech.maven.publish.MavenPublishBaseExtension>().apply {
         configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))
@@ -108,7 +108,7 @@ internal fun configureRuntimePublishing(
         }
     }
 
-    val allRuntimeVariants = publishedTargets.map { target ->
+    val allRuntimeVariants = runtimeTargets.map { target ->
         context.project.configurations.create("ffmpegRuntimeElements-${target.os}-${target.arch}").apply {
             attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
             attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
@@ -168,29 +168,22 @@ internal fun configureRuntimePublishing(
                 }
             }
         }
-    } else {
-        context.project.logger.lifecycle("Skipping ffmpegRuntime uber publication: no desktop runtime targets are available for this host/buildvariant.")
     }
 
-    wireDesktopRuntimeDependencyConstraints(context.project, deployVersion, publishedTargets)
+    wireDesktopRuntimeDependencyConstraints(context.project, deployVersion, runtimeTargets)
 }
 
 private fun wireDesktopRuntimeDependencyConstraints(
     project: Project,
     deployVersion: String,
-    publishedTargets: List<DesktopRuntimeTarget>,
+    runtimeTargets: List<DesktopRuntimeTarget>,
 ) {
     val desktopUberRuntimeNotation = "org.openani.mediamp:mediamp-ffmpeg-runtime:$deployVersion"
-    val desktopPlatformRuntimeNotations = publishedTargets.map { target ->
+    val desktopPlatformRuntimeNotations = runtimeTargets.map { target ->
         "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.os}-${target.arch}:$deployVersion"
     }
 
     project.afterEvaluate {
-        if (publishedTargets.isEmpty()) {
-            logger.lifecycle("Skipping desktop runtime dependency wiring: no published desktop runtime targets for this host/buildvariant.")
-            return@afterEvaluate
-        }
-
         configurations.findByName("desktopRuntimeElements")?.dependencies?.add(
             dependencies.create(desktopUberRuntimeNotation),
         )

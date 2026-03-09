@@ -572,35 +572,23 @@ workflow(
             )
         }
     }
-    val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15]) {
+    val macX8664 = addJob(buildMatrixInstances[Runner.GithubMacOS15Intel]) {
         with(WithMatrix(it)) {
             publishFfmpegToMavenCentral(
-                "publishKotlinMultiplatformPublicationToMavenCentralRepository",
-                "publishDesktopPublicationToMavenCentralRepository",
-                "publishIosArm64PublicationToMavenCentralRepository",
-                "publishIosSimulatorArm64PublicationToMavenCentralRepository",
-                "publishAndroidPublicationToMavenCentralRepository",
-                "publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository",
+                "publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
             )
         }
     }
 
-    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, linux, macAarch64)) { matrix ->
+    addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, linux, macX8664)) { matrix ->
         with(WithMatrix(matrix)) {
-            publishFfmpegToMavenCentral(
-                "publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
-            )
             runGradle(
+                name = "Publish",
                 tasks = arrayOf(
                     "publish",
-                    "-x", ":mediamp-ffmpeg:publishKotlinMultiplatformPublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishDesktopPublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishIosArm64PublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishIosSimulatorArm64PublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishAndroidPublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository",
                     "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
-                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimePublicationToMavenCentralRepository",
                 ),
                 env = mavenCentralPublishEnv(),
             )
