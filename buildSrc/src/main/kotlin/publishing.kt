@@ -11,7 +11,26 @@ import org.gradle.api.Project
 
 fun MavenPublishBaseExtension.signAllPublicationsIfEnabled(project: Project) {
     if (project.getPropertyOrNull("mediamp.sign.publications.disabled")?.toBoolean() == true) return
+    if (!project.hasSigningCredentials()) {
+        project.logger.lifecycle("Skipping publication signing: no Gradle signing credentials are configured.")
+        return
+    }
     signAllPublications()
+}
+
+private fun Project.hasSigningCredentials(): Boolean {
+    fun prop(name: String): String? = getPropertyOrNull(name)?.takeIf { it.isNotBlank() }
+
+    val inMemoryKey = prop("signingInMemoryKey")
+    val inMemoryPassword = prop("signingInMemoryKeyPassword")
+    val legacyKey = prop("signingKey")
+    val legacyPassword = prop("signingPassword")
+    val keyRing = prop("signing.secretKeyRingFile")
+    val signingPassword = prop("signing.password")
+
+    return (inMemoryKey != null && inMemoryPassword != null) ||
+        (legacyKey != null && legacyPassword != null) ||
+        (keyRing != null && signingPassword != null)
 }
 
 fun MavenPublishBaseExtension.configurePom(project: Project) {

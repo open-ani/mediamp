@@ -18,7 +18,7 @@ pluginManagement {
 }
 
 plugins {
-    id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
 include(":mediamp-internal-utils")
@@ -30,6 +30,7 @@ include(":mediamp-exoplayer")
 // include(":mediamp-mpv")
 include(":mediamp-avkit")
 
+include(":mediamp-ffmpeg")
 include(":mediamp-all")
 
 include(":mediamp-test")

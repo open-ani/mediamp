@@ -65,6 +65,7 @@ import platform.Foundation.NSKeyValueChangeNewKey
 import platform.Foundation.NSKeyValueObservingOptionNew
 import platform.Foundation.NSKeyValueObservingProtocol
 import platform.Foundation.NSNotificationCenter
+import platform.Foundation.NSURL
 import platform.Foundation.NSURL.Companion.URLWithString
 import platform.Foundation.addObserver
 import platform.Foundation.removeObserver
@@ -375,7 +376,15 @@ public class AVKitMediampPlayer(
                     }
 
                     AVPlayerItemStatusFailed -> {
-                        val error = IllegalStateException("AVPlayerItem failed to load media.")
+                        val nsError = playerItem.error
+                        val message = buildString {
+                            append("AVPlayerItem failed to load media.")
+                            if (nsError != null) {
+                                append(" domain=${nsError.domain}, code=${nsError.code}")
+                                nsError.localizedDescription?.let { append(", $it") }
+                            }
+                        }
+                        val error = IllegalStateException(message)
                         if (awaiting) {
                             resumeWithFailure(error)
                         } else {
@@ -407,12 +416,20 @@ public class AVKitMediampPlayer(
     // Helpers
     // ------------------------------------------------------------------------------------
     private fun makePlayerItemFromUriData(data: UriMediaData): AVPlayerItem {
-        val asset = AVURLAsset(
-            URLWithString(data.uri)!!,
-            options = mapOf(
-                "AVURLAssetHTTPHeaderFieldsKey" to data.headers.toMap(),
-            ),
-        )
+        val uri = data.uri
+        val asset = if (uri.startsWith("file://")) {
+            // For local file URIs, use fileURLWithPath for reliable file URL construction
+            // and do not pass AVURLAssetHTTPHeaderFieldsKey which is only for HTTP(S).
+            val path = URLWithString(uri)?.path
+                ?: throw IllegalStateException("Invalid file URI: $uri")
+
+            AVURLAsset(NSURL.fileURLWithPath(path), null)
+        } else {
+            AVURLAsset(
+                URLWithString(uri) ?: throw IllegalStateException("Invalid URI: $uri"),
+                if (data.headers.isEmpty()) null else mapOf("AVURLAssetHTTPHeaderFieldsKey" to data.headers.toMap()),
+            )
+        }
         return AVPlayerItem(asset)
     }
 

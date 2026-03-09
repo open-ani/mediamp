@@ -41,7 +41,7 @@ kotlin {
         iosTest.dependencies {
             implementation(libs.androidx.annotation)
         }
-        androidUnitTest.dependencies {
+        androidHostTest.dependencies {
             implementation(libs.androidx.annotation)
         }
     }

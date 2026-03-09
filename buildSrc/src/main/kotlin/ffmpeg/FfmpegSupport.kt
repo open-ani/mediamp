@@ -1,0 +1,357 @@
+package ffmpeg
+
+import org.gradle.api.Project
+import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.Locale
+import java.util.Properties
+import javax.inject.Inject
+
+internal enum class HostOs {
+    WINDOWS,
+    MACOS,
+    LINUX,
+    UNKNOWN,
+}
+
+internal data class FfmpegBuildTarget(
+    val name: String,
+    val extraFlags: List<String>,
+    val env: Map<String, String> = emptyMap(),
+    val shell: String = "bash",
+    val libExtension: String,
+    val libPrefix: String = "lib",
+)
+
+internal data class AndroidAbi(
+    val abi: String,
+    val arch: String,
+    val clangTriple: String,
+    val apiLevel: Int,
+)
+
+internal data class DesktopRuntimeTarget(
+    val os: String,
+    val arch: String,
+    val ffmpegTargetName: String,
+)
+
+internal interface ExecHelper {
+    @get:Inject
+    val execOps: ExecOperations
+}
+
+internal class FfmpegBuildContext(
+    val project: Project,
+) {
+    val execHelper: ExecHelper = project.objects.newInstance(ExecHelper::class.java)
+
+    val ffmpegSrcDir: File =
+        project.getProjectPropertyOrNull("mediamp.ffmpeg.srcdir")?.let(project::file)
+            ?: System.getenv("MEDIAMP_FFMPEG_SRC_DIR")?.let(project::file)
+            ?: project.projectDir.resolve("ffmpeg")
+
+    val wrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
+
+    val enabledBuildVariantFamilies: Set<String> =
+        project.getProjectPropertyOrNull("mediamp.ffmpeg.buildvariant")
+            ?.split(",")
+            ?.map { it.trim().lowercase(Locale.getDefault()) }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            ?.also { selected ->
+                val unknown = selected - ALL_BUILD_VARIANT_FAMILIES
+                require(unknown.isEmpty()) {
+                    "Unknown values in mediamp.ffmpeg.buildvariant: ${unknown.joinToString()}. " +
+                        "Supported values: ${ALL_BUILD_VARIANT_FAMILIES.joinToString()}."
+                }
+            }
+            ?: ALL_BUILD_VARIANT_FAMILIES
+
+    val hostOs: HostOs = detectHostOs()
+
+    val makeJobs: Int = Runtime.getRuntime().availableProcessors()
+
+    val commonConfigureFlags: List<String> = buildList {
+        add("--disable-static")
+        add("--enable-shared")
+        add("--enable-ffmpeg")
+        add("--disable-ffplay")
+        add("--disable-ffprobe")
+        add("--disable-doc")
+        add("--disable-everything")
+        add("--enable-decoder=h264")
+        add("--enable-decoder=hevc")
+        add("--enable-decoder=av1")
+        add("--enable-decoder=vp9")
+        add("--enable-decoder=aac")
+        add("--enable-decoder=opus")
+        add("--enable-decoder=mp3")
+        add("--enable-decoder=flac")
+        add("--enable-muxer=mp4")
+        add("--enable-muxer=matroska")
+        add("--enable-muxer=mpegts")
+        add("--enable-demuxer=mpegts")
+        add("--enable-demuxer=mov")
+        add("--enable-demuxer=matroska")
+        add("--enable-demuxer=flac")
+        add("--enable-demuxer=mp3")
+        add("--enable-demuxer=ogg")
+        add("--enable-demuxer=aac")
+        add("--enable-demuxer=concat")
+        add("--enable-protocol=file")
+        add("--enable-protocol=pipe")
+        add("--enable-protocol=concat")
+        add("--enable-parser=h264")
+        add("--enable-parser=hevc")
+        add("--enable-parser=av1")
+        add("--enable-parser=vp9")
+        add("--enable-parser=aac")
+        add("--enable-parser=opus")
+        add("--enable-parser=mpegaudio")
+        add("--enable-parser=flac")
+        add("--enable-bsf=h264_mp4toannexb")
+        add("--enable-bsf=hevc_mp4toannexb")
+        add("--enable-bsf=aac_adtstoasc")
+        add("--enable-filter=aresample")
+        add("--enable-filter=scale")
+        add("--enable-filter=concat")
+        add("--enable-filter=anull")
+        add("--enable-filter=null")
+        add("--enable-swresample")
+        add("--enable-swscale")
+        add("--disable-debug")
+        add("--disable-network")
+        add("--disable-autodetect")
+    }
+
+    val ffmpegLibNames: List<String> = listOf(
+        "avcodec",
+        "avdevice",
+        "avfilter",
+        "avformat",
+        "avutil",
+        "swresample",
+        "swscale",
+    )
+
+    val androidAbis: List<AndroidAbi> = listOf(
+        AndroidAbi("armeabi-v7a", "arm", "armv7a-linux-androideabi", 21),
+        AndroidAbi("arm64-v8a", "aarch64", "aarch64-linux-android", 21),
+        AndroidAbi("x86", "x86", "i686-linux-android", 21),
+        AndroidAbi("x86_64", "x86_64", "x86_64-linux-android", 21),
+    )
+
+    val desktopRuntimeTargets: List<DesktopRuntimeTarget> = listOf(
+        DesktopRuntimeTarget("windows", "x64", "WindowsX64"),
+        DesktopRuntimeTarget("linux", "x64", "LinuxX64"),
+        DesktopRuntimeTarget("macos", "arm64", "MacosArm64"),
+        DesktopRuntimeTarget("macos", "x64", "MacosX64"),
+    )
+
+    val linuxX64Target = FfmpegBuildTarget(
+        name = "LinuxX64",
+        extraFlags = listOf("--arch=x86_64", "--target-os=linux"),
+        libExtension = "so",
+    )
+
+    val macosArm64Target = FfmpegBuildTarget(
+        name = "MacosArm64",
+        extraFlags = listOf(
+            "--arch=arm64",
+            "--target-os=darwin",
+            "--cc=clang",
+            "--cxx=clang++",
+            "--extra-cflags=-arch arm64 -mmacosx-version-min=12.0",
+            "--extra-ldflags=-arch arm64 -mmacosx-version-min=12.0",
+        ),
+        libExtension = "dylib",
+    )
+
+    val macosX64Target = FfmpegBuildTarget(
+        name = "MacosX64",
+        extraFlags = listOf(
+            "--arch=x86_64",
+            "--target-os=darwin",
+            "--cc=clang",
+            "--cxx=clang++",
+            "--extra-cflags=-arch x86_64 -mmacosx-version-min=12.0",
+            "--extra-ldflags=-arch x86_64 -mmacosx-version-min=12.0",
+        ),
+        libExtension = "dylib",
+    )
+
+    val iosArm64Target = FfmpegBuildTarget(
+        name = "IosArm64",
+        extraFlags = listOf(
+            "--arch=arm64",
+            "--target-os=darwin",
+            "--enable-cross-compile",
+            "--cc=xcrun --sdk iphoneos clang",
+            "--cxx=xcrun --sdk iphoneos clang++",
+            "--extra-cflags=-arch arm64 -miphoneos-version-min=16.0 -fembed-bitcode",
+            "--extra-ldflags=-arch arm64 -miphoneos-version-min=16.0",
+        ),
+        shell = "bash",
+        libExtension = "dylib",
+    )
+
+    val iosSimulatorArm64Target = FfmpegBuildTarget(
+        name = "IosSimulatorArm64",
+        extraFlags = listOf(
+            "--arch=arm64",
+            "--target-os=darwin",
+            "--enable-cross-compile",
+            "--cc=xcrun --sdk iphonesimulator clang",
+            "--cxx=xcrun --sdk iphonesimulator clang++",
+            "--extra-cflags=-arch arm64 -miphonesimulator-version-min=16.0 -fembed-bitcode",
+            "--extra-ldflags=-arch arm64 -miphonesimulator-version-min=16.0",
+        ),
+        shell = "bash",
+        libExtension = "dylib",
+    )
+
+    fun isBuildVariantEnabled(family: String): Boolean = family.lowercase(Locale.getDefault()) in enabledBuildVariantFamilies
+
+    fun execOutput(vararg args: String, workDir: File = project.projectDir): String {
+        val stdout = ByteArrayOutputStream()
+        execHelper.execOps.exec {
+            commandLine(*args)
+            workingDir = workDir
+            standardOutput = stdout
+            isIgnoreExitValue = false
+        }
+        return stdout.toString(Charsets.UTF_8).trim()
+    }
+
+    fun resolveNdkDir(): File {
+        val explicit = project.getProjectPropertyOrNull("ndk.dir")
+            ?: project.getProjectPropertyOrNull("ANDROID_NDK_HOME")
+            ?: System.getenv("ANDROID_NDK_HOME")
+        if (explicit != null) {
+            return project.file(explicit).also {
+                require(it.isDirectory) { "Android NDK not found at '$explicit'." }
+            }
+        }
+
+        val sdkDir = project.getProjectPropertyOrNull("sdk.dir")
+            ?: project.getProjectPropertyOrNull("ANDROID_HOME")
+            ?: project.getProjectPropertyOrNull("ANDROID_SDK_ROOT")
+            ?: System.getenv("ANDROID_HOME")
+            ?: System.getenv("ANDROID_SDK_ROOT")
+            ?: error("Android SDK/NDK not found. Set ndk.dir or ANDROID_NDK_HOME.")
+        val ndkRoot = project.file(sdkDir).resolve("ndk")
+        require(ndkRoot.isDirectory) {
+            "Android NDK directory not found under '$sdkDir/ndk'. Set ndk.dir or ANDROID_NDK_HOME."
+        }
+        val versions = ndkRoot.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name }.orEmpty()
+        return versions.firstOrNull()
+            ?: error("No Android NDK versions found under '$ndkRoot'.")
+    }
+
+    fun androidTarget(abi: AndroidAbi): FfmpegBuildTarget {
+        val ndkDir = resolveNdkDir()
+        val hostTag = when (hostOs) {
+            HostOs.WINDOWS -> "windows-x86_64"
+            HostOs.MACOS -> "darwin-x86_64"
+            HostOs.LINUX -> "linux-x86_64"
+            HostOs.UNKNOWN -> error("Unsupported host OS for Android builds")
+        }
+
+        val binDir = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/bin")
+        require(binDir.isDirectory) {
+            "NDK LLVM toolchain not found at '$binDir'."
+        }
+
+        val clangSuffix = if (hostOs == HostOs.WINDOWS) ".cmd" else ""
+        val cc = binDir.resolve("${abi.clangTriple}${abi.apiLevel}-clang$clangSuffix").absolutePath
+        val cxx = binDir.resolve("${abi.clangTriple}${abi.apiLevel}-clang++$clangSuffix").absolutePath
+        val exeSuffix = if (hostOs == HostOs.WINDOWS) ".exe" else ""
+        val ar = binDir.resolve("llvm-ar$exeSuffix").absolutePath
+        val nm = binDir.resolve("llvm-nm$exeSuffix").absolutePath
+        val strip = binDir.resolve("llvm-strip$exeSuffix").absolutePath
+        val ranlib = binDir.resolve("llvm-ranlib$exeSuffix").absolutePath
+        val sysroot = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot")
+
+        fun String.msysIfWin(): String = if (hostOs == HostOs.WINDOWS) toMsysPath() else this
+
+        val abiSpecificFlags = when (abi.abi) {
+            "x86", "x86_64" -> listOf("--disable-asm", "--disable-x86asm")
+            else -> emptyList()
+        }
+
+        return FfmpegBuildTarget(
+            name = "Android${abi.abi.replace("-", "")}",
+            libExtension = "so",
+            shell = if (hostOs == HostOs.WINDOWS) msys2Dir.resolve("usr/bin/bash.exe").absolutePath else "bash",
+            env = if (hostOs == HostOs.WINDOWS) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
+            extraFlags = listOf(
+                "--arch=${abi.arch}",
+                "--target-os=android",
+                "--enable-cross-compile",
+                "--cc=${cc.msysIfWin()}",
+                "--cxx=${cxx.msysIfWin()}",
+                "--ar=${ar.msysIfWin()}",
+                "--nm=${nm.msysIfWin()}",
+                "--strip=${strip.msysIfWin()}",
+                "--ranlib=${ranlib.msysIfWin()}",
+                "--sysroot=${sysroot.absolutePath.msysIfWin()}",
+                "--extra-cflags=-fPIC",
+                "--enable-pic",
+            ) + abiSpecificFlags,
+        )
+    }
+
+    val msys2Dir: File by lazy {
+        val path = project.getProjectPropertyOrNull("msys2.dir") ?: "C:\\msys64"
+        val dir = project.file(path)
+        require(dir.isDirectory) {
+            "MSYS2 directory not found at '$path'. Set Gradle property msys2.dir to your MSYS2 installation root."
+        }
+        dir
+    }
+
+    private fun detectHostOs(): HostOs {
+        val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
+        return when {
+            osName.contains("win") -> HostOs.WINDOWS
+            osName.contains("mac") -> HostOs.MACOS
+            osName.contains("nux") -> HostOs.LINUX
+            else -> HostOs.UNKNOWN
+        }
+    }
+
+    companion object {
+        private val ALL_BUILD_VARIANT_FAMILIES = setOf("windows", "linux", "macos", "ios", "android")
+    }
+}
+
+internal fun String.toMsysPath(): String {
+    val normalized = replace("\\", "/")
+    return if (normalized.length >= 2 && normalized[1] == ':') {
+        "/${normalized[0].lowercaseChar()}${normalized.substring(2)}"
+    } else {
+        normalized
+    }
+}
+
+private val Project.localPropertiesFile: File get() = rootProject.file("local.properties")
+
+private fun Project.getLocalProperty(key: String): String? {
+    return if (localPropertiesFile.exists()) {
+        val properties = Properties()
+        localPropertiesFile.inputStream().buffered().use(properties::load)
+        properties.getProperty(key)
+    } else {
+        null
+    }
+}
+
+private fun Project.getProjectPropertyOrNull(name: String): String? =
+    getLocalProperty(name)
+        ?: System.getProperty(name)
+        ?: System.getenv(name)
+        ?: findProperty(name)?.toString()
+        ?: properties[name]?.toString()
+        ?: extensions.extraProperties.runCatching { get(name).toString() }.getOrNull()
