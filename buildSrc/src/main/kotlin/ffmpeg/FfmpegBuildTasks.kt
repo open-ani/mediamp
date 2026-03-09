@@ -10,6 +10,7 @@ package ffmpeg
 
 import Arch
 import Os
+import org.gradle.api.GradleException
 import org.gradle.api.Task
 import org.gradle.kotlin.dsl.register
 import java.io.ByteArrayOutputStream
@@ -41,6 +42,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                     when (hostArch) {
                         Arch.AARCH64 -> registerFfmpegTasks(context, macosArm64Target)
                         Arch.X86_64 -> registerFfmpegTasks(context, macosX64Target)
+                        else -> throw GradleException("Failed to configure FFmpeg tasks, unknown macOS host.")
                     }
                 } else {
                     project.logger.lifecycle("Skipping FFmpeg macos targets: mediamp.ffmpeg.buildvariant does not include 'macos'.")
