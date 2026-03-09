@@ -154,18 +154,21 @@ jobs:
     - id: 'step-5'
       run: 'chmod -R 777 .'
     - id: 'step-6'
+      name: 'Install FFmpeg Dependencies for Ubuntu'
+      run: 'chmod +x ./ci-helper/install-ffmpeg-deps-ubuntu.sh && ./ci-helper/install-ffmpeg-deps-ubuntu.sh'
+    - id: 'step-7'
       name: 'Setup Gradle'
       uses: 'gradle/actions/setup-gradle@v3'
       with:
         cache-disabled: 'true'
-    - id: 'step-7'
+    - id: 'step-8'
       name: 'Clean and download dependencies'
       uses: 'nick-fields/retry@v2'
       with:
         timeout_minutes: '60'
         max_attempts: '3'
         command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=linux"'
-    - id: 'step-8'
+    - id: 'step-9'
       name: 'Update Release Version Name'
       env:
         GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
@@ -173,7 +176,7 @@ jobs:
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
       run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=linux"'
-    - id: 'step-9'
+    - id: 'step-10'
       name: 'Publish FFmpeg artifacts'
       env:
         ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
