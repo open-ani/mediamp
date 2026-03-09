@@ -8,6 +8,8 @@
 
 package ffmpeg
 
+import Arch
+import Os
 import org.gradle.api.Task
 import org.gradle.kotlin.dsl.register
 import java.io.ByteArrayOutputStream
@@ -16,7 +18,7 @@ import java.io.File
 internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     with(context) {
         when (hostOs) {
-            HostOs.WINDOWS -> {
+            Os.Windows -> {
                 if (isBuildVariantEnabled("windows")) {
                     registerFfmpegTasks(context, windowsTarget())
                 } else {
@@ -25,7 +27,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 registerAndroidTargetsIfAvailable(context)
             }
 
-            HostOs.LINUX -> {
+            Os.Linux -> {
                 if (isBuildVariantEnabled("linux")) {
                     registerFfmpegTasks(context, linuxX64Target)
                 } else {
@@ -34,10 +36,12 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 registerAndroidTargetsIfAvailable(context)
             }
 
-            HostOs.MACOS -> {
+            Os.MacOS -> {
                 if (isBuildVariantEnabled("macos")) {
-                    registerFfmpegTasks(context, macosArm64Target)
-                    registerFfmpegTasks(context, macosX64Target)
+                    when (hostArch) {
+                        Arch.AARCH64 -> registerFfmpegTasks(context, macosArm64Target)
+                        Arch.X86_64 -> registerFfmpegTasks(context, macosX64Target)
+                    }
                 } else {
                     project.logger.lifecycle("Skipping FFmpeg macos targets: mediamp.ffmpeg.buildvariant does not include 'macos'.")
                 }
@@ -50,7 +54,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                 registerAndroidTargetsIfAvailable(context)
             }
 
-            HostOs.UNKNOWN -> project.logger.warn("Unknown host OS – no FFmpeg build targets registered.")
+            Os.Unknown -> project.logger.warn("Unknown host OS – no FFmpeg build targets registered.")
         }
 
         project.tasks.register("ffmpegBuildAll") {
@@ -117,7 +121,7 @@ private fun registerFfmpegTasks(
             doLast {
                 targetSourceDir.deleteRecursively()
                 ffmpegSrcDir.copyRecursively(targetSourceDir, overwrite = true)
-                targetSourceDir.resolve("configure").setExecutable(true)
+                restoreExecutablePermissions(ffmpegSrcDir, targetSourceDir)
             }
         }
 
@@ -133,7 +137,7 @@ private fun registerFfmpegTasks(
                 buildDir.deleteRecursively()
                 buildDir.mkdirs()
 
-                if (hostOs == HostOs.WINDOWS) {
+                if (hostOs == Os.Windows) {
                     val packages = listOf(
                         "make",
                         "diffutils",
@@ -154,19 +158,19 @@ private fun registerFfmpegTasks(
                 }
 
                 val prefixPath =
-                    if (hostOs == HostOs.WINDOWS) installDir.absolutePath.toMsysPath() else installDir.absolutePath
+                    if (hostOs == Os.Windows) installDir.absolutePath.toMsysPath() else installDir.absolutePath
                 val allFlags = buildList {
                     add("--prefix=$prefixPath")
                     addAll(commonConfigureFlags)
                     addAll(target.extraFlags)
                 }
-                val configurePath = if (hostOs == HostOs.WINDOWS) {
+                val configurePath = if (hostOs == Os.Windows) {
                     targetSourceDir.resolve("configure").absolutePath.toMsysPath()
                 } else {
                     targetSourceDir.resolve("configure").absolutePath
                 }
                 val buildDirPath =
-                    if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
+                    if (hostOs == Os.Windows) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
                 val flagsStr = allFlags.joinToString(" ") { flag -> if (' ' in flag) "'$flag'" else flag }
 
                 execHelper.execOps.exec {
@@ -188,7 +192,7 @@ private fun registerFfmpegTasks(
 
             doLast {
                 val buildDirPath =
-                    if (hostOs == HostOs.WINDOWS) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
+                    if (hostOs == Os.Windows) buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
                 execHelper.execOps.exec {
                     commandLine(target.shell, "-l", "-c", "cd '$buildDirPath' && make -j$makeJobs && make install")
                     environment(target.env)
@@ -231,7 +235,7 @@ private fun registerFfmpegTasks(
                     rewriteAppleInstallNames(context, target, installDir, outputDir)
                 }
 
-                if (hostOs == HostOs.WINDOWS) {
+                if (hostOs == Os.Windows) {
                     collectWindowsRuntimeDlls(context, outputDir)
                 }
 
@@ -244,6 +248,24 @@ private fun registerFfmpegTasks(
             }
         }
     }
+}
+
+private fun restoreExecutablePermissions(sourceDir: File, targetDir: File) {
+    sourceDir.walkTopDown()
+        .filter { src ->
+            src.isFile && (
+                src.canExecute() ||
+                    src.name == "configure" ||
+                    src.extension == "sh"
+                )
+        }
+        .forEach { src ->
+            val relative = src.relativeTo(sourceDir)
+            val target = targetDir.resolve(relative.path)
+            if (target.exists()) {
+                target.setExecutable(true)
+            }
+        }
 }
 
 private fun buildAppleWrapper(

@@ -8,7 +8,11 @@
 
 package ffmpeg
 
+import Arch
 import getPropertyOrNull
+import Os
+import getArch
+import getOs
 import org.gradle.api.Project
 import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
@@ -16,13 +20,6 @@ import java.io.File
 import java.util.Locale
 import java.util.Properties
 import javax.inject.Inject
-
-internal enum class HostOs {
-    WINDOWS,
-    MACOS,
-    LINUX,
-    UNKNOWN,
-}
 
 internal data class FfmpegBuildTarget(
     val name: String,
@@ -78,7 +75,8 @@ internal class FfmpegBuildContext(
             }
             ?: ALL_BUILD_VARIANT_FAMILIES
 
-    val hostOs: HostOs = detectHostOs()
+    val hostOs: Os = getOs()
+    val hostArch: Arch = getArch()
 
     val makeJobs: Int = Runtime.getRuntime().availableProcessors()
 
@@ -263,10 +261,10 @@ internal class FfmpegBuildContext(
     fun androidTarget(abi: AndroidAbi): FfmpegBuildTarget {
         val ndkDir = resolveNdkDir()
         val hostTag = when (hostOs) {
-            HostOs.WINDOWS -> "windows-x86_64"
-            HostOs.MACOS -> "darwin-x86_64"
-            HostOs.LINUX -> "linux-x86_64"
-            HostOs.UNKNOWN -> error("Unsupported host OS for Android builds")
+            Os.Windows -> "windows-x86_64"
+            Os.MacOS -> "darwin-x86_64"
+            Os.Linux -> "linux-x86_64"
+            Os.Unknown -> error("Unsupported host OS for Android builds")
         }
 
         val binDir = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/bin")
@@ -274,17 +272,17 @@ internal class FfmpegBuildContext(
             "NDK LLVM toolchain not found at '$binDir'."
         }
 
-        val clangSuffix = if (hostOs == HostOs.WINDOWS) ".cmd" else ""
+        val clangSuffix = if (hostOs == Os.Windows) ".cmd" else ""
         val cc = binDir.resolve("${abi.clangTriple}${abi.apiLevel}-clang$clangSuffix").absolutePath
         val cxx = binDir.resolve("${abi.clangTriple}${abi.apiLevel}-clang++$clangSuffix").absolutePath
-        val exeSuffix = if (hostOs == HostOs.WINDOWS) ".exe" else ""
+        val exeSuffix = if (hostOs == Os.Windows) ".exe" else ""
         val ar = binDir.resolve("llvm-ar$exeSuffix").absolutePath
         val nm = binDir.resolve("llvm-nm$exeSuffix").absolutePath
         val strip = binDir.resolve("llvm-strip$exeSuffix").absolutePath
         val ranlib = binDir.resolve("llvm-ranlib$exeSuffix").absolutePath
         val sysroot = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/sysroot")
 
-        fun String.msysIfWin(): String = if (hostOs == HostOs.WINDOWS) toMsysPath() else this
+        fun String.msysIfWin(): String = if (hostOs == Os.Windows) toMsysPath() else this
 
         val abiSpecificFlags = when (abi.abi) {
             "x86", "x86_64" -> listOf("--disable-asm", "--disable-x86asm")
@@ -294,8 +292,8 @@ internal class FfmpegBuildContext(
         return FfmpegBuildTarget(
             name = "Android${abi.abi.replace("-", "")}",
             libExtension = "so",
-            shell = if (hostOs == HostOs.WINDOWS) msys2Dir.resolve("usr/bin/bash.exe").absolutePath else "bash",
-            env = if (hostOs == HostOs.WINDOWS) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
+            shell = if (hostOs == Os.Windows) msys2Dir.resolve("usr/bin/bash.exe").absolutePath else "bash",
+            env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
             extraFlags = listOf(
                 "--arch=${abi.arch}",
                 "--target-os=android",
@@ -320,16 +318,6 @@ internal class FfmpegBuildContext(
             "MSYS2 directory not found at '$path'. Set Gradle property msys2.dir to your MSYS2 installation root."
         }
         dir
-    }
-
-    private fun detectHostOs(): HostOs {
-        val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
-        return when {
-            osName.contains("win") -> HostOs.WINDOWS
-            osName.contains("mac") -> HostOs.MACOS
-            osName.contains("nux") -> HostOs.LINUX
-            else -> HostOs.UNKNOWN
-        }
     }
 
     companion object {
