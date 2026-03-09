@@ -102,7 +102,7 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.ffmpeg.buildvariant=windows"'
     - id: 'step-7'
       name: 'Update Release Version Name'
       env:
@@ -110,7 +110,78 @@ jobs:
         GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
-      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64"'
+      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-8'
+      name: 'Publish FFmpeg artifacts'
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
+        ORG_GRADLE_PROJECT_mavenCentralPassword: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralPassword }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
+      run: './gradlew publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.ffmpeg.buildvariant=windows"'
+  release_github-ubuntu-2404:
+    name: 'Ubuntu 24.04 x86_64'
+    runs-on:
+    - 'ubuntu-24.04'
+    needs:
+    - 'create-release'
+    steps:
+    - id: 'step-0'
+      uses: 'actions/checkout@v4'
+      with:
+        lfs: 'true'
+        submodules: 'recursive'
+    - id: 'step-1'
+      name: 'Get Tag'
+      uses: 'dawidd6/action-get-tag@v1'
+    - id: 'step-2'
+      uses: 'bhowell2/github-substring-action@v1.0.0'
+      with:
+        value: '${{ steps.step-1.outputs.tag }}'
+        index_of_str: 'v'
+        default_return_value: '${{ steps.step-1.outputs.tag }}'
+    - id: 'step-3'
+      name: 'Setup JBR 21 for other OS'
+      uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+      with:
+        java-version: '21'
+        distribution: 'jetbrains'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+    - id: 'step-4'
+      run: 'echo "jvm.toolchain.version=21" >> local.properties'
+    - id: 'step-5'
+      run: 'chmod -R 777 .'
+    - id: 'step-6'
+      name: 'Setup Gradle'
+      uses: 'gradle/actions/setup-gradle@v3'
+      with:
+        cache-disabled: 'true'
+    - id: 'step-7'
+      name: 'Clean and download dependencies'
+      uses: 'nick-fields/retry@v2'
+      with:
+        timeout_minutes: '60'
+        max_attempts: '3'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=linux"'
+    - id: 'step-8'
+      name: 'Update Release Version Name'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
+        CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
+        CI_TAG: '${{ steps.step-1.outputs.tag }}'
+      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=linux"'
+    - id: 'step-9'
+      name: 'Publish FFmpeg artifacts'
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
+        ORG_GRADLE_PROJECT_mavenCentralPassword: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralPassword }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
+      run: './gradlew publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=linux"'
   release_self-hosted-macos-15:
     name: 'macOS 15 AArch64 (Self-Hosted)'
     runs-on:
@@ -195,7 +266,7 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
     - id: 'step-10'
       name: 'Update Release Version Name'
       env:
@@ -203,8 +274,17 @@ jobs:
         GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
-      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a"'
+      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
     - id: 'step-11'
+      name: 'Publish FFmpeg artifacts'
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
+        ORG_GRADLE_PROJECT_mavenCentralPassword: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralPassword }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
+      run: './gradlew publishKotlinMultiplatformPublicationToMavenCentralRepository publishDesktopPublicationToMavenCentralRepository publishIosArm64PublicationToMavenCentralRepository publishIosSimulatorArm64PublicationToMavenCentralRepository publishAndroidPublicationToMavenCentralRepository publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
+    - id: 'step-12'
       name: 'Cleanup temp files'
       continue-on-error: true
       run: 'chmod +x ./ci-helper/cleanup-temp-files-macos.sh && ./ci-helper/cleanup-temp-files-macos.sh'
@@ -215,6 +295,7 @@ jobs:
     needs:
     - 'create-release'
     - 'release_github-windows-2022'
+    - 'release_github-ubuntu-2404'
     - 'release_self-hosted-macos-15'
     steps:
     - id: 'step-0'
@@ -261,7 +342,7 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=macos"'
     - id: 'step-10'
       name: 'Update Release Version Name'
       env:
@@ -269,12 +350,21 @@ jobs:
         GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
-      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g"'
+      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=macos"'
     - id: 'step-11'
+      name: 'Publish FFmpeg artifacts'
       env:
         ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
         ORG_GRADLE_PROJECT_mavenCentralPassword: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralPassword }}'
         ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
-      run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g"'
+      run: './gradlew publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=macos"'
+    - id: 'step-12'
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
+        ORG_GRADLE_PROJECT_mavenCentralPassword: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralPassword }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
+        ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
+      run: './gradlew publish -x :mediamp-ffmpeg:publishKotlinMultiplatformPublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishDesktopPublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishIosArm64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishIosSimulatorArm64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishAndroidPublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository -x :mediamp-ffmpeg:publishFfmpegRuntimePublicationToMavenCentralRepository "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pmediamp.ffmpeg.buildvariant=macos"'

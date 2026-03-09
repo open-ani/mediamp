@@ -157,6 +157,7 @@ class MatrixInstance(
     val installNativeDeps: Boolean = !selfHosted,
     val buildIosFramework: Boolean = false,
     val buildAllAndroidAbis: Boolean = true,
+    val ffmpegBuildVariant: String? = null,
 
     // Gradle command line args
     gradleHeap: String = "4g",
@@ -199,6 +200,10 @@ class MatrixInstance(
 
         extraGradleArgs.forEach {
             add(quote(it))
+        }
+
+        ffmpegBuildVariant?.let {
+            add(quote("-Pmediamp.ffmpeg.buildvariant=$it"))
         }
     }.joinToString(" ")
 
@@ -280,13 +285,14 @@ sealed class Runner(
         labels = setOf("macos-15"),
     )
 
-    object GithubUbuntu2004 : GithubHosted(
-        id = "github-ubuntu-2004",
-        displayName = "Ubuntu 20.04 x86_64 (GitHub)",
+    object GithubUbuntu2404 : GithubHosted(
+        id = "github-ubuntu-2404",
+        displayName = "Ubuntu 24.04 x86_64 (GitHub)",
         os = OS.UBUNTU,
         arch = Arch.X64,
-        labels = setOf("ubuntu-20.04"),
+        labels = setOf("ubuntu-24.04"),
     )
+
 
     // Objects under SelfHosted
     object SelfHostedWindows10 : SelfHosted(
@@ -332,10 +338,22 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "windows-x64",
         gradleHeap = "4g",
         uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "windows",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=x86_64",
         ),
         buildAllAndroidAbis = false,
+    ),
+    MatrixInstance(
+        runner = Runner.GithubUbuntu2404,
+        name = "Ubuntu 24.04 x86_64",
+        uploadApk = false,
+        composeResourceTriple = "linux-x64",
+        gradleHeap = "4g",
+        uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "linux",
+        extraGradleArgs = emptyList(),
+        buildAllAndroidAbis = true,
     ),
     MatrixInstance(
         runner = Runner.GithubMacOS15Intel,
@@ -343,6 +361,7 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "macos-x64",
         buildIosFramework = false,
         gradleHeap = "4g",
+        ffmpegBuildVariant = "macos",
         extraGradleArgs = listOf(),
         buildAllAndroidAbis = true,
     ),
@@ -351,6 +370,7 @@ val buildMatrixInstances = listOf(
         uploadApk = true, // upload arm64-v8a once finished
         composeResourceTriple = "macos-arm64",
         uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "ios,macos,android",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=arm64-v8a", // speed up testing
         ),
@@ -373,6 +393,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         setupGradle()
 
         gradleCheck()
+        buildFfmpegArtifacts()
         // uploadMediampBackendMpv()
 
         cleanupTempFiles()
@@ -517,7 +538,7 @@ workflow(
 
                 runGradle(
                     name = "Update Release Version Name",
-                    tasks = ["updateReleaseVersionNameFromGit"],
+                    tasks = arrayOf("updateReleaseVersionNameFromGit"),
                     env = mapOf(
                         "GITHUB_TOKEN" to expr { secrets.GITHUB_TOKEN },
                         "GITHUB_REPOSITORY" to expr { secrets.GITHUB_REPOSITORY },
@@ -537,33 +558,51 @@ workflow(
         },
     )
 
-    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022])
-    val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15])
+    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022]) {
+        with(WithMatrix(it)) {
+            publishFfmpegToMavenCentral(
+                "publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository",
+            )
+        }
+    }
+    val linux = addJob(buildMatrixInstances[Runner.GithubUbuntu2404]) {
+        with(WithMatrix(it)) {
+            publishFfmpegToMavenCentral(
+                "publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository",
+            )
+        }
+    }
+    val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15]) {
+        with(WithMatrix(it)) {
+            publishFfmpegToMavenCentral(
+                "publishKotlinMultiplatformPublicationToMavenCentralRepository",
+                "publishDesktopPublicationToMavenCentralRepository",
+                "publishIosArm64PublicationToMavenCentralRepository",
+                "publishIosSimulatorArm64PublicationToMavenCentralRepository",
+                "publishAndroidPublicationToMavenCentralRepository",
+                "publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository",
+            )
+        }
+    }
 
-    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
+    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, linux, macAarch64)) { matrix ->
         with(WithMatrix(matrix)) {
-            /*listOf(
-                OS.WINDOWS to Arch.X64,
-                OS.MACOS to Arch.AARCH64,
-            ).forEach { (os, arch) ->
-                uses(
-                    action = DownloadArtifact(
-                        name = ArtifactNames.mediampBackendMpvNativeJar(os, arch),
-                        path = "mediamp-mpv/build/native-jars/",
-                    ),
-                )
-            }
-
-            run(command = "ls -l mediamp-mpv/build/native-jars")*/
+            publishFfmpegToMavenCentral(
+                "publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
+            )
             runGradle(
-                tasks = ["publish"],
-                env = mapOf(
-                    "ORG_GRADLE_PROJECT_mavenCentralUsername" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralUsername"]!! },
-                    "ORG_GRADLE_PROJECT_mavenCentralPassword" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralPassword"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKey" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKey"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKeyId" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyId"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKeyPassword" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyPassword"]!! },
+                tasks = arrayOf(
+                    "publish",
+                    "-x", ":mediamp-ffmpeg:publishKotlinMultiplatformPublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishDesktopPublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishIosArm64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishIosSimulatorArm64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishAndroidPublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeMacosArm64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
+                    "-x", ":mediamp-ffmpeg:publishFfmpegRuntimePublicationToMavenCentralRepository",
                 ),
+                env = mavenCentralPublishEnv(),
             )
         }
     }
@@ -821,10 +860,35 @@ class WithMatrix(
         }
     }
 
+    fun JobBuilder<*>.buildFfmpegArtifacts() {
+        if (matrix.ffmpegBuildVariant != null) {
+            runGradle(
+                name = "Build FFmpeg artifacts",
+                tasks = arrayOf(":mediamp-ffmpeg:ffmpegBuildAll"),
+            )
+        }
+    }
+
+    fun mavenCentralPublishEnv(): Map<String, String> = mapOf(
+        "ORG_GRADLE_PROJECT_mavenCentralUsername" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralUsername"]!! },
+        "ORG_GRADLE_PROJECT_mavenCentralPassword" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralPassword"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKey" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKey"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKeyId" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyId"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKeyPassword" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyPassword"]!! },
+    )
+
+    fun JobBuilder<*>.publishFfmpegToMavenCentral(vararg tasks: String) {
+        runGradle(
+            name = "Publish FFmpeg artifacts",
+            tasks = tasks,
+            env = mavenCentralPublishEnv(),
+        )
+    }
+
     fun JobBuilder<*>.uploadMediampBackendMpv(): ActionStep<UploadArtifact.Outputs> {
         runGradle(
             name = "Build mediamp-mpv",
-            tasks = ["copyNativeJarForCurrentPlatform"],
+            tasks = arrayOf("copyNativeJarForCurrentPlatform"),
         )
         return uses(
             name = "Upload mediamp-mpv native builds",
