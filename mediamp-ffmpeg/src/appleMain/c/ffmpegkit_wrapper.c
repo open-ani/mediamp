@@ -3,6 +3,7 @@ extern "C" {
 #endif
 
 int main(int argc, char **argv);
+int ffmpegkit_execute(int argc, char **argv);
 
 __attribute__((visibility("default")))
 int ffmpegkit_execute(int argc, char **argv) {

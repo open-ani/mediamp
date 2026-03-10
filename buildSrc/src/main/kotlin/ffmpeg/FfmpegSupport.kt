@@ -54,7 +54,8 @@ internal class FfmpegBuildContext(
             ?: System.getenv("MEDIAMP_FFMPEG_SRC_DIR")?.let(project::file)
             ?: project.projectDir.resolve("ffmpeg")
 
-    val wrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
+    val commandWrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
+    val jniWrapperSource: File = project.projectDir.resolve("src/jvmMain/c/ffmpegkit_jni.c")
 
     val enabledBuildVariantFamilies: Set<String> =
         project.getPropertyOrNull("mediamp.ffmpeg.buildvariant")
@@ -158,12 +159,28 @@ internal class FfmpegBuildContext(
         "swscale",
     )
 
-    val androidAbis: List<AndroidAbi> = listOf(
+    private val allAndroidAbis: List<AndroidAbi> = listOf(
         AndroidAbi("armeabi-v7a", "arm", "armv7a-linux-androideabi", 21),
         AndroidAbi("arm64-v8a", "aarch64", "aarch64-linux-android", 21),
         AndroidAbi("x86", "x86", "i686-linux-android", 21),
         AndroidAbi("x86_64", "x86_64", "x86_64-linux-android", 21),
     )
+
+    val androidAbis: List<AndroidAbi> =
+        project.getPropertyOrNull("mediamp.ffmpeg.androidabis")
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.let { selected ->
+                val byAbi = allAndroidAbis.associateBy(AndroidAbi::abi)
+                val unknown = selected.filterNot(byAbi::containsKey)
+                require(unknown.isEmpty()) {
+                    "Unknown values in mediamp.ffmpeg.androidabis: ${unknown.joinToString()}. " +
+                        "Supported values: ${allAndroidAbis.joinToString { it.abi }}."
+                }
+                selected.map { byAbi.getValue(it) }
+            }
+            ?: allAndroidAbis
 
     val desktopRuntimeTargets: List<DesktopRuntimeTarget> = listOf(
         DesktopRuntimeTarget("windows", "x64", "WindowsX64"),

@@ -24,64 +24,43 @@ import java.util.Locale
  * On first use they are extracted to a temporary directory.
  */
 public actual class FFmpegKit actual constructor() {
-
-    private val mutex = Mutex()
-
-    @Volatile
-    private var extractedDir: File? = null
-
     public actual suspend fun execute(args: List<String>): FFmpegResult {
-        val ffmpeg = ensureExtracted()
-        return JvmFFmpegProcess.execute(ffmpeg, args, libraryPathEnv())
+        val runtimeDir = ensureExtracted()
+        return JvmFFmpegProcess.execute(runtimeDir, args)
     }
 
     public actual fun executeStreaming(args: List<String>): Flow<FFmpegOutputLine> {
-        // Blocking extraction is acceptable here since the flow will run on IO dispatcher
-        val ffmpeg = extractBlocking()
-        return JvmFFmpegProcess.executeStreaming(ffmpeg, args, libraryPathEnv())
+        val runtimeDir = extractBlocking()
+        return JvmFFmpegProcess.executeStreaming(runtimeDir, args)
     }
 
-    private suspend fun ensureExtracted(): String {
-        extractedDir?.let { return ffmpegBinaryPath(it) }
-        mutex.withLock {
-            extractedDir?.let { return ffmpegBinaryPath(it) }
+    private suspend fun ensureExtracted(): File {
+        extractedDir?.let { return it }
+        extractionMutex.withLock {
+            extractedDir?.let { return it }
             val dir = extractNativeBinaries()
             extractedDir = dir
-            return ffmpegBinaryPath(dir)
+            return dir
         }
     }
 
-    private fun extractBlocking(): String {
-        extractedDir?.let { return ffmpegBinaryPath(it) }
+    private fun extractBlocking(): File {
+        extractedDir?.let { return it }
         val dir = extractNativeBinaries()
         extractedDir = dir
-        return ffmpegBinaryPath(dir)
-    }
-
-    private fun libraryPathEnv(): Map<String, String> {
-        val dir = extractedDir ?: return emptyMap()
-        val key = when {
-            OS_NAME.contains("win") -> "PATH"
-            OS_NAME.contains("mac") -> "DYLD_LIBRARY_PATH"
-            else -> "LD_LIBRARY_PATH"
-        }
-        // Prepend our dir so ffmpeg finds its shared libs
-        val existing = System.getenv(key).orEmpty()
-        val value = if (existing.isEmpty()) dir.absolutePath else "${dir.absolutePath}${File.pathSeparator}$existing"
-        return mapOf(key to value)
+        return dir
     }
 
     private companion object {
         private val OS_NAME: String = System.getProperty("os.name").lowercase(Locale.ROOT)
+        private val extractionMutex: Mutex = Mutex()
 
-        private fun ffmpegBinaryPath(dir: File): String {
-            val name = if (OS_NAME.contains("win")) "ffmpeg.exe" else "ffmpeg"
-            return dir.resolve(name).absolutePath
-        }
+        @Volatile
+        private var extractedDir: File? = null
 
         /**
          * Extract all native binaries from the classpath to a temp directory.
-         * The runtime JAR contains files like `ffmpeg.exe`, `avcodec-62.dll`, etc.
+         * The runtime JAR contains files like `libffmpegkitjni.dylib`, `libavcodec.62.dylib`, etc.
          * at the root level.
          */
         private fun extractNativeBinaries(): File {
