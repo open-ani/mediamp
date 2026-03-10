@@ -41,4 +41,13 @@ include(":mediamp-source-ktxio")
 include(":ci-helper")
 include(":catalog")
 
+include(":ffmpeg-smoke-shared")
+project(":ffmpeg-smoke-shared").projectDir = file("test-projects/ffmpeg-kmp-smoke/shared")
+
+include(":ffmpeg-smoke-desktop-app")
+project(":ffmpeg-smoke-desktop-app").projectDir = file("test-projects/ffmpeg-kmp-smoke/desktopApp")
+
+include(":ffmpeg-smoke-android-app")
+project(":ffmpeg-smoke-android-app").projectDir = file("test-projects/ffmpeg-kmp-smoke/androidApp")
+
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")

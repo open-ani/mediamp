@@ -14,12 +14,9 @@ import Os
 import getArch
 import getOs
 import org.gradle.api.Project
-import org.gradle.process.ExecOperations
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.Properties
-import javax.inject.Inject
 
 internal data class FfmpegBuildTarget(
     val name: String,
@@ -43,16 +40,15 @@ internal data class DesktopRuntimeTarget(
     val ffmpegTargetName: String,
 )
 
-internal interface ExecHelper {
-    @get:Inject
-    val execOps: ExecOperations
-}
+internal data class AppleRuntimeTarget(
+    val artifactIdSuffix: String,
+    val publicationSuffix: String,
+    val ffmpegTargetName: String,
+)
 
 internal class FfmpegBuildContext(
     val project: Project,
 ) {
-    val execHelper: ExecHelper = project.objects.newInstance(ExecHelper::class.java)
-
     val ffmpegSrcDir: File =
         project.getPropertyOrNull("mediamp.ffmpeg.srcdir")?.let(project::file)
             ?: System.getenv("MEDIAMP_FFMPEG_SRC_DIR")?.let(project::file)
@@ -176,6 +172,11 @@ internal class FfmpegBuildContext(
         DesktopRuntimeTarget("macos", "x64", "MacosX64"),
     )
 
+    val appleRuntimeTargets: List<AppleRuntimeTarget> = listOf(
+        AppleRuntimeTarget("ios-arm64", "IosArm64", "IosArm64"),
+        AppleRuntimeTarget("ios-simulator-arm64", "IosSimulatorArm64", "IosSimulatorArm64"),
+    )
+
     val linuxX64Target = FfmpegBuildTarget(
         name = "LinuxX64",
         extraFlags = listOf("--arch=x86_64", "--target-os=linux"),
@@ -240,17 +241,6 @@ internal class FfmpegBuildContext(
 
     fun isBuildVariantEnabled(family: String): Boolean =
         family.lowercase(Locale.getDefault()) in enabledBuildVariantFamilies
-
-    fun execOutput(vararg args: String, workDir: File = project.projectDir): String {
-        val stdout = ByteArrayOutputStream()
-        execHelper.execOps.exec {
-            commandLine(*args)
-            workingDir = workDir
-            standardOutput = stdout
-            isIgnoreExitValue = false
-        }
-        return stdout.toString(Charsets.UTF_8).trim()
-    }
 
     fun resolveNdkDir(): File {
         val explicit = project.getPropertyOrNull("ndk.dir")
@@ -330,14 +320,17 @@ internal class FfmpegBuildContext(
         )
     }
 
-    val msys2Dir: File by lazy {
+    fun resolveMsys2Dir(): File {
         val path = project.getPropertyOrNull("msys2.dir") ?: "C:\\msys64"
         val dir = project.file(path)
         require(dir.isDirectory) {
             "MSYS2 directory not found at '$path'. Set Gradle property msys2.dir to your MSYS2 installation root."
         }
-        dir
+        return dir
     }
+
+    val msys2Dir: File
+        get() = resolveMsys2Dir()
 
     companion object {
         private val ALL_BUILD_VARIANT_FAMILIES = setOf("windows", "linux", "macos", "ios", "android")

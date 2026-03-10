@@ -23,6 +23,15 @@ runtimeOnly("org.openani.mediamp:mediamp-ffmpeg-runtime-windows-x64:<version>")
 
 If your desktop Gradle variant resolution is configured correctly, the matching runtime JAR may be selected automatically. If runtime extraction fails at startup, add the platform-specific runtime dependency explicitly.
 
+iOS runtime artifacts:
+
+```kotlin
+implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>")
+implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>")
+```
+
+These iOS runtime artifacts are published separately from the Kotlin/Native `klib`. They contain the Apple FFmpeg binaries that must be embedded into the final app bundle.
+
 ## What gets published
 
 `mediamp-ffmpeg` gives you the cross-platform Kotlin API.
@@ -31,7 +40,7 @@ Platform runtime behavior:
 
 - Android: native FFmpeg binaries are packaged into the AAR and then into the APK.
 - Desktop JVM: FFmpeg binaries are packaged in a separate runtime JAR.
-- iOS: the Kotlin API is published, but the FFmpeg runtime files still need to be embedded into the app bundle by the app build.
+- iOS: the Kotlin API and Apple runtime artifacts are both published, but the app build must still unpack and embed the runtime files into the app bundle.
 
 ## API
 
@@ -124,9 +133,19 @@ iOS does not require an explicit `initialize(...)` call.
 val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 ```
 
-Current limitation:
+The published Kotlin artifact does not automatically embed the Apple FFmpeg runtime into the final app bundle.
 
-The published Kotlin artifact does not yet automatically embed the Apple FFmpeg runtime into the final app bundle. Your app must copy the FFmpeg runtime files into the app's resource directory.
+You still need two things:
+
+1. Add the matching Apple runtime artifact as a dependency for the target you build.
+2. Unpack that artifact during your app build and copy its runtime files into the app bundle resources.
+
+Recommended runtime coordinates:
+
+- real device: `org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>`
+- arm64 simulator: `org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>`
+
+The iOS `klib` metadata now carries a dependency constraint pointing at the matching runtime coordinate, but that only helps dependency resolution. It does not perform bundle embedding for you.
 
 At minimum, the app bundle must contain:
 
@@ -156,6 +175,25 @@ kotlin {
 }
 ```
 
+iOS app:
+
+```kotlin
+kotlin {
+    sourceSets {
+        iosArm64Main.dependencies {
+            implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
+            implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>")
+        }
+        iosSimulatorArm64Main.dependencies {
+            implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
+            implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>")
+        }
+    }
+}
+```
+
+Then make your Xcode or Gradle-for-iOS packaging step unzip that runtime artifact and copy the contained `ffmpeg` and `.dylib` files into the app bundle resources.
+
 Android app:
 
 ```kotlin
@@ -175,6 +213,6 @@ dependencies {
 
 ## Known limitations
 
-- Apple runtime embedding is not automated yet.
+- Apple runtime embedding is still not automated. The runtime artifacts are published, but app bundling must unpack and embed them.
 - Desktop runtime resolution may need an explicit platform runtime dependency in non-standard Gradle setups.
 - This wrapper currently exposes the FFmpeg CLI model, not a typed transcoding API.

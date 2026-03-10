@@ -5,8 +5,9 @@ import org.gradle.api.Project
 fun Project.configureMediampFfmpegModule() {
     val context = FfmpegBuildContext(this)
     registerHostFfmpegTasks(context)
-    val runtimeJarTasks = registerDesktopRuntimeJarTasks(context)
+    val desktopRuntimeJarTasks = registerDesktopRuntimeJarTasks(context)
+    val appleRuntimeJarTasks = registerAppleRuntimeJarTasks(context)
     val prepareTask = registerAndroidJniPackaging(context)
     wireAndroidJniPackaging(context, prepareTask)
-    configureRuntimePublishing(context, runtimeJarTasks)
+    configureRuntimePublishing(context, desktopRuntimeJarTasks, appleRuntimeJarTasks)
 }
