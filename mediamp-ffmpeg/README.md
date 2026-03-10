@@ -127,8 +127,6 @@ If you see an error like `ffmpeg-natives.txt not found on classpath`, the platfo
 
 ## iOS usage
 
-iOS does not require an explicit `initialize(...)` call.
-
 ```kotlin
 val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 ```
@@ -139,6 +137,14 @@ You still need two things:
 
 1. Add the matching Apple runtime artifact as a dependency for the target you build.
 2. Unpack that artifact during your app build and copy its runtime files into the app bundle resources.
+
+If you place the runtime in a custom directory inside the app bundle, configure that directory at app startup before the first FFmpeg call:
+
+```kotlin
+FFmpegKit.initialize("/path/to/YourApp.app/FFmpegRuntime")
+```
+
+The iOS implementation searches the configured directory first, then falls back to the bundle resource directory and `Frameworks`.
 
 Recommended runtime coordinates:
 
@@ -155,7 +161,8 @@ At minimum, the app bundle must contain:
 
 Runtime expectations:
 
-- `FFmpegKit` looks up those files from `NSBundle.mainBundle.resourcePath`.
+- `FFmpegKit` looks up those files from the configured runtime directory if you called `FFmpegKit.initialize(...)`.
+- Otherwise it falls back to `NSBundle.mainBundle.resourcePath` and the bundle `Frameworks` directory.
 - The library configures `DYLD_LIBRARY_PATH` internally.
 - The wrapper entrypoint is `ffmpegkit_execute` inside `libffmpegkitcmd.dylib`.
 

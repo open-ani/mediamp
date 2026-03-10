@@ -267,16 +267,35 @@ public actual class FFmpegKit actual constructor() {
         val bundle = NSBundle.mainBundle
         val resourcePath = bundle.resourcePath
             ?: error("NSBundle.resourcePath is null.")
-
-        val wrapperPath = bundle.pathForResource("libffmpegkitcmd", "dylib")
-            ?: error("libffmpegkitcmd.dylib not found in app bundle resource path: $resourcePath")
-        val ffmpegPath = bundle.pathForResource("ffmpeg", null).orEmpty()
+        val frameworksPath = bundle.privateFrameworksPath?.takeIf { it.isNotBlank() }
+        val configuredRuntimeDir = runtimeSearchPath?.takeIf { it.isNotBlank() }
+        val candidateDirs = buildList {
+            configuredRuntimeDir?.let { add(it) }
+            add(resourcePath)
+            frameworksPath?.let { if (it != resourcePath) add(it) }
+        }
+        val fileManager = NSFileManager.defaultManager
+        val runtimeDir = candidateDirs.firstOrNull { dir ->
+            fileManager.fileExistsAtPath("$dir/libffmpegkitcmd.dylib")
+        } ?: error(
+            "libffmpegkitcmd.dylib not found in app bundle resource path or Frameworks directory: " +
+                candidateDirs.joinToString()
+        )
+        val wrapperPath = "$runtimeDir/libffmpegkitcmd.dylib"
+        val ffmpegPath = candidateDirs.firstOrNull { dir ->
+            fileManager.fileExistsAtPath("$dir/ffmpeg")
+        }?.let { "$it/ffmpeg" }.orEmpty()
 
         return RuntimeLocation(
             wrapperPath = wrapperPath,
             ffmpegPath = ffmpegPath,
-            runtimeDir = resourcePath,
-            source = "bundle",
+            runtimeDir = runtimeDir,
+            source = when (runtimeDir) {
+                configuredRuntimeDir -> "configured"
+                resourcePath -> "bundle-resource"
+                frameworksPath -> "bundle-frameworks"
+                else -> "bundle"
+            },
         )
     }
 
@@ -363,13 +382,22 @@ public actual class FFmpegKit actual constructor() {
         val stderr: String,
     )
 
-    @OptIn(ExperimentalForeignApi::class)
-    private companion object {
+    public companion object {
+        public fun initialize(runtimeSearchPath: String) {
+            this.runtimeSearchPath = runtimeSearchPath.trimEnd('/')
+        }
+
+        @OptIn(ExperimentalForeignApi::class)
         private val executionMutex: Mutex = Mutex()
+        @OptIn(ExperimentalForeignApi::class)
         private val loadedLibraryPaths: MutableSet<String> = linkedSetOf()
+        @OptIn(ExperimentalForeignApi::class)
         private val loadedHandles: MutableList<CPointer<*>> = mutableListOf()
+        @OptIn(ExperimentalForeignApi::class)
         private var cachedWrapperPath: String? = null
+        @OptIn(ExperimentalForeignApi::class)
         private var cachedEntryPoint: FfmpegExecuteFn? = null
+        private var runtimeSearchPath: String? = null
     }
 }
 
