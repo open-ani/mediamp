@@ -48,6 +48,7 @@ internal data class AppleRuntimeTarget(
 
 internal class FfmpegBuildContext(
     val project: Project,
+    val ffmpegPatch: File
 ) {
     val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 

@@ -12,6 +12,7 @@ import Arch
 import Os
 import org.gradle.api.GradleException
 import org.gradle.api.Task
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.Sync
 import org.gradle.kotlin.dsl.register
@@ -20,9 +21,30 @@ import java.io.File
 internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     val project = context.project
     val sourceTemplateDir = project.layout.buildDirectory.dir("ffmpeg-source-template")
+
+    val applyPatchesTask = project.tasks.register<Exec>("applyFfmpegPatches") {
+        group = "ffmpeg"
+        description = "Apply patches to the FFmpeg submodule source tree"
+        enabled = context.ffmpegPatch.exists()
+        
+        commandLine("git", "apply", context.ffmpegPatch.absolutePath)
+        workingDir = context.ffmpegSrcDir
+    }
+
+    val revertPatchesTask = project.tasks.register<Exec>("revertFfmpegPatches") {
+        group = "ffmpeg"
+        description = "Revert patches from the FFmpeg submodule source tree"
+        enabled = context.ffmpegPatch.exists()
+        
+        commandLine("git", "checkout", "--", ".")
+        workingDir = context.ffmpegSrcDir
+    }
+
     val sourceTemplateTask = project.tasks.register<PrepareFfmpegSourceTask>("prepareFfmpegSourceTemplate") {
         group = "ffmpeg"
         description = "Create a stable FFmpeg source snapshot for this build"
+        dependsOn(applyPatchesTask)
+        finalizedBy(revertPatchesTask)
         sourceDir.set(context.ffmpegSrcDir)
         outputDir.set(sourceTemplateDir)
     }

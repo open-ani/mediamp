@@ -145,30 +145,46 @@ internal object JvmFFmpegProcess {
             "FFmpeg JNI runtime wrapper not found at ${wrapper.absolutePath}. Ensure the runtime artifact was packaged correctly."
         }
 
+        val allSharedLibraries = runtimeDir.listFiles()
+            ?.filter { candidate ->
+                candidate.isFile &&
+                        candidate != wrapper &&
+                        candidate.extension.equals(sharedLibraryExtension(), ignoreCase = true)
+            }
+            .orEmpty()
+        val ffmpegLibraryPrefixes = listOf(
+            sharedLibraryName("avutil"),
+            sharedLibraryName("swresample"),
+            sharedLibraryName("swscale"),
+            sharedLibraryName("avcodec"),
+            sharedLibraryName("avformat"),
+            sharedLibraryName("avfilter"),
+            sharedLibraryName("avdevice"),
+        )
+
         val orderedLibraries = buildList {
-            listOf(
-                sharedLibraryName("avutil"),
-                sharedLibraryName("swresample"),
-                sharedLibraryName("swscale"),
-                sharedLibraryName("avcodec"),
-                sharedLibraryName("avformat"),
-                sharedLibraryName("avfilter"),
-                sharedLibraryName("avdevice"),
-            ).forEach { libraryName ->
-                runtimeDir.listFiles()
-                    ?.firstOrNull { it.isFile && it.name.startsWith(libraryName) }
+            if (osName.contains("win")) {
+                // Windows FFmpeg DLLs depend on the toolchain runtime DLLs we package
+                // alongside them (for example libwinpthread/libgcc). Load those first,
+                // in reverse-alphabetical order so that leaf dependencies (libwinpthread)
+                // are loaded before their dependents (libgcc_s_seh) – this prevents the
+                // OS from picking up an incompatible version from the system PATH.
+                allSharedLibraries
+                    .filter { candidate -> ffmpegLibraryPrefixes.none(candidate.name::startsWith) }
+                    .sortedByDescending { it.name }
+                    .let(::addAll)
+            }
+
+            ffmpegLibraryPrefixes.forEach { libraryName ->
+                allSharedLibraries
+                    .firstOrNull { candidate -> candidate.name.startsWith(libraryName) }
                     ?.let(::add)
             }
 
-            runtimeDir.listFiles()
-                ?.filter { candidate ->
-                    candidate.isFile &&
-                        candidate != wrapper &&
-                        candidate.extension.equals(sharedLibraryExtension(), ignoreCase = true) &&
-                        none { it.absolutePath == candidate.absolutePath }
-                }
-                ?.sortedBy { it.name }
-                ?.let(::addAll)
+            allSharedLibraries
+                .filter { candidate -> none { it.absolutePath == candidate.absolutePath } }
+                .sortedBy { it.name }
+                .let(::addAll)
 
             add(wrapper)
         }
@@ -184,7 +200,7 @@ internal object JvmFFmpegProcess {
 
     private fun sharedLibraryName(baseName: String): String =
         when {
-            osName.contains("win") -> "$baseName."
+            osName.contains("win") -> "$baseName-"
             else -> "lib$baseName"
         }
 

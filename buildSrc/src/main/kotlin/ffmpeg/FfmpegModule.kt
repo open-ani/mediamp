@@ -3,7 +3,7 @@ package ffmpeg
 import org.gradle.api.Project
 
 fun Project.configureMediampFfmpegModule() {
-    val context = FfmpegBuildContext(this)
+    val context = FfmpegBuildContext(this, project.projectDir.resolve("fix-prepare-cli-args-on-windows.patch"))
     registerHostFfmpegTasks(context)
     val desktopRuntimeJarTasks = registerDesktopRuntimeJarTasks(context)
     val appleRuntimeJarTasks = registerAppleRuntimeJarTasks(context)

@@ -1,0 +1,20 @@
+Index: fftools/cmdutils.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/cmdutils.c b/fftools/cmdutils.c
+--- a/fftools/cmdutils.c	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/cmdutils.c	(date 1773229599796)
+@@ -167,6 +167,11 @@
+ /* _WIN32 means using the windows libc - cygwin doesn't define that
+  * by default. HAVE_COMMANDLINETOARGVW is true on cygwin, while
+  * it doesn't provide the actual command line via GetCommandLineW(). */
++// mediamp calls ffmpeg main() directly via JNI. HAVE_COMMANDLINETOARGVW is
++// defined, but GetCommandLineW() returns the host JVM command line, not the
++// arguments we passed. Disable the Win32 argument re-parsing so that the
++// original argv from the caller is used as-is.
++#undef HAVE_COMMANDLINETOARGVW
+ #if HAVE_COMMANDLINETOARGVW && defined(_WIN32)
+ #include <shellapi.h>
+ /* Will be leaked on exit */
