@@ -24,49 +24,66 @@ import org.gradle.nativeplatform.MachineArchitecture
 import org.gradle.nativeplatform.OperatingSystemFamily
 import org.gradle.api.tasks.TaskProvider
 
+internal data class RuntimeJarArtifact(
+    val artifactNotation: Any,
+    val builtBy: Any? = null,
+)
+
 internal fun registerDesktopRuntimeJarTasks(
     context: FfmpegBuildContext,
-): Map<DesktopRuntimeTarget, TaskProvider<Jar>> {
-    val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, TaskProvider<Jar>>()
+): Map<DesktopRuntimeTarget, RuntimeJarArtifact> {
+    val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, RuntimeJarArtifact>()
 
     context.desktopRuntimeTargets.forEach { target ->
         val taskName = "ffmpegRuntimeJar${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}"
         val assembleTaskName = "ffmpegAssemble${target.ffmpegTargetName}"
-        if (!context.project.tasks.names.contains(assembleTaskName)) {
-            context.project.logger.lifecycle(
-                "Skipping runtime publication task for ${target.os}-${target.arch}: $assembleTaskName is not available on this host.",
-            )
-            return@forEach
-        }
-        val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/${target.ffmpegTargetName}")
+        if (context.project.tasks.names.contains(assembleTaskName)) {
+            val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/${target.ffmpegTargetName}")
 
-        val jarTask = context.project.tasks.register<Jar>(taskName) {
-            group = "ffmpeg"
-            description = "Package FFmpeg runtime for ${target.os}-${target.arch}"
-            archiveBaseName.set("mediamp-ffmpeg-runtime")
-            archiveClassifier.set("${target.os}-${target.arch}")
-            dependsOn(assembleTaskName)
+            val jarTask = context.project.tasks.register<Jar>(taskName) {
+                group = "ffmpeg"
+                description = "Package FFmpeg runtime for ${target.os}-${target.arch}"
+                archiveBaseName.set("mediamp-ffmpeg-runtime")
+                archiveClassifier.set("${target.os}-${target.arch}")
+                dependsOn(assembleTaskName)
 
-            from(outputDir) {
-                exclude("include/**")
-            }
+                from(outputDir) {
+                    exclude("include/**")
+                }
 
-            doFirst {
-                val dir = outputDir.get().asFile
-                if (dir.isDirectory) {
-                    val manifest = dir.walk()
-                        .filter { it.isFile && !it.path.contains("include") }
-                        .map { it.relativeTo(dir).path.replace("\\", "/") }
-                        .sorted()
-                        .joinToString("\n")
-                    val manifestFile = temporaryDir.resolve("ffmpeg-natives.txt")
-                    manifestFile.parentFile.mkdirs()
-                    manifestFile.writeText(manifest)
-                    from(manifestFile)
+                doFirst {
+                    val dir = outputDir.get().asFile
+                    if (dir.isDirectory) {
+                        val manifest = dir.walk()
+                            .filter { it.isFile && !it.path.contains("include") }
+                            .map { it.relativeTo(dir).path.replace("\\", "/") }
+                            .sorted()
+                            .joinToString("\n")
+                        val manifestFile = temporaryDir.resolve("ffmpeg-natives.txt")
+                        manifestFile.parentFile.mkdirs()
+                        manifestFile.writeText(manifest)
+                        from(manifestFile)
+                    }
                 }
             }
+            runtimeJarTasks[target] = RuntimeJarArtifact(jarTask.flatMap { it.archiveFile }, jarTask)
+            return@forEach
         }
-        runtimeJarTasks[target] = jarTask
+
+        val prebuiltJar = context.project.layout.buildDirectory.file(
+            "prebuilt-runtime-jars/${target.os}-${target.arch}/mediamp-ffmpeg-runtime-${context.project.version}-${target.os}-${target.arch}.jar",
+        ).get().asFile
+        if (prebuiltJar.isFile) {
+            context.project.logger.lifecycle(
+                "Using prebuilt runtime jar for ${target.os}-${target.arch}: ${prebuiltJar.absolutePath}",
+            )
+            runtimeJarTasks[target] = RuntimeJarArtifact(prebuiltJar)
+            return@forEach
+        }
+
+        context.project.logger.lifecycle(
+            "Skipping runtime publication task for ${target.os}-${target.arch}: neither $assembleTaskName nor ${prebuiltJar.absolutePath} is available.",
+        )
     }
 
     return runtimeJarTasks
@@ -122,7 +139,7 @@ internal fun registerAppleRuntimeJarTasks(
 
 internal fun configureRuntimePublishing(
     context: FfmpegBuildContext,
-    desktopRuntimeJarTasks: Map<DesktopRuntimeTarget, TaskProvider<Jar>>,
+    desktopRuntimeJarTasks: Map<DesktopRuntimeTarget, RuntimeJarArtifact>,
     appleRuntimeJarTasks: Map<AppleRuntimeTarget, TaskProvider<Jar>>,
 ) {
     val deployVersion = context.project.version.toString()
@@ -142,8 +159,9 @@ internal fun configureRuntimePublishing(
                 artifactId = "mediamp-ffmpeg-runtime-${target.os}-${target.arch}"
                 version = deployVersion
 
-                artifact(jarTask) {
+                artifact(jarTask.artifactNotation) {
                     classifier = null
+                    jarTask.builtBy?.let { builtBy(it) }
                 }
 
                 addMainModulePomDependency(deployVersion)
@@ -170,7 +188,7 @@ internal fun configureRuntimePublishing(
             context = context,
             configurationName = "ffmpegCompositeRuntimeElements-${target.os}-${target.arch}",
             moduleName = "mediamp-ffmpeg-runtime-${target.os}-${target.arch}",
-            runtimeJarTask = jarTask,
+            runtimeJarArtifact = jarTask,
         ) {
             attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
             attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
@@ -210,7 +228,7 @@ internal fun configureRuntimePublishing(
             context = context,
             configurationName = "ffmpegCompositeRuntimeElements-${target.artifactIdSuffix}",
             moduleName = "mediamp-ffmpeg-runtime-${target.artifactIdSuffix}",
-            runtimeJarTask = jarTask,
+            runtimeJarArtifact = RuntimeJarArtifact(jarTask.flatMap { it.archiveFile }, jarTask),
         ) {
             attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
             attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
@@ -288,7 +306,7 @@ private fun registerCompositeRuntimeElements(
     context: FfmpegBuildContext,
     configurationName: String,
     moduleName: String,
-    runtimeJarTask: TaskProvider<Jar>,
+    runtimeJarArtifact: RuntimeJarArtifact,
     configureAttributes: org.gradle.api.artifacts.Configuration.() -> Unit,
 ) {
     context.project.configurations.create(configurationName).apply {
@@ -296,7 +314,9 @@ private fun registerCompositeRuntimeElements(
         isCanBeResolved = false
         configureAttributes()
 
-        outgoing.artifact(runtimeJarTask)
+        outgoing.artifact(runtimeJarArtifact.artifactNotation) {
+            runtimeJarArtifact.builtBy?.let { builtBy(it) }
+        }
         outgoing.capability("org.openani.mediamp:$moduleName:${context.project.version}")
     }
 }

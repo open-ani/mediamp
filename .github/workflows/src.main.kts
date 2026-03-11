@@ -37,6 +37,7 @@
 
 import Secrets.GITHUB_REPOSITORY
 import io.github.typesafegithub.workflows.actions.actions.Checkout
+import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
 import io.github.typesafegithub.workflows.actions.actions.UploadArtifact
 import io.github.typesafegithub.workflows.actions.bhowell2.GithubSubstringAction_Untyped
@@ -402,6 +403,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 
 object ArtifactNames {
     fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-mpv-${os}-${arch}"
+    fun ffmpegRuntimeJar(platformId: String) = "mediamp-ffmpeg-runtime-$platformId"
 }
 
 workflow(
@@ -560,28 +562,43 @@ workflow(
 
     val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022]) {
         with(WithMatrix(it)) {
-            publishFfmpegToMavenCentral(
-                "publishFfmpegRuntimeWindowsX64PublicationToMavenCentralRepository",
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarWindowsX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("windows-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-x64.jar",
             )
         }
     }
     val linux = addJob(buildMatrixInstances[Runner.GithubUbuntu2404]) {
         with(WithMatrix(it)) {
-            publishFfmpegToMavenCentral(
-                "publishFfmpegRuntimeLinuxX64PublicationToMavenCentralRepository",
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarLinuxX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("linux-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-linux-x64.jar",
             )
         }
     }
     val macX8664 = addJob(buildMatrixInstances[Runner.GithubMacOS15Intel]) {
         with(WithMatrix(it)) {
-            publishFfmpegToMavenCentral(
-                "publishFfmpegRuntimeMacosX64PublicationToMavenCentralRepository",
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarMacosX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("macos-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-macos-x64.jar",
             )
         }
     }
 
     addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, linux, macX8664)) { matrix ->
         with(WithMatrix(matrix)) {
+            listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
+                uses(
+                    action = DownloadArtifact(
+                        name = ArtifactNames.ffmpegRuntimeJar(platformId),
+                        path = "mediamp-ffmpeg/build/prebuilt-runtime-jars/$platformId",
+                    ),
+                )
+            }
+            run(command = "ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true")
             runGradle(
                 name = "Publish",
                 tasks = arrayOf("publish"),
@@ -871,6 +888,26 @@ class WithMatrix(
             name = "Publish FFmpeg artifacts",
             tasks = tasks,
             env = mavenCentralPublishEnv(),
+        )
+    }
+
+    fun JobBuilder<*>.uploadFfmpegRuntimeJar(
+        task: String,
+        artifactName: String,
+        path: String,
+    ): ActionStep<UploadArtifact.Outputs> {
+        runGradle(
+            name = "Build FFmpeg runtime jar",
+            tasks = arrayOf(task),
+        )
+        return uses(
+            name = "Upload FFmpeg runtime jar",
+            action = UploadArtifact(
+                name = artifactName,
+                path_Untyped = path,
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
+            ),
         )
     }
 
