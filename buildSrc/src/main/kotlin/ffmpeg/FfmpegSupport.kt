@@ -49,10 +49,7 @@ internal data class AppleRuntimeTarget(
 internal class FfmpegBuildContext(
     val project: Project,
 ) {
-    val ffmpegSrcDir: File =
-        project.getPropertyOrNull("mediamp.ffmpeg.srcdir")?.let(project::file)
-            ?: System.getenv("MEDIAMP_FFMPEG_SRC_DIR")?.let(project::file)
-            ?: project.projectDir.resolve("ffmpeg")
+    val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 
     val commandWrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
     val jniWrapperSource: File = project.projectDir.resolve("src/jvmMain/c/ffmpegkit_jni.c")

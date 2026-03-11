@@ -142,7 +142,9 @@ internal fun configureRuntimePublishing(
                 artifactId = "mediamp-ffmpeg-runtime-${target.os}-${target.arch}"
                 version = deployVersion
 
-                artifact(jarTask)
+                artifact(jarTask) {
+                    classifier = null
+                }
 
                 addMainModulePomDependency(deployVersion)
             }
@@ -154,7 +156,9 @@ internal fun configureRuntimePublishing(
                 artifactId = "mediamp-ffmpeg-runtime-${target.artifactIdSuffix}"
                 version = deployVersion
 
-                artifact(jarTask)
+                artifact(jarTask) {
+                    classifier = null
+                }
 
                 addMainModulePomDependency(deployVersion)
             }
@@ -314,19 +318,13 @@ private fun wireDesktopRuntimeDependencyConstraints(
     deployVersion: String,
     runtimeTargets: List<DesktopRuntimeTarget>,
 ) {
-    val desktopUberRuntimeNotation = "org.openani.mediamp:mediamp-ffmpeg-runtime:$deployVersion"
     val desktopPlatformRuntimeNotations = runtimeTargets.map { target ->
         "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.os}-${target.arch}:$deployVersion"
     }
 
     project.afterEvaluate {
-        configurations.findByName("desktopRuntimeElements")?.dependencies?.add(
-            dependencies.create(desktopUberRuntimeNotation),
-        )
-
         listOf("desktopApiElements", "desktopRuntimeElements").forEach { configName ->
             configurations.findByName(configName)?.let { config ->
-                config.dependencyConstraints.add(dependencies.constraints.create("$desktopUberRuntimeNotation!!"))
                 desktopPlatformRuntimeNotations.forEach { notation ->
                     config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
                 }

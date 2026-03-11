@@ -103,13 +103,19 @@ abstract class FfmpegConfigureTask : DefaultTask() {
         val installDir = File(installPrefix.get())
         val hostOs = hostOsName.get()
         val templateSourceDir = sourceTemplateDir.get().asFile
-        val configureFile = templateSourceDir.resolve("configure")
-        require(configureFile.isFile) {
-            "FFmpeg source tree is missing configure at ${configureFile.absolutePath}"
+        val sourceDir = buildDir.resolve("source")
+        val configureFile = sourceDir.resolve("configure")
+        require(templateSourceDir.resolve("configure").isFile) {
+            "FFmpeg source tree is missing configure at ${templateSourceDir.absolutePath}"
         }
         logger.lifecycle("Configuring FFmpeg with buildDir=${buildDir.absolutePath} configure=${configureFile.absolutePath}")
         buildDir.deleteRecursively()
         buildDir.mkdirs()
+        copySourceTree(templateSourceDir, sourceDir)
+
+        require(configureFile.isFile) {
+            "Failed to stage FFmpeg source for configure at ${configureFile.absolutePath}"
+        }
 
         if (hostOs == "Windows") {
             val msys2Root = msys2Dir.orNull?.asFile
@@ -159,6 +165,26 @@ abstract class FfmpegConfigureTask : DefaultTask() {
         }
 
         configStamp.get().asFile.writeText(allFlags.joinToString("\n"))
+    }
+
+    private fun copySourceTree(src: File, dst: File) {
+        require(src.resolve("configure").isFile) {
+            "FFmpeg source tree is missing configure at ${src.absolutePath}"
+        }
+        var copiedFiles = 0
+        src.walkTopDown().forEach { input ->
+            val relative = input.relativeTo(src)
+            val output = if (relative.path.isEmpty()) dst else dst.resolve(relative.path)
+            if (input.isDirectory) {
+                output.mkdirs()
+            } else {
+                output.parentFile.mkdirs()
+                input.copyTo(output, overwrite = true)
+                copiedFiles += 1
+            }
+        }
+        restoreExecutablePermissions(src, dst)
+        logger.lifecycle("Prepared FFmpeg source from ${src.absolutePath} to ${dst.absolutePath} ($copiedFiles files)")
     }
 }
 

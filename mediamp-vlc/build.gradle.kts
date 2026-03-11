@@ -8,6 +8,7 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("jvm")
@@ -33,7 +34,7 @@ kotlin {
 }
 
 mavenPublishing {
-    configure(KotlinJvm(JavadocJar.Empty(), true))
+    configure(KotlinJvm(JavadocJar.Empty(), SourcesJar.Sources()))
     publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
