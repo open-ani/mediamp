@@ -11,7 +11,6 @@
 #define close _close
 #define fileno _fileno
 #define open _open
-#define O_CLOEXEC 0
 #else
 #include <unistd.h>
 #include <dlfcn.h>
@@ -23,7 +22,26 @@ typedef int (*ffmpeg_av_jni_set_java_vm_fn)(void *vm, void *log_ctx);
 typedef int (*ffmpeg_av_jni_set_android_app_ctx_fn)(void *app_ctx, void *log_ctx);
 
 static JavaVM *g_java_vm = NULL;
+#if defined(__ANDROID__)
 static jobject g_android_app_context = NULL;
+#endif
+
+static int open_output_file(const char *path) {
+    int flags = O_CREAT | O_TRUNC | O_WRONLY;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    int fd = open(path, flags, 0666);
+#if !defined(O_CLOEXEC)
+    if (fd >= 0) {
+        int current_flags = fcntl(fd, F_GETFD);
+        if (current_flags >= 0) {
+            (void)fcntl(fd, F_SETFD, current_flags | FD_CLOEXEC);
+        }
+    }
+#endif
+    return fd;
+}
 
 static void throw_runtime_exception(JNIEnv *env, const char *message) {
     jclass runtime_exception = (*env)->FindClass(env, "java/lang/RuntimeException");
@@ -153,8 +171,8 @@ JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeN
         return -1;
     }
 
-    int stdout_fd = open(stdout_chars, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0666);
-    int stderr_fd = open(stderr_chars, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0666);
+    int stdout_fd = open_output_file(stdout_chars);
+    int stderr_fd = open_output_file(stderr_chars);
     (*env)->ReleaseStringUTFChars(env, stdout_path, stdout_chars);
     (*env)->ReleaseStringUTFChars(env, stderr_path, stderr_chars);
     if (stdout_fd < 0 || stderr_fd < 0) {
