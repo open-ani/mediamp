@@ -6,11 +6,25 @@
 #include <string.h>
 #if defined(_WIN32)
 #include <io.h>
+#include <sys/stat.h>
 #define dup _dup
 #define dup2 _dup2
 #define close _close
 #define fileno _fileno
 #define open _open
+#define strdup _strdup
+#ifndef O_BINARY
+#ifdef _O_BINARY
+#define O_BINARY _O_BINARY
+#else
+#define O_BINARY 0
+#endif
+#endif
+#ifndef O_NOINHERIT
+#ifdef _O_NOINHERIT
+#define O_NOINHERIT _O_NOINHERIT
+#endif
+#endif
 #else
 #include <unistd.h>
 #include <dlfcn.h>
@@ -27,6 +41,13 @@ static jobject g_android_app_context = NULL;
 #endif
 
 static int open_output_file(const char *path) {
+#if defined(_WIN32)
+    int flags = O_CREAT | O_TRUNC | O_WRONLY | O_BINARY;
+#ifdef O_NOINHERIT
+    flags |= O_NOINHERIT;
+#endif
+    return open(path, flags, _S_IREAD | _S_IWRITE);
+#else
     int flags = O_CREAT | O_TRUNC | O_WRONLY;
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
@@ -41,6 +62,7 @@ static int open_output_file(const char *path) {
     }
 #endif
     return fd;
+#endif
 }
 
 static void throw_runtime_exception(JNIEnv *env, const char *message) {
