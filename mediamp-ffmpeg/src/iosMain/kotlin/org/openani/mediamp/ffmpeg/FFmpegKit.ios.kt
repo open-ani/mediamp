@@ -32,6 +32,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSLock
 import platform.posix.RTLD_GLOBAL
 import platform.posix.RTLD_LOCAL
 import platform.posix.RTLD_NOW
@@ -277,19 +278,31 @@ public actual class FFmpegKit actual constructor() {
         }
 
         private fun withActiveLogCollector(collector: FFmpegLogLineCollector, block: () -> Unit) {
+            logCollectorLock.lock()
             activeLogCollector = collector
+            logCollectorLock.unlock()
             try {
                 block()
             } finally {
-                collector.flush()
-                activeLogCollector = null
+                logCollectorLock.lock()
+                try {
+                    collector.flush()
+                    activeLogCollector = null
+                } finally {
+                    logCollectorLock.unlock()
+                }
             }
         }
 
         @OptIn(ExperimentalForeignApi::class)
         private val nativeLogCallback = staticCFunction<Int, CPointer<ByteVar>?, Unit> { level, message ->
             val text = message?.toKString().orEmpty()
-            activeLogCollector?.append(level, text)
+            logCollectorLock.lock()
+            try {
+                activeLogCollector?.append(level, text)
+            } finally {
+                logCollectorLock.unlock()
+            }
         }
 
         @OptIn(ExperimentalForeignApi::class)
@@ -303,6 +316,7 @@ public actual class FFmpegKit actual constructor() {
         @OptIn(ExperimentalForeignApi::class)
         private var cachedNativeFunctions: NativeFunctions? = null
         private var configuredLogHandler: FFmpegLogHandler? = null
+        private val logCollectorLock: NSLock = NSLock()
         private var activeLogCollector: FFmpegLogLineCollector? = null
         private var runtimeSearchPath: String? = null
     }
