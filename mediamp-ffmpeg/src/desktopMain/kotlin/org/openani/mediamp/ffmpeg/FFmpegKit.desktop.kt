@@ -7,8 +7,6 @@
  */
 
 package org.openani.mediamp.ffmpeg
-
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -24,34 +22,11 @@ import java.util.Locale
  * On first use they are extracted to a temporary directory.
  */
 public actual class FFmpegKit actual constructor() {
-    public actual suspend fun execute(args: List<String>): FFmpegResult {
-        val runtimeDir = ensureExtracted()
-        return JvmFFmpegProcess.execute(runtimeDir, args)
-    }
-
-    public actual fun executeStreaming(args: List<String>): Flow<FFmpegOutputLine> {
-        val runtimeDir = extractBlocking()
-        return JvmFFmpegProcess.executeStreaming(runtimeDir, args)
-    }
-
-    private suspend fun ensureExtracted(): File {
-        extractedDir?.let { return it }
-        extractionMutex.withLock {
-            extractedDir?.let { return it }
-            val dir = extractNativeBinaries()
-            extractedDir = dir
-            return dir
+    public actual companion object {
+        public actual fun setLogHandler(handler: FFmpegLogHandler?) {
+            JvmFFmpegProcess.setLogHandler(handler)
         }
-    }
 
-    private fun extractBlocking(): File {
-        extractedDir?.let { return it }
-        val dir = extractNativeBinaries()
-        extractedDir = dir
-        return dir
-    }
-
-    private companion object {
         private val OS_NAME: String = System.getProperty("os.name").lowercase(Locale.ROOT)
         private val extractionMutex: Mutex = Mutex()
 
@@ -68,23 +43,20 @@ public actual class FFmpegKit actual constructor() {
             dir.deleteOnExit()
 
             val classLoader = FFmpegKit::class.java.classLoader
-            // Read the manifest listing all native files
             val manifest = classLoader.getResourceAsStream("ffmpeg-natives.txt")
                 ?.bufferedReader()?.readLines()
                 ?: error(
                     "ffmpeg-natives.txt not found on classpath. " +
-                            "Make sure mediamp-ffmpeg-runtime-{os}-{arch} is on the classpath.",
+                        "Make sure mediamp-ffmpeg-runtime-{os}-{arch} is on the classpath.",
                 )
 
             for (fileName in manifest) {
                 if (fileName.isBlank()) continue
-                val resource = classLoader.getResourceAsStream(fileName)
-                    ?: continue
+                val resource = classLoader.getResourceAsStream(fileName) ?: continue
                 val target = dir.resolve(fileName).toPath()
                 resource.use { input ->
                     Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
                 }
-                // Make executable on Unix
                 if (!OS_NAME.contains("win")) {
                     target.toFile().setExecutable(true)
                 }
@@ -93,4 +65,20 @@ public actual class FFmpegKit actual constructor() {
             return dir
         }
     }
+
+    public actual suspend fun execute(args: List<String>): FFmpegResult {
+        val runtimeDir = ensureExtracted()
+        return JvmFFmpegProcess.execute(runtimeDir, args)
+    }
+
+    private suspend fun ensureExtracted(): File {
+        extractedDir?.let { return it }
+        extractionMutex.withLock {
+            extractedDir?.let { return it }
+            val dir = extractNativeBinaries()
+            extractedDir = dir
+            return dir
+        }
+    }
+
 }

@@ -412,6 +412,13 @@ private fun buildJvmJniWrapper(
     val outputPath = shellQuote(pathForShell(wrapperOut, targetName == "WindowsX64"))
     val buildDirPath = shellQuote(pathForShell(buildDir, targetName == "WindowsX64"))
     val jniIncludes = jniIncludeFlags(targetName, config).joinToString(" ")
+    val ffmpegIncludes = listOf(
+        installDir.resolve("include"),
+        buildDir.resolve("source"),
+    )
+        .distinctBy { it.absolutePath }
+        .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
+        .joinToString(" ") { "-I${shellQuote(pathForShell(it, targetName == "WindowsX64"))}" }
     val linkerMode = when {
         targetName == "WindowsX64" -> "-shared"
         targetName.startsWith("Macos") -> "-dynamiclib -Wl,-install_name,@loader_path/$wrapperName"
@@ -436,6 +443,8 @@ private fun buildJvmJniWrapper(
         append(expandMakeVariables(config["CPPFLAGS"].orEmpty(), config))
         append(' ')
         append(expandMakeVariables(config["CFLAGS"].orEmpty(), config))
+        append(' ')
+        append(ffmpegIncludes)
         append(' ')
         append(jniIncludes)
         append(' ')
@@ -495,12 +504,19 @@ private fun buildAppleWrapper(
     }
 
     val wrapperOut = buildDir.resolve(wrapperName)
+    val ffmpegIncludes = listOf(
+        installDir.resolve("include"),
+        buildDir.resolve("source"),
+    )
+        .distinctBy { it.absolutePath }
+        .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
     val linkCmd = mutableListOf(
         "xcrun", "-sdk", sdk, "clang",
         "-dynamiclib",
         "-arch", "arm64",
         minVersionFlag,
         "-fembed-bitcode",
+        *ffmpegIncludes.flatMap { listOf("-I", it.absolutePath) }.toTypedArray(),
         "-Wl,-install_name,@rpath/$wrapperName",
         "-o", wrapperOut.absolutePath,
         wrapperSource.absolutePath,

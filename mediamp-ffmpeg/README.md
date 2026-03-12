@@ -11,7 +11,7 @@ Core API:
 ```kotlin
 implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
 ```
-
+setL
 Desktop runtime artifacts:
 
 ```kotlin
@@ -61,27 +61,19 @@ val result = kit.execute(
 
 println(result.exitCode)
 println(result.isSuccess)
-println(result.stdout)
-println(result.stderr)
 ```
 
-Stream output line by line:
+Receive FFmpeg logs via `av_log_set_callback`:
 
 ```kotlin
-kit.executeStreaming(listOf("-hide_banner", "-version")).collect { line ->
-    if (line.isError) {
-        println("ERR: ${line.line}")
-    } else {
-        println("OUT: ${line.line}")
-    }
+FFmpegKit.setLogHandler { message ->
+    println("ffmpeg[level=${message.level}] ${message.line}")
 }
 ```
 
 `FFmpegResult` contains:
 
 - `exitCode`
-- `stdout`
-- `stderr`
 - `isSuccess`
 
 ## Android usage
@@ -105,7 +97,7 @@ val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 
 Notes:
 
-- `FFmpegKit.initialize(context)` must be called before `execute` or `executeStreaming`.
+- `FFmpegKit.initialize(context)` must be called before `execute`.
 - The Android runtime is loaded from `nativeLibraryDir`.
 - `LD_LIBRARY_PATH` is set internally by the library. Consumers do not need to set it manually.
 

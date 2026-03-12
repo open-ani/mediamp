@@ -10,7 +10,6 @@ package org.openani.mediamp.ffmpeg
 
 import android.content.Context
 import android.os.Build
-import kotlinx.coroutines.flow.Flow
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -31,18 +30,17 @@ public actual class FFmpegKit actual constructor() {
         return JvmFFmpegProcess.execute(runtime.runtimeDir, args, runtime.appContext)
     }
 
-    public actual fun executeStreaming(args: List<String>): Flow<FFmpegOutputLine> {
-        val runtime = resolveRuntime()
-        return JvmFFmpegProcess.executeStreaming(runtime.runtimeDir, args, runtime.appContext)
-    }
-
-    public companion object {
+    public actual companion object {
         @Volatile
         private var appContext: Context? = null
 
+        public actual fun setLogHandler(handler: FFmpegLogHandler?) {
+            JvmFFmpegProcess.setLogHandler(handler)
+        }
+
         /**
          * Initialize with application context. Must be called before any
-         * [execute] or [executeStreaming] calls.
+         * [execute] calls.
          */
         @JvmStatic
         public fun initialize(context: Context) {

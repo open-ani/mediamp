@@ -22,44 +22,24 @@ import kotlinx.cinterop.invoke
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.set
+import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
-import platform.Foundation.NSTemporaryDirectory
-import platform.posix.O_CREAT
-import platform.posix.O_RDONLY
-import platform.posix.O_RDWR
-import platform.posix.O_TRUNC
 import platform.posix.RTLD_GLOBAL
 import platform.posix.RTLD_LOCAL
 import platform.posix.RTLD_NOW
-import platform.posix.STDERR_FILENO
-import platform.posix.STDOUT_FILENO
-import platform.posix.close
 import platform.posix.dlerror
 import platform.posix.dlopen
 import platform.posix.dlsym
-import platform.posix.dup
-import platform.posix.dup2
-import platform.posix.errno
-import platform.posix.fflush
 import platform.posix.getenv
-import platform.posix.getpid
-import platform.posix.open
-import platform.posix.read
 import platform.posix.setenv
-import platform.posix.strerror
-import platform.posix.unlink
-import kotlin.random.Random
 
 /**
  * iOS implementation.
@@ -76,120 +56,49 @@ public actual class FFmpegKit actual constructor() {
                     val runtime = resolveRuntimeLocation()
                     configureDyld(runtime.runtimeDir)
                     val preloadFailures = preloadRuntimeLibraries(runtime.runtimeDir)
-                    val runResult = runInProcess(runtime, args)
+                    val runResult = runInProcess(runtime, args, preloadFailures)
                     val debugSuffix = if (runResult.exitCode == 0) {
                         ""
                     } else {
                         buildFailureDebug(runtime, args, runResult.exitCode, preloadFailures)
                     }
-                    FFmpegResult(
-                        exitCode = runResult.exitCode,
-                        stdout = runResult.stdout + debugSuffix,
-                        stderr = runResult.stderr,
-                    )
+                    if (debugSuffix.isNotEmpty()) {
+                        configuredLogHandler?.onLog(FFmpegLogMessage(16, debugSuffix))
+                    }
+                    FFmpegResult(exitCode = runResult.exitCode)
                 } catch (t: Throwable) {
-                    FFmpegResult(
-                        exitCode = 1,
-                        stdout = "",
-                        stderr = buildExceptionDebug(t, args),
-                    )
+                    configuredLogHandler?.onLog(FFmpegLogMessage(16, buildExceptionDebug(t, args)))
+                    FFmpegResult(exitCode = 1)
                 }
             }
         }
 
-    public actual fun executeStreaming(args: List<String>): Flow<FFmpegOutputLine> = flow {
-        val result = execute(args)
-        result.stdout.lineSequence().forEach { line ->
-            if (line.isNotBlank()) {
-                emit(FFmpegOutputLine(line, isError = false))
-            }
-        }
-        result.stderr.lineSequence().forEach { line ->
-            if (line.isNotBlank()) {
-                emit(FFmpegOutputLine(line, isError = true))
-            }
-        }
-    }.flowOn(Dispatchers.IO)
-
     @OptIn(ExperimentalForeignApi::class)
-    private fun runInProcess(location: RuntimeLocation, args: List<String>): RunResult = memScoped {
+    private fun runInProcess(location: RuntimeLocation, args: List<String>, preloadFailures: List<String>): RunResult = memScoped {
         val commandArgs = buildList {
             add("ffmpeg")
             addAll(args)
         }
 
-        val stdoutPath = createCapturePath(location.runtimeDir, "stdout")
-        val stderrPath = createCapturePath(location.runtimeDir, "stderr")
-
-        val stdoutFd = open(stdoutPath, O_CREAT or O_TRUNC or O_RDWR, 0x180)
-        if (stdoutFd < 0) {
-            return@memScoped RunResult(
-                exitCode = -1,
-                stdout = "",
-                stderr = "open($stdoutPath) failed: errno=$errno (${strerror(errno)?.toKString() ?: "unknown"})\n",
-            )
-        }
-        val stderrFd = open(stderrPath, O_CREAT or O_TRUNC or O_RDWR, 0x180)
-        if (stderrFd < 0) {
-            close(stdoutFd)
-            return@memScoped RunResult(
-                exitCode = -1,
-                stdout = "",
-                stderr = "open($stderrPath) failed: errno=$errno (${strerror(errno)?.toKString() ?: "unknown"})\n",
-            )
-        }
-
-        val savedStdout = dup(STDOUT_FILENO)
-        val savedStderr = dup(STDERR_FILENO)
-        if (savedStdout < 0 || savedStderr < 0) {
-            if (savedStdout >= 0) close(savedStdout)
-            if (savedStderr >= 0) close(savedStderr)
-            close(stdoutFd)
-            close(stderrFd)
-            return@memScoped RunResult(
-                exitCode = -1,
-                stdout = "",
-                stderr = "dup() failed: errno=$errno (${strerror(errno)?.toKString() ?: "unknown"})\n",
-            )
-        }
-
         var exitCode = -1
-        var redirectError: String? = null
-        try {
-            if (dup2(stdoutFd, STDOUT_FILENO) < 0 || dup2(stderrFd, STDERR_FILENO) < 0) {
-                redirectError = "dup2() failed: errno=$errno (${strerror(errno)?.toKString() ?: "unknown"})\n"
-            } else {
-                val executeFn = loadOrResolveEntryPoint(location.wrapperPath)
-                val argv = allocArray<CPointerVar<ByteVar>>(commandArgs.size + 1)
-                commandArgs.forEachIndexed { index, value ->
-                    argv[index] = value.cstr.ptr
-                }
-                argv[commandArgs.size] = null
-                exitCode = executeFn(commandArgs.size, argv)
+        val collector = FFmpegLogLineCollector { message ->
+            configuredLogHandler?.onLog(message)
+        }
+        val nativeFns = loadOrResolveNativeFunctions(location.wrapperPath)
+        withActiveLogCollector(collector) {
+            nativeFns.setLogCallback(nativeLogCallback)
+            preloadFailures.forEach { configuredLogHandler?.onLog(FFmpegLogMessage(16, "[preload] $it")) }
+            val executeFn = nativeFns.execute
+            val argv = allocArray<CPointerVar<ByteVar>>(commandArgs.size + 1)
+            commandArgs.forEachIndexed { index, value ->
+                argv[index] = value.cstr.ptr
             }
-        } finally {
-            fflush(null)
-            dup2(savedStdout, STDOUT_FILENO)
-            dup2(savedStderr, STDERR_FILENO)
-            close(savedStdout)
-            close(savedStderr)
-            close(stdoutFd)
-            close(stderrFd)
+            argv[commandArgs.size] = null
+            exitCode = executeFn(commandArgs.size, argv)
+            nativeFns.setLogCallback(null)
         }
 
-        val stdout = readCaptureFile(stdoutPath)
-        val stderr = readCaptureFile(stderrPath)
-        unlink(stdoutPath)
-        unlink(stderrPath)
-
-        if (redirectError != null) {
-            return@memScoped RunResult(
-                exitCode = -1,
-                stdout = stdout,
-                stderr = stderr + redirectError,
-            )
-        }
-        return@memScoped RunResult(exitCode, stdout, stderr)
+        return@memScoped RunResult(exitCode)
     }
 
     @OptIn(ExperimentalForeignApi::class)
@@ -324,46 +233,24 @@ public actual class FFmpegKit actual constructor() {
     }
 
     @OptIn(ExperimentalForeignApi::class)
-    private fun loadOrResolveEntryPoint(wrapperPath: String): FfmpegExecuteFn {
-        if (cachedWrapperPath == wrapperPath && cachedEntryPoint != null) {
-            return cachedEntryPoint!!
+    private fun loadOrResolveNativeFunctions(wrapperPath: String): NativeFunctions {
+        if (cachedWrapperPath == wrapperPath && cachedNativeFunctions != null) {
+            return cachedNativeFunctions!!
         }
         val handle = dlopen(wrapperPath, RTLD_NOW or RTLD_LOCAL)
             ?: error("dlopen($wrapperPath) failed: ${dlerrorMessage()}")
-        val symbol = dlsym(handle, "ffmpegkit_execute")
+        val executeSymbol = dlsym(handle, "ffmpegkit_execute")
             ?: error("dlsym(ffmpegkit_execute) failed: ${dlerrorMessage()}")
-        val fn = symbol.reinterpret<CFunction<(Int, CPointer<CPointerVar<ByteVar>>?) -> Int>>()
+        val setLogCallbackSymbol = dlsym(handle, "ffmpegkit_set_log_callback")
+            ?: error("dlsym(ffmpegkit_set_log_callback) failed: ${dlerrorMessage()}")
+        val nativeFunctions = NativeFunctions(
+            execute = executeSymbol.reinterpret(),
+            setLogCallback = setLogCallbackSymbol.reinterpret(),
+        )
         cachedWrapperPath = wrapperPath
-        cachedEntryPoint = fn
+        cachedNativeFunctions = nativeFunctions
         loadedHandles += handle
-        return fn
-    }
-
-    @OptIn(ExperimentalForeignApi::class)
-    private fun readCaptureFile(path: String): String {
-        val fd = open(path, O_RDONLY)
-        if (fd < 0) return ""
-
-        val output = StringBuilder()
-        val buffer = ByteArray(4096)
-        try {
-            buffer.usePinned { pinned ->
-                while (true) {
-                    val readSize = read(fd, pinned.addressOf(0), buffer.size.convert())
-                    if (readSize <= 0) break
-                    output.append(buffer.decodeToString(0, readSize.toInt()))
-                }
-            }
-        } finally {
-            close(fd)
-        }
-        return output.toString()
-    }
-
-    private fun createCapturePath(runtimeDir: String, stream: String): String {
-        val tempRoot = NSTemporaryDirectory().ifEmpty { runtimeDir }
-        val token = "${getpid()}-${Random.nextInt(0, Int.MAX_VALUE).toString(16)}"
-        return "$tempRoot/mediamp-ffmpeg-$stream-$token.log"
+        return nativeFunctions
     }
 
     @OptIn(ExperimentalForeignApi::class)
@@ -378,13 +265,31 @@ public actual class FFmpegKit actual constructor() {
 
     private data class RunResult(
         val exitCode: Int,
-        val stdout: String,
-        val stderr: String,
     )
 
-    public companion object {
+    public actual companion object {
         public fun initialize(runtimeSearchPath: String) {
             this.runtimeSearchPath = runtimeSearchPath.trimEnd('/')
+        }
+
+        public actual fun setLogHandler(handler: FFmpegLogHandler?) {
+            configuredLogHandler = handler
+        }
+
+        private fun withActiveLogCollector(collector: FFmpegLogLineCollector, block: () -> Unit) {
+            activeLogCollector = collector
+            try {
+                block()
+            } finally {
+                collector.flush()
+                activeLogCollector = null
+            }
+        }
+
+        @OptIn(ExperimentalForeignApi::class)
+        private val nativeLogCallback = staticCFunction<Int, CPointer<ByteVar>?, Unit> { level, message ->
+            val text = message?.toKString().orEmpty()
+            activeLogCollector?.append(level, text)
         }
 
         @OptIn(ExperimentalForeignApi::class)
@@ -396,10 +301,20 @@ public actual class FFmpegKit actual constructor() {
         @OptIn(ExperimentalForeignApi::class)
         private var cachedWrapperPath: String? = null
         @OptIn(ExperimentalForeignApi::class)
-        private var cachedEntryPoint: FfmpegExecuteFn? = null
+        private var cachedNativeFunctions: NativeFunctions? = null
+        private var configuredLogHandler: FFmpegLogHandler? = null
+        private var activeLogCollector: FFmpegLogLineCollector? = null
         private var runtimeSearchPath: String? = null
     }
 }
 
 @OptIn(ExperimentalForeignApi::class)
 private typealias FfmpegExecuteFn = CPointer<CFunction<(Int, CPointer<CPointerVar<ByteVar>>?) -> Int>>
+@OptIn(ExperimentalForeignApi::class)
+private typealias FfmpegSetLogCallbackFn = CPointer<CFunction<(CPointer<CFunction<(Int, CPointer<ByteVar>?) -> Unit>>?) -> Unit>>
+
+@OptIn(ExperimentalForeignApi::class)
+private data class NativeFunctions(
+    val execute: FfmpegExecuteFn,
+    val setLogCallback: FfmpegSetLogCallbackFn,
+)

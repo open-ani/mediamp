@@ -8,8 +8,6 @@
 
 package org.openani.mediamp.ffmpeg
 
-import kotlinx.coroutines.flow.Flow
-
 /**
  * Cross-platform entry point for executing the FFmpeg command-line tool.
  *
@@ -18,6 +16,15 @@ import kotlinx.coroutines.flow.Flow
  * On iOS, the binary is bundled in the app's framework.
  */
 public expect class FFmpegKit() {
+    public companion object {
+        /**
+         * Set a process-wide FFmpeg log handler.
+         *
+         * The handler receives parsed FFmpeg log lines emitted via `av_log_set_callback`.
+         * Pass `null` to clear the handler.
+         */
+        public fun setLogHandler(handler: FFmpegLogHandler?)
+    }
 
     /**
      * Execute an FFmpeg command and wait for it to complete.
@@ -27,12 +34,4 @@ public expect class FFmpegKit() {
      * @return the result containing exit code, stdout, and stderr
      */
     public suspend fun execute(args: List<String>): FFmpegResult
-
-    /**
-     * Execute an FFmpeg command and stream output lines as they arrive.
-     *
-     * The returned [Flow] emits each line of stdout/stderr in real time.
-     * The flow completes when the process exits.
-     */
-    public fun executeStreaming(args: List<String>): Flow<FFmpegOutputLine>
 }

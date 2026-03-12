@@ -1,75 +1,99 @@
 #include <jni.h>
-#include <errno.h>
-#include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "libavutil/log.h"
 #if defined(_WIN32)
-#include <io.h>
-#include <sys/stat.h>
-#define dup _dup
-#define dup2 _dup2
-#define close _close
-#define fileno _fileno
-#define open _open
 #define strdup _strdup
-#ifndef O_BINARY
-#ifdef _O_BINARY
-#define O_BINARY _O_BINARY
 #else
-#define O_BINARY 0
-#endif
-#endif
-#ifndef O_NOINHERIT
-#ifdef _O_NOINHERIT
-#define O_NOINHERIT _O_NOINHERIT
-#endif
-#endif
-#else
-#include <unistd.h>
 #include <dlfcn.h>
 #endif
 
 int ffmpegkit_execute(int argc, char **argv);
+typedef void (*ffmpegkit_log_callback_fn)(int level, const char *message);
+void ffmpegkit_set_log_callback(ffmpegkit_log_callback_fn callback);
 
 typedef int (*ffmpeg_av_jni_set_java_vm_fn)(void *vm, void *log_ctx);
 typedef int (*ffmpeg_av_jni_set_android_app_ctx_fn)(void *app_ctx, void *log_ctx);
 
 static JavaVM *g_java_vm = NULL;
+static jobject g_log_dispatch_class = NULL;
+static jmethodID g_log_dispatch_method = NULL;
 #if defined(__ANDROID__)
 static jobject g_android_app_context = NULL;
 #endif
-
-static int open_output_file(const char *path) {
-#if defined(_WIN32)
-    int flags = O_CREAT | O_TRUNC | O_WRONLY | O_BINARY;
-#ifdef O_NOINHERIT
-    flags |= O_NOINHERIT;
-#endif
-    return open(path, flags, _S_IREAD | _S_IWRITE);
-#else
-    int flags = O_CREAT | O_TRUNC | O_WRONLY;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-    int fd = open(path, flags, 0666);
-#if !defined(O_CLOEXEC)
-    if (fd >= 0) {
-        int current_flags = fcntl(fd, F_GETFD);
-        if (current_flags >= 0) {
-            (void)fcntl(fd, F_SETFD, current_flags | FD_CLOEXEC);
-        }
-    }
-#endif
-    return fd;
-#endif
-}
 
 static void throw_runtime_exception(JNIEnv *env, const char *message) {
     jclass runtime_exception = (*env)->FindClass(env, "java/lang/RuntimeException");
     if (runtime_exception != NULL) {
         (*env)->ThrowNew(env, runtime_exception, message);
     }
+}
+
+static void release_log_dispatch(JNIEnv *env) {
+    if (g_log_dispatch_class != NULL) {
+        (*env)->DeleteGlobalRef(env, g_log_dispatch_class);
+        g_log_dispatch_class = NULL;
+    }
+    g_log_dispatch_method = NULL;
+}
+
+static int initialize_log_dispatch(JNIEnv *env, jclass clazz) {
+    release_log_dispatch(env);
+    g_log_dispatch_class = (*env)->NewGlobalRef(env, clazz);
+    if (g_log_dispatch_class == NULL) {
+        return -1;
+    }
+    g_log_dispatch_method = (*env)->GetStaticMethodID(
+        env,
+        (jclass)g_log_dispatch_class,
+        "onNativeLog",
+        "(ILjava/lang/String;)V"
+    );
+    if (g_log_dispatch_method == NULL) {
+        release_log_dispatch(env);
+        return -1;
+    }
+    return 0;
+}
+
+static void dispatch_log_to_jvm(int level, const char *message) {
+    if (g_java_vm == NULL || g_log_dispatch_class == NULL || g_log_dispatch_method == NULL || message == NULL || message[0] == '\0') {
+        return;
+    }
+
+    JNIEnv *env = NULL;
+    int detach_after = 0;
+    if ((*g_java_vm)->GetEnv(g_java_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+#if defined(__ANDROID__)
+        if ((*g_java_vm)->AttachCurrentThread(g_java_vm, &env, NULL) != JNI_OK) {
+            return;
+        }
+#else
+        if ((*g_java_vm)->AttachCurrentThread(g_java_vm, (void **)&env, NULL) != JNI_OK) {
+            return;
+        }
+#endif
+        detach_after = 1;
+    }
+
+    jstring text = (*env)->NewStringUTF(env, message);
+    if (text != NULL) {
+        (*env)->CallStaticVoidMethod(env, (jclass)g_log_dispatch_class, g_log_dispatch_method, (jint)level, text);
+        (*env)->DeleteLocalRef(env, text);
+    }
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+
+    if (detach_after) {
+        (*g_java_vm)->DetachCurrentThread(g_java_vm);
+    }
+}
+
+static void ffmpegkit_jvm_log_callback(int level, const char *message) {
+    dispatch_log_to_jvm(level, message);
 }
 
 static void configure_android_jni_context(JNIEnv *env) {
@@ -94,6 +118,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     return JNI_VERSION_1_6;
 }
 
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
+    (void)vm;
+    (void)reserved;
+    g_java_vm = NULL;
+}
+
 JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initializeAndroidContext(
     JNIEnv *env,
     jclass clazz,
@@ -103,9 +133,7 @@ JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initiali
 JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeNative(
     JNIEnv *env,
     jclass clazz,
-    jobjectArray args,
-    jstring stdout_path,
-    jstring stderr_path
+    jobjectArray args
 );
 
 JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initializeAndroidContext(
@@ -132,16 +160,8 @@ JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initiali
 JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeNative(
     JNIEnv *env,
     jclass clazz,
-    jobjectArray args,
-    jstring stdout_path,
-    jstring stderr_path
+    jobjectArray args
 ) {
-    (void)clazz;
-    if (stdout_path == NULL || stderr_path == NULL) {
-        throw_runtime_exception(env, "stdoutPath and stderrPath are required.");
-        return -1;
-    }
-
     const jsize arg_count = args == NULL ? 0 : (*env)->GetArrayLength(env, args);
     char **argv = (char **)calloc((size_t)arg_count + 2U, sizeof(char *));
     if (argv == NULL) {
@@ -176,80 +196,21 @@ JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeN
         }
     }
 
-    const char *stdout_chars = (*env)->GetStringUTFChars(env, stdout_path, NULL);
-    const char *stderr_chars = (*env)->GetStringUTFChars(env, stderr_path, NULL);
-    if (stdout_chars == NULL || stderr_chars == NULL) {
-        if (stdout_chars != NULL) {
-            (*env)->ReleaseStringUTFChars(env, stdout_path, stdout_chars);
-        }
-        if (stderr_chars != NULL) {
-            (*env)->ReleaseStringUTFChars(env, stderr_path, stderr_chars);
-        }
+    if (initialize_log_dispatch(env, clazz) != 0) {
         for (jsize index = 0; index <= arg_count; ++index) {
             free(argv[(size_t)index]);
         }
         free(argv);
-        throw_runtime_exception(env, "Failed to resolve FFmpeg output paths.");
+        throw_runtime_exception(env, "Failed to initialize FFmpeg log dispatch.");
         return -1;
     }
-
-    int stdout_fd = open_output_file(stdout_chars);
-    int stderr_fd = open_output_file(stderr_chars);
-    (*env)->ReleaseStringUTFChars(env, stdout_path, stdout_chars);
-    (*env)->ReleaseStringUTFChars(env, stderr_path, stderr_chars);
-    if (stdout_fd < 0 || stderr_fd < 0) {
-        if (stdout_fd >= 0) close(stdout_fd);
-        if (stderr_fd >= 0) close(stderr_fd);
-        for (jsize index = 0; index <= arg_count; ++index) {
-            free(argv[(size_t)index]);
-        }
-        free(argv);
-        throw_runtime_exception(env, strerror(errno));
-        return -1;
-    }
-
-    fflush(stdout);
-    fflush(stderr);
-    int saved_stdout = dup(fileno(stdout));
-    int saved_stderr = dup(fileno(stderr));
-    if (saved_stdout < 0 || saved_stderr < 0) {
-        if (saved_stdout >= 0) close(saved_stdout);
-        if (saved_stderr >= 0) close(saved_stderr);
-        close(stdout_fd);
-        close(stderr_fd);
-        for (jsize index = 0; index <= arg_count; ++index) {
-            free(argv[(size_t)index]);
-        }
-        free(argv);
-        throw_runtime_exception(env, "Failed to duplicate stdout/stderr.");
-        return -1;
-    }
-
-    if (dup2(stdout_fd, fileno(stdout)) < 0 || dup2(stderr_fd, fileno(stderr)) < 0) {
-        close(saved_stdout);
-        close(saved_stderr);
-        close(stdout_fd);
-        close(stderr_fd);
-        for (jsize index = 0; index <= arg_count; ++index) {
-            free(argv[(size_t)index]);
-        }
-        free(argv);
-        throw_runtime_exception(env, "Failed to redirect stdout/stderr.");
-        return -1;
-    }
-
-    close(stdout_fd);
-    close(stderr_fd);
 
     configure_android_jni_context(env);
+    ffmpegkit_set_log_callback(ffmpegkit_jvm_log_callback);
     const int exit_code = ffmpegkit_execute((int)arg_count + 1, argv);
-
-    fflush(stdout);
-    fflush(stderr);
-    dup2(saved_stdout, fileno(stdout));
-    dup2(saved_stderr, fileno(stderr));
-    close(saved_stdout);
-    close(saved_stderr);
+    ffmpegkit_set_log_callback(NULL);
+    av_log_set_callback(av_log_default_callback);
+    release_log_dispatch(env);
 
     for (jsize index = 0; index <= arg_count; ++index) {
         free(argv[(size_t)index]);
