@@ -157,7 +157,7 @@ internal object JvmFFmpegProcess {
     private external fun initializeAndroidContext(appContext: Any)
 
     @JvmStatic
-    private fun onNativeLog(level: Int, message: String) {
+    fun onNativeLog(level: Int, message: String) {
         synchronized(logDispatchLock) {
             activeLogCollector?.append(level, message)
         }
