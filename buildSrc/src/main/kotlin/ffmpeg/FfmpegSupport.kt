@@ -121,9 +121,13 @@ internal class FfmpegBuildContext(
         add("--enable-demuxer=ogg")
         add("--enable-demuxer=aac")
         add("--enable-demuxer=concat")
+        // Local encrypted HLS still needs the HLS demuxer so FFmpeg can interpret
+        // EXT-X-KEY metadata instead of treating segments as plain concatenated TS.
+        add("--enable-demuxer=hls")
         add("--enable-protocol=file")
         add("--enable-protocol=pipe")
         add("--enable-protocol=concat")
+        add("--enable-protocol=crypto")
         add("--enable-parser=h264")
         add("--enable-parser=hevc")
         add("--enable-parser=av1")
