@@ -43,6 +43,13 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
     private val skiaBitmap: Bitmap = Bitmap()
     private val composeBitmap = mutableStateOf<ImageBitmap?>(null)
 
+    // 缓存 ImageBitmap，避免重复转换
+    private var cachedBitmap: ImageBitmap? = null
+    // 记录上一次的宽度
+    private var lastWidth = 0
+    // 记录上一次的高度
+    private var lastHeight = 0
+
     public val enableRendering: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
     /**
@@ -62,6 +69,8 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
 
     public fun clearBitmap() {
         composeBitmap.value = null
+        // 清空缓存的 Bitmap
+        cachedBitmap = null
     }
 
     override fun attach(mediaPlayer: MediaPlayer) {
@@ -86,6 +95,13 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
                 ColorType.BGRA_8888,
                 ColorAlphaType.PREMUL,
             )
+            
+            // 检测视频尺寸是否变化，变化时清空缓存
+            if (lastWidth != sourceWidth || lastHeight != sourceHeight) {
+                cachedBitmap = null
+                lastWidth = sourceWidth
+                lastHeight = sourceHeight
+            }
         }
     }
 
@@ -110,7 +126,13 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
                 nativeBuffers[0].rewind()
                 nativeBuffers[0].get(frameBytes)
                 skiaBitmap.installPixels(imageInfo, frameBytes, bufferFormat.width * 4)
-                composeBitmap.value = skiaBitmap.asComposeImageBitmap()
+                // 仅在缓存为空时进行转换，提高性能
+                if (cachedBitmap == null) {
+                    cachedBitmap = skiaBitmap.asComposeImageBitmap()
+                }
+                // 先置空再赋值，强制触发 Compose 重组
+                composeBitmap.value = null
+                composeBitmap.value = cachedBitmap
             }
         }
     }

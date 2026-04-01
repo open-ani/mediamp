@@ -332,13 +332,22 @@ private open class ComposeMediaPlayerComponent @JvmOverloads constructor(
      * raster.
      */
     private inner class DefaultRenderCallback : RenderCallbackAdapter() {
+        // 缓存 ImageBitmap，避免重复转换
+        private var cachedImage: ImageBitmap? = null
+        
         fun setImageBuffer(image: BufferedImage) {
             setBuffer((image.raster.dataBuffer as DataBufferInt).data)
         }
 
         override fun onDisplay(mediaPlayer: MediaPlayer, buffer: IntArray) {
             image?.let {
-                composeImage = it.toComposeImageBitmap()
+                // 仅在缓存为空时进行转换，提高性能
+                if (cachedImage == null) {
+                    cachedImage = it.toComposeImageBitmap()
+                }
+                // 先置空再赋值，强制触发 Compose 重组
+                composeImage = null
+                composeImage = cachedImage
             }
 //            videoSurfaceComponent!!.repaint()
         }
