@@ -16,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +57,7 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
 import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
+import org.openani.mediamp.vlc.internal.VlcPlaybackStateMapper
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
 import uk.co.caprica.vlcj.media.Media
@@ -118,7 +120,8 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
-    private val buffering = VlcBuffering(player, currentPositionMillis, playbackState)
+    private val buffering = VlcBuffering(currentPositionMillis, playbackState)
+    private val playbackStateMapper = VlcPlaybackStateMapper()
     private val setTimeLock = ReentrantLock()
 
     init {
@@ -155,11 +158,13 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         player.events().addMediaEventListener(
             object : MediaEventAdapter() {
                 override fun mediaParsedChanged(media: Media, newStatus: MediaParsedStatus) {
+                    if (playbackState.value <= PlaybackState.FINISHED) {
+                        return
+                    }
                     if (newStatus == MediaParsedStatus.DONE) {
                         createVideoProperties()?.let {
                             mediaProperties.value = it
                         }
-                        playbackState.value = PlaybackState.READY
                     }
                 }
             },
@@ -185,13 +190,12 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     }
                 }
 
-                //            override fun buffering(mediaPlayer: MediaPlayer?, newCache: Float) {
-//                if (newCache != 1f) {
-//                    state.value = PlaybackState.PAUSED_BUFFERING
-//                } else {
-//                    state.value = PlaybackState.READY
-//                }
-//            }
+                override fun buffering(mediaPlayer: MediaPlayer?, newCache: Float) {
+                    buffering.bufferedPercentage.value = newCache.roundToInt().coerceIn(0, 100)
+                    playbackStateMapper.onBuffering(playbackState.value, newCache)?.let {
+                        playbackState.value = it
+                    }
+                }
 
                 override fun mediaPlayerReady(mediaPlayer: MediaPlayer?) {
                     player.submit {
@@ -211,7 +215,9 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 }
 
                 override fun playing(mediaPlayer: MediaPlayer) {
-                    playbackState.value = PlaybackState.PLAYING
+                    playbackStateMapper.onPlaying(playbackState.value)?.let {
+                        playbackState.value = it
+                    } ?: return
                     player.submit { player.media().parsing().parse() }
 
                     reloadSubtitleTracks()
@@ -220,19 +226,33 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 }
 
                 override fun paused(mediaPlayer: MediaPlayer) {
-                    playbackState.value = PlaybackState.PAUSED
+                    playbackStateMapper.onPaused(playbackState.value)?.let {
+                        playbackState.value = it
+                    }
                 }
 
                 override fun finished(mediaPlayer: MediaPlayer) {
+                    if (playbackState.value <= PlaybackState.FINISHED) {
+                        return
+                    }
+                    playbackStateMapper.reset()
                     playbackState.value = PlaybackState.FINISHED
                 }
 
                 override fun stopped(mediaPlayer: MediaPlayer?) {
+                    if (playbackState.value <= PlaybackState.FINISHED) {
+                        return
+                    }
+                    playbackStateMapper.reset()
                     playbackState.value = PlaybackState.FINISHED
                 }
 
                 override fun error(mediaPlayer: MediaPlayer) {
+                    if (playbackState.value <= PlaybackState.FINISHED) {
+                        return
+                    }
                     logger.error { "vlcj player error" }
+                    playbackStateMapper.reset()
                     playbackState.value = PlaybackState.ERROR
                 }
 
@@ -337,6 +357,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     @OptIn(ExperimentalMediampApi::class)
     override suspend fun setMediaDataImpl(data: MediaData): VlcjData = when (data) {
         is UriMediaData -> {
+            playbackStateMapper.reset()
             VlcjData(
                 data,
                 setPlay = {
@@ -360,9 +381,10 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         }
 
         is SeekableInputMediaData -> {
+            playbackStateMapper.reset()
             val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
             try {
-                val input = data.createInput()
+                val input = data.createInput(currentCoroutineContext())
 
                 object : VlcjData(
                     data,
@@ -417,6 +439,9 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     }
 
     override fun seekTo(positionMillis: Long) {
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) {
+            return
+        }
         @Suppress("NAME_SHADOWING")
         val positionMillis = positionMillis.coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
         if (positionMillis == currentPositionMillis.value) {
@@ -433,6 +458,9 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     }
 
     override fun skip(deltaMillis: Long) {
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) {
+            return
+        }
         if (playbackState.value == PlaybackState.PAUSED) {
             // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
             // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
@@ -454,6 +482,8 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     }
 
     override fun stopPlaybackImpl() {
+        playbackStateMapper.reset()
+        playbackState.value = PlaybackState.FINISHED
         currentPositionMillis.value = 0L
         lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
         try {
@@ -466,6 +496,8 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     }
 
     override fun closeImpl() {
+        playbackStateMapper.reset()
+        playbackState.value = PlaybackState.DESTROYED
         lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
         lastMedia = null
         backgroundScope.launch(NonCancellable) {
@@ -641,18 +673,26 @@ internal class VlcAudioLevelController(
 
 @OptIn(InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 internal class VlcBuffering(
-    private val player: MediaPlayer,
     private val currentPositionMillis: StateFlow<Long>,
     private val playbackState: StateFlow<PlaybackState>,
 ) : Buffering {
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
     override val isBuffering: Flow<Boolean> = flow {
+        var lastState = playbackState.value
         var lastPosition = currentPositionMillis.value
         while (true) {
-            if (playbackState.value == PlaybackState.PLAYING) {
-                emit(lastPosition == currentPositionMillis.value)
-                lastPosition = currentPositionMillis.value
-            }
+            val currentState = playbackState.value
+            val currentPosition = currentPositionMillis.value
+            emit(
+                when {
+                    currentState == PlaybackState.PAUSED_BUFFERING -> true
+                    currentState == PlaybackState.PLAYING && lastState == PlaybackState.PLAYING ->
+                        lastPosition == currentPosition
+                    else -> false
+                },
+            )
+            lastState = currentState
+            lastPosition = currentPosition
             delay(1500)
         }
     }.distinctUntilChanged()

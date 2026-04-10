@@ -8,8 +8,10 @@
 
 package org.openani.mediamp.source
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.io.IOException
 import kotlinx.io.files.FileNotFoundException
@@ -44,8 +46,22 @@ internal class SystemFileMediaDataImpl(
     @Throws(IOException::class)
     override fun fileLength(): Long? = SystemFileSystem.metadataOrNull(file)?.size
 
-    override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput =
-        withContext(Dispatchers.IO) { SystemFileSeekableInput(file, bufferSize) }
+    override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput {
+        var input: SeekableInput? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                SystemFileSeekableInput(file, bufferSize).also {
+                    input = it
+                    coroutineContext.ensureActive()
+                }
+            }.also {
+                coroutineContext.ensureActive()
+            }
+        } catch (e: CancellationException) {
+            input?.close()
+            throw e
+        }
+    }
 
     override fun close() {}
 }

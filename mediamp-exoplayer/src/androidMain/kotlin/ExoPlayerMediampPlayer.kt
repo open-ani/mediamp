@@ -43,12 +43,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.exoplayer.internal.ExoPlaybackStateMapper
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
@@ -156,6 +156,9 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     
     private val mediaListener = object : Media3Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (mediaItem == null || playbackState.value <= PlaybackState.FINISHED) {
+                return
+            }
             playbackState.value = PlaybackState.READY
             buffering.isBuffering.value = false
         }
@@ -184,6 +187,9 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            if (playbackState.value == PlaybackState.DESTROYED) {
+                return
+            }
             playbackState.value = PlaybackState.ERROR
             println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
             error.printStackTrace()
@@ -209,39 +215,13 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             return true
         }
 
-        /**
-         * STATE_READY 会在当前帧缓冲结束时设置
-         *
-         * exoplayer 的 STATE_READY 是不符合 [PlaybackState.READY] 预期的，所以不能在这里设置
-         *
-         * [PlaybackState.READY] 会在 [onMediaItemTransition] 中设置
-         */
         override fun onPlaybackStateChanged(playbackState: Int) {
-            when (playbackState) {
-                Media3Player.STATE_BUFFERING -> {
-                    buffering.isBuffering.value = true
-                }
-
-                Media3Player.STATE_ENDED -> {
-                    this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.FINISHED
-                    buffering.isBuffering.value = false
-                }
-
-                Media3Player.STATE_READY -> {
-                    this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.READY
-                    buffering.isBuffering.value = false
-                }
-            }
+            syncPlaybackStateFromExoPlayer()
             updateVideoProperties()
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isPlaying) {
-                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PLAYING
-                buffering.isBuffering.value = false
-            } else {
-                this@ExoPlayerMediampPlayer.playbackState.value = PlaybackState.PAUSED
-            }
+            syncPlaybackStateFromExoPlayer()
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -265,6 +245,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     private val buffering = ExoPlayerBuffering()
     private val mediaMetadataFeature = ExoPlayerMediaMetadata()
     private val playbackSpeed = PlaybackSpeedImpl(exoPlayer)
+    private val playbackStateMapper = ExoPlaybackStateMapper()
     private val videoAspectRatio = ExoPlayerVideoAspectRatio()
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
@@ -283,6 +264,25 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     override fun getCurrentPlaybackState(): PlaybackState {
         return playbackState.value
+    }
+
+    @MainThread
+    private fun syncPlaybackStateFromExoPlayer() {
+        if (playbackState.value <= PlaybackState.FINISHED) {
+            buffering.isBuffering.value = false
+            return
+        }
+
+        buffering.isBuffering.value = exoPlayer.playbackState == Media3Player.STATE_BUFFERING
+
+        val mappedState = playbackStateMapper.resolve(
+            exoPlaybackState = exoPlayer.playbackState,
+            playWhenReady = exoPlayer.playWhenReady,
+            isPlaying = exoPlayer.isPlaying,
+            currentState = playbackState.value,
+        ) ?: return
+
+        playbackState.value = mappedState
     }
 
     init {
@@ -305,6 +305,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     
     override suspend fun setMediaDataImpl(data: MediaData): ExoPlayerData = when (data) {
         is UriMediaData -> {
+            playbackStateMapper.reset()
             val headers = data.headers
             val item = MediaItem.Builder().apply {
                 setUri(data.uri)
@@ -340,15 +341,14 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         }
 
         is SeekableInputMediaData -> {
+            playbackStateMapper.reset()
             var file: SeekableInput? = null
             val factory = if (data.uri.startsWith("file://")) {
                 DefaultMediaSourceFactory {
                     FileDataSource()
                 }
             } else {
-                file = withContext(Dispatchers.IO) {
-                    data.createInput()
-                }
+                file = data.createInput(currentCoroutineContext())
                 ProgressiveMediaSource.Factory {
                     SeekableInputDataSource(data, file)
                 }
@@ -384,6 +384,9 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     }
 
     override fun seekTo(positionMillis: Long) {
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) {
+            return
+        }
         currentPositionMillis.value = positionMillis
         exoPlayer.seekTo(positionMillis)
     }
@@ -396,12 +399,20 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     }
 
     override fun stopPlaybackImpl() {
+        playbackStateMapper.reset()
+        playbackState.value = PlaybackState.FINISHED
+        buffering.isBuffering.value = false
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
         currentPositionMillis.value = 0
     }
 
     override fun closeImpl() {
+        playbackStateMapper.reset()
+        playbackState.value = PlaybackState.DESTROYED
+        buffering.isBuffering.value = false
+        currentPositionMillis.value = 0
+        exoPlayer.removeListener(mediaListener)
         exoPlayer.stop()
         exoPlayer.release()
     }

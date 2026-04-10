@@ -26,12 +26,17 @@ kotlin {
     androidLibrary {
         namespace = "org.openani.mediamp.exoplayer"
     }
-    
-    sourceSets.androidMain {
-        dependencies {
+
+    sourceSets {
+        androidMain.dependencies {
             api(projects.mediampApi)
             implementation(libs.androidx.media3.exoplayer)
             implementation(libs.androidx.media3.ui)
+        }
+
+        androidHostTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.junit)
         }
     }
 }
