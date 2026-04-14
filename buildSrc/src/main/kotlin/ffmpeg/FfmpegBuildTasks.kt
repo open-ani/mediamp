@@ -14,7 +14,6 @@ import org.gradle.api.GradleException
 import org.gradle.api.Task
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskProvider
-import org.gradle.api.tasks.Sync
 import org.gradle.kotlin.dsl.register
 import java.io.File
 
@@ -81,6 +80,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             if (context.isBuildVariantEnabled("ios")) {
                 previousTargetTask = registerFfmpegTasks(context, context.iosArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
                 previousTargetTask = registerFfmpegTasks(context, context.iosSimulatorArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
+                registerAppleXcframeworkTask(context)
             } else {
                 project.logger.lifecycle("Skipping FFmpeg ios targets: mediamp.ffmpeg.buildvariant does not include 'ios'.")
             }
@@ -93,7 +93,11 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     project.tasks.register("ffmpegBuildAll") {
         group = "ffmpeg"
         description = "Build FFmpeg for all targets available on the current host OS"
-        dependsOn(project.tasks.matching { it.name.startsWith("ffmpegAssemble") })
+        dependsOn(project.tasks.matching {
+            it.name.startsWith("ffmpegAssemble") ||
+                it.name.startsWith("ffmpegAppleFramework") ||
+                it.name == "ffmpegCreateAppleXcframework"
+        })
     }
 }
 
@@ -178,7 +182,7 @@ private fun registerFfmpegTasks(
         this.buildStamp.set(buildStamp)
     }
 
-    project.tasks.register<FfmpegAssembleTask>("ffmpegAssemble${target.name}") {
+    val assembleTask = project.tasks.register<FfmpegAssembleTask>("ffmpegAssemble${target.name}") {
         group = "ffmpeg"
         description = "Assemble FFmpeg outputs for ${target.name}"
         dependsOn(buildTask)
@@ -192,9 +196,6 @@ private fun registerFfmpegTasks(
         buildDirPath.set(buildDir)
         this.installDir.set(installDir)
         this.outputDir.set(project.layout.buildDirectory.dir("ffmpeg-output/${target.name}"))
-        if (target.name == "IosArm64" || target.name == "IosSimulatorArm64") {
-            commandWrapperSource.set(context.commandWrapperSource)
-        }
         if (target.name.startsWith("Android") || target.name == "LinuxX64" || target.name == "MacosArm64" || target.name == "MacosX64" || target.name == "WindowsX64") {
             commandWrapperSource.set(context.commandWrapperSource)
             jniWrapperSource.set(context.jniWrapperSource)
@@ -203,7 +204,53 @@ private fun registerFfmpegTasks(
             this.msys2Dir.set(msys2Dir)
         }
     }
-    return project.tasks.named("ffmpegAssemble${target.name}")
+
+    if (target.name == "IosArm64" || target.name == "IosSimulatorArm64") {
+        val frameworkTask = project.tasks.register<FfmpegAppleFrameworkTask>("ffmpegAppleFramework${target.name}") {
+            group = "ffmpeg"
+            description = "Build Apple framework for ${target.name}"
+            dependsOn(assembleTask)
+            if (previousTargetTask != null) {
+                mustRunAfter(previousTargetTask)
+            }
+            targetName.set(target.name)
+            frameworkName.set(context.appleFrameworkName)
+            ffmpegLibNames.set(context.ffmpegLibNames)
+            buildDirPath.set(buildDir)
+            this.installDir.set(installDir)
+            wrapperSource.set(context.commandWrapperSource)
+            publicHeaderSource.set(context.applePublicHeaderSource)
+            outputDir.set(project.layout.buildDirectory.dir("apple-framework/${target.name}/${context.appleFrameworkName}.framework"))
+        }
+        return frameworkTask
+    }
+
+    return assembleTask
+}
+
+private fun registerAppleXcframeworkTask(context: FfmpegBuildContext) {
+    val project = context.project
+    if (project.tasks.names.contains("ffmpegAppleFrameworkIosArm64").not() ||
+        project.tasks.names.contains("ffmpegAppleFrameworkIosSimulatorArm64").not()
+    ) {
+        return
+    }
+
+    project.tasks.register<FfmpegAppleXcframeworkTask>("ffmpegCreateAppleXcframework") {
+        group = "ffmpeg"
+        description = "Create Apple XCFramework for FFmpeg runtime"
+        dependsOn("ffmpegAppleFrameworkIosArm64", "ffmpegAppleFrameworkIosSimulatorArm64")
+        frameworkName.set(context.appleFrameworkName)
+        iosDeviceFramework.set(
+            project.layout.buildDirectory.dir("apple-framework/IosArm64/${context.appleFrameworkName}.framework"),
+        )
+        iosSimulatorFramework.set(
+            project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/${context.appleFrameworkName}.framework"),
+        )
+        outputDir.set(
+            project.layout.buildDirectory.dir("apple-xcframework/${context.appleFrameworkName}.xcframework"),
+        )
+    }
 }
 
 internal fun restoreExecutablePermissions(sourceDir: File, targetDir: File) {

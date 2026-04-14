@@ -395,6 +395,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 
         gradleCheck()
         buildFfmpegArtifacts()
+        verifyAppleXcframeworkPublication()
         // uploadMediampBackendMpv()
 
         cleanupTempFiles()
@@ -404,6 +405,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 object ArtifactNames {
     fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-mpv-${os}-${arch}"
     fun ffmpegRuntimeJar(platformId: String) = "mediamp-ffmpeg-runtime-$platformId"
+    fun ffmpegAppleXcframeworkZip() = "mediamp-ffmpeg-runtime-ios-xcframework"
 }
 
 workflow(
@@ -590,6 +592,7 @@ workflow(
 
     addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, linux, macX8664)) { matrix ->
         with(WithMatrix(matrix)) {
+            uploadFfmpegAppleXcframeworkZip()
             listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
                 uses(
                     action = DownloadArtifact(
@@ -875,6 +878,18 @@ class WithMatrix(
         }
     }
 
+    fun JobBuilder<*>.verifyAppleXcframeworkPublication() {
+        if (matrix.isMacOSAArch64 && matrix.hasFfmpegBuildVariant("ios")) {
+            runGradle(
+                name = "Verify Apple XCFramework publication",
+                tasks = arrayOf(
+                    "-Dmaven.repo.local=mediamp-ffmpeg/build/maven-local",
+                    ":mediamp-ffmpeg:publishFfmpegRuntimeIosXcframeworkPublicationToMavenLocal",
+                ),
+            )
+        }
+    }
+
     fun mavenCentralPublishEnv(): Map<String, String> = mapOf(
         "ORG_GRADLE_PROJECT_mavenCentralUsername" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralUsername"]!! },
         "ORG_GRADLE_PROJECT_mavenCentralPassword" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralPassword"]!! },
@@ -905,6 +920,22 @@ class WithMatrix(
             action = UploadArtifact(
                 name = artifactName,
                 path_Untyped = path,
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
+            ),
+        )
+    }
+
+    fun JobBuilder<*>.uploadFfmpegAppleXcframeworkZip(): ActionStep<UploadArtifact.Outputs> {
+        runGradle(
+            name = "Build FFmpeg Apple XCFramework zip",
+            tasks = arrayOf(":mediamp-ffmpeg:ffmpegAppleXcframeworkZip"),
+        )
+        return uses(
+            name = "Upload FFmpeg Apple XCFramework zip",
+            action = UploadArtifact(
+                name = ArtifactNames.ffmpegAppleXcframeworkZip(),
+                path_Untyped = "mediamp-ffmpeg/build/distributions/mediamp-ffmpeg-runtime-ios-xcframework-*.zip",
                 overwrite = true,
                 ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
             ),
@@ -963,6 +994,9 @@ val MatrixInstance.isUnix get() = (os == OS.UBUNTU) or (os == (OS.MACOS))
 
 val MatrixInstance.isMacOSAArch64 get() = (os == OS.MACOS) and (arch == Arch.AARCH64)
 val MatrixInstance.isMacOSX64 get() = (os == OS.MACOS) and (arch == Arch.X64)
+fun MatrixInstance.hasFfmpegBuildVariant(variant: String): Boolean {
+    return ffmpegBuildVariant?.split(',')?.map { it.trim() }?.any { it == variant } == true
+}
 
 // only for highlighting (though this does not work in KT 2.1.0)
 fun shell(@Language("shell") command: String) = command

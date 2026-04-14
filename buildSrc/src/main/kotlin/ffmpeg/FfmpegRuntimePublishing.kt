@@ -13,6 +13,7 @@ import org.gradle.api.attributes.java.TargetJvmEnvironment
 import org.gradle.api.component.SoftwareComponentFactory
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.bundling.Zip
 import org.gradle.jvm.tasks.Jar
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
@@ -22,17 +23,18 @@ import org.gradle.kotlin.dsl.support.serviceOf
 import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 import org.gradle.nativeplatform.MachineArchitecture
 import org.gradle.nativeplatform.OperatingSystemFamily
-import org.gradle.api.tasks.TaskProvider
 
-internal data class RuntimeJarArtifact(
+private const val APPLE_XCFRAMEWORK_ARTIFACT_ID = "mediamp-ffmpeg-runtime-ios-xcframework"
+
+internal data class PublishedArtifact(
     val artifactNotation: Any,
     val builtBy: Any? = null,
 )
 
 internal fun registerDesktopRuntimeJarTasks(
     context: FfmpegBuildContext,
-): Map<DesktopRuntimeTarget, RuntimeJarArtifact> {
-    val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, RuntimeJarArtifact>()
+): Map<DesktopRuntimeTarget, PublishedArtifact> {
+    val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, PublishedArtifact>()
 
     context.desktopRuntimeTargets.forEach { target ->
         val taskName = "ffmpegRuntimeJar${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}"
@@ -66,7 +68,7 @@ internal fun registerDesktopRuntimeJarTasks(
                     }
                 }
             }
-            runtimeJarTasks[target] = RuntimeJarArtifact(jarTask.flatMap { it.archiveFile }, jarTask)
+            runtimeJarTasks[target] = PublishedArtifact(jarTask.flatMap { it.archiveFile }, jarTask)
             return@forEach
         }
 
@@ -77,7 +79,7 @@ internal fun registerDesktopRuntimeJarTasks(
             context.project.logger.lifecycle(
                 "Using prebuilt runtime jar for ${target.os}-${target.arch}: ${prebuiltJar.absolutePath}",
             )
-            runtimeJarTasks[target] = RuntimeJarArtifact(prebuiltJar)
+            runtimeJarTasks[target] = PublishedArtifact(prebuiltJar)
             return@forEach
         }
 
@@ -89,58 +91,40 @@ internal fun registerDesktopRuntimeJarTasks(
     return runtimeJarTasks
 }
 
-internal fun registerAppleRuntimeJarTasks(
+internal fun registerAppleXcframeworkArtifact(
     context: FfmpegBuildContext,
-): Map<AppleRuntimeTarget, TaskProvider<Jar>> {
-    val runtimeJarTasks = linkedMapOf<AppleRuntimeTarget, TaskProvider<Jar>>()
-
-    context.appleRuntimeTargets.forEach { target ->
-        val taskName = "ffmpegRuntimeJar${target.publicationSuffix}"
-        val assembleTaskName = "ffmpegAssemble${target.ffmpegTargetName}"
-        if (!context.project.tasks.names.contains(assembleTaskName)) {
-            context.project.logger.lifecycle(
-                "Skipping Apple runtime publication task for ${target.artifactIdSuffix}: $assembleTaskName is not available on this host.",
-            )
-            return@forEach
-        }
-        val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/${target.ffmpegTargetName}")
-
-        val jarTask = context.project.tasks.register<Jar>(taskName) {
-            group = "ffmpeg"
-            description = "Package FFmpeg Apple runtime for ${target.artifactIdSuffix}"
-            archiveBaseName.set("mediamp-ffmpeg-runtime")
-            archiveClassifier.set(target.artifactIdSuffix)
-            dependsOn(assembleTaskName)
-
-            from(outputDir) {
-                exclude("include/**")
-            }
-
-            doFirst {
-                val dir = outputDir.get().asFile
-                if (dir.isDirectory) {
-                    val manifest = dir.walk()
-                        .filter { it.isFile && !it.path.contains("include") }
-                        .map { it.relativeTo(dir).path.replace("\\", "/") }
-                        .sorted()
-                        .joinToString("\n")
-                    val manifestFile = temporaryDir.resolve("ffmpeg-natives.txt")
-                    manifestFile.parentFile.mkdirs()
-                    manifestFile.writeText(manifest)
-                    from(manifestFile)
-                }
-            }
-        }
-        runtimeJarTasks[target] = jarTask
+): PublishedArtifact? {
+    if (!context.project.tasks.names.contains("ffmpegCreateAppleXcframework")) {
+        context.project.logger.lifecycle(
+            "Skipping Apple XCFramework publication artifact: ffmpegCreateAppleXcframework is not available on this host.",
+        )
+        return null
     }
 
-    return runtimeJarTasks
+    val xcframeworkDir = context.project.layout.buildDirectory.dir(
+        "apple-xcframework/${context.appleFrameworkName}.xcframework",
+    )
+    val zipTask = context.project.tasks.register<Zip>("ffmpegAppleXcframeworkZip") {
+        group = "ffmpeg"
+        description = "Package Apple XCFramework for Maven publication"
+        archiveBaseName.set(APPLE_XCFRAMEWORK_ARTIFACT_ID)
+        archiveVersion.set(context.project.version.toString())
+        destinationDirectory.set(context.project.layout.buildDirectory.dir("distributions"))
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+        dependsOn("ffmpegCreateAppleXcframework")
+
+        from(xcframeworkDir) {
+            into("${context.appleFrameworkName}.xcframework")
+        }
+    }
+    return PublishedArtifact(zipTask.flatMap { it.archiveFile }, zipTask)
 }
 
 internal fun configureRuntimePublishing(
     context: FfmpegBuildContext,
-    desktopRuntimeJarTasks: Map<DesktopRuntimeTarget, RuntimeJarArtifact>,
-    appleRuntimeJarTasks: Map<AppleRuntimeTarget, TaskProvider<Jar>>,
+    desktopRuntimeJarTasks: Map<DesktopRuntimeTarget, PublishedArtifact>,
+    appleXcframeworkArtifact: PublishedArtifact?,
 ) {
     val deployVersion = context.project.version.toString()
     val runtimeTargets = context.desktopRuntimeTargets
@@ -168,17 +152,17 @@ internal fun configureRuntimePublishing(
             }
         }
 
-        appleRuntimeJarTasks.forEach { (target, jarTask) ->
-            create<MavenPublication>("ffmpegRuntime${target.publicationSuffix}") {
+        appleXcframeworkArtifact?.let { xcframeworkArtifact ->
+            create<MavenPublication>("ffmpegRuntimeIosXcframework") {
                 groupId = "org.openani.mediamp"
-                artifactId = "mediamp-ffmpeg-runtime-${target.artifactIdSuffix}"
+                artifactId = APPLE_XCFRAMEWORK_ARTIFACT_ID
                 version = deployVersion
 
-                artifact(jarTask) {
+                artifact(xcframeworkArtifact.artifactNotation) {
+                    extension = "zip"
                     classifier = null
+                    xcframeworkArtifact.builtBy?.let { builtBy(it) }
                 }
-
-                addMainModulePomDependency(deployVersion)
             }
         }
     }
@@ -220,19 +204,6 @@ internal fun configureRuntimePublishing(
                     },
                 ),
             )
-        }
-    }
-
-    appleRuntimeJarTasks.forEach { (target, jarTask) ->
-        registerCompositeRuntimeElements(
-            context = context,
-            configurationName = "ffmpegCompositeRuntimeElements-${target.artifactIdSuffix}",
-            moduleName = "mediamp-ffmpeg-runtime-${target.artifactIdSuffix}",
-            runtimeJarArtifact = RuntimeJarArtifact(jarTask.flatMap { it.archiveFile }, jarTask),
-        ) {
-            attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
-            attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
-            attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, context.project.objects.named<LibraryElements>(LibraryElements.JAR))
         }
     }
 
@@ -299,14 +270,13 @@ internal fun configureRuntimePublishing(
     }
 
     wireDesktopRuntimeDependencyConstraints(context.project, deployVersion, runtimeTargets)
-    wireAppleRuntimeDependencyConstraints(context.project, deployVersion, context.appleRuntimeTargets)
 }
 
 private fun registerCompositeRuntimeElements(
     context: FfmpegBuildContext,
     configurationName: String,
     moduleName: String,
-    runtimeJarArtifact: RuntimeJarArtifact,
+    runtimeJarArtifact: PublishedArtifact,
     configureAttributes: org.gradle.api.artifacts.Configuration.() -> Unit,
 ) {
     context.project.configurations.create(configurationName).apply {
@@ -346,26 +316,6 @@ private fun wireDesktopRuntimeDependencyConstraints(
         listOf("desktopApiElements", "desktopRuntimeElements").forEach { configName ->
             configurations.findByName(configName)?.let { config ->
                 desktopPlatformRuntimeNotations.forEach { notation ->
-                    config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
-                }
-            }
-        }
-    }
-}
-
-private fun wireAppleRuntimeDependencyConstraints(
-    project: Project,
-    deployVersion: String,
-    runtimeTargets: List<AppleRuntimeTarget>,
-) {
-    project.afterEvaluate {
-        runtimeTargets.forEach { target ->
-            val notation = "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.artifactIdSuffix}:$deployVersion"
-            listOf(
-                "${target.ffmpegTargetName.replaceFirstChar { it.lowercase() }}ApiElements",
-                "${target.ffmpegTargetName.replaceFirstChar { it.lowercase() }}MetadataElements",
-            ).forEach { configName ->
-                configurations.findByName(configName)?.let { config ->
                     config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
                 }
             }

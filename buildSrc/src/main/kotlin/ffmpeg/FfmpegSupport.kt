@@ -52,7 +52,9 @@ internal class FfmpegBuildContext(
 ) {
     val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 
+    val appleFrameworkName: String = "MediampFFmpegKit"
     val commandWrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
+    val applePublicHeaderSource: File = project.projectDir.resolve("src/appleMain/include/MediampFFmpegKit.h")
     val jniWrapperSource: File = project.projectDir.resolve("src/jvmMain/c/ffmpegkit_jni.c")
 
     val enabledBuildVariantFamilies: Set<String> =
@@ -231,31 +233,35 @@ internal class FfmpegBuildContext(
     val iosArm64Target = FfmpegBuildTarget(
         name = "IosArm64",
         extraFlags = listOf(
+            "--disable-shared",
+            "--enable-static",
             "--arch=arm64",
             "--target-os=darwin",
             "--enable-cross-compile",
             "--cc=xcrun --sdk iphoneos clang",
             "--cxx=xcrun --sdk iphoneos clang++",
-            "--extra-cflags=-arch arm64 -miphoneos-version-min=16.0 -fembed-bitcode",
+            "--extra-cflags=-arch arm64 -miphoneos-version-min=16.0",
             "--extra-ldflags=-arch arm64 -miphoneos-version-min=16.0",
         ) + appleHostToolFlags,
         shell = "bash",
-        libExtension = "dylib",
+        libExtension = "a",
     )
 
     val iosSimulatorArm64Target = FfmpegBuildTarget(
         name = "IosSimulatorArm64",
         extraFlags = listOf(
+            "--disable-shared",
+            "--enable-static",
             "--arch=arm64",
             "--target-os=darwin",
             "--enable-cross-compile",
             "--cc=xcrun --sdk iphonesimulator clang",
             "--cxx=xcrun --sdk iphonesimulator clang++",
-            "--extra-cflags=-arch arm64 -miphonesimulator-version-min=16.0 -fembed-bitcode",
+            "--extra-cflags=-arch arm64 -miphonesimulator-version-min=16.0",
             "--extra-ldflags=-arch arm64 -miphonesimulator-version-min=16.0",
         ) + appleHostToolFlags,
         shell = "bash",
-        libExtension = "dylib",
+        libExtension = "a",
     )
 
     fun isBuildVariantEnabled(family: String): Boolean =

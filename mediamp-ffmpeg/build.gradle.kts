@@ -7,6 +7,7 @@
  */
 
 import ffmpeg.configureMediampFfmpegModule
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 
 plugins {
     kotlin("multiplatform")
@@ -35,3 +36,31 @@ kotlin {
 }
 
 configureMediampFfmpegModule()
+
+kotlin {
+    targets.withType(KotlinNativeTarget::class.java)
+        .matching { target -> target.name == "iosArm64" || target.name == "iosSimulatorArm64" }
+        .configureEach {
+            val capitalizedTargetName = name.replaceFirstChar { it.uppercase() }
+            val frameworkTaskName = "ffmpegAppleFramework$capitalizedTargetName"
+            val frameworkSearchPath = project.layout.buildDirectory.dir("apple-framework/$capitalizedTargetName")
+
+            compilations.getByName("main").cinterops.create("mediampffmpegkit") {
+                defFile(project.file("src/nativeInterop/cinterop/mediamp_ffmpegkit.def"))
+                compilerOpts("-F${frameworkSearchPath.get().asFile.absolutePath}")
+                linkerOpts("-F${frameworkSearchPath.get().asFile.absolutePath}", "-framework", "MediampFFmpegKit")
+            }
+
+            if (project.tasks.names.contains(frameworkTaskName)) {
+                project.tasks.named("cinteropMediampffmpegkit$capitalizedTargetName") {
+                    dependsOn(frameworkTaskName)
+                }
+                project.tasks.matching { task ->
+                    task.name == "compileKotlin$capitalizedTargetName" ||
+                        (task.name.startsWith("link") && task.name.endsWith(capitalizedTargetName))
+                }.configureEach {
+                    dependsOn(frameworkTaskName)
+                }
+            }
+        }
+}

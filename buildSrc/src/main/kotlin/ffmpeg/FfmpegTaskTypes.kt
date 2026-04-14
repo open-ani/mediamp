@@ -280,23 +280,11 @@ abstract class FfmpegAssembleTask : DefaultTask() {
         }
 
         val ffmpegExe = if (libExtension.get() == "dll") binDir.resolve("ffmpeg.exe") else binDir.resolve("ffmpeg")
-        if (ffmpegExe.exists()) {
+        if (ffmpegExe.exists() && targetName.get() != "IosArm64" && targetName.get() != "IosSimulatorArm64") {
             ffmpegExe.copyTo(outputDirFile.resolve(ffmpegExe.name), overwrite = true)
         }
 
         when (targetName.get()) {
-            "IosArm64", "IosSimulatorArm64" -> {
-                buildAppleWrapper(
-                    execOperations = execOperations,
-                    logger = logger,
-                    targetName = targetName.get(),
-                    wrapperSource = commandWrapperSource.get().asFile,
-                    buildDir = buildDirFile,
-                    installDir = installDirFile,
-                    outputDir = outputDirFile,
-                )
-            }
-
             "WindowsX64" -> {
                 buildJvmJniWrapper(
                     execOperations = execOperations,
@@ -473,88 +461,6 @@ private fun buildJvmJniWrapper(
     wrapperOut.copyTo(outputDir.resolve(wrapperName), overwrite = true)
     logger.info("Built JVM FFmpeg JNI wrapper: $wrapperOut")
 }
-
-private fun buildAppleWrapper(
-    execOperations: ExecOperations,
-    logger: Logger,
-    targetName: String,
-    wrapperSource: File,
-    buildDir: File,
-    installDir: File,
-    outputDir: File,
-) {
-    require(wrapperSource.isFile) {
-        "FFmpeg wrapper source not found at ${wrapperSource.absolutePath}"
-    }
-
-    val wrapperName = "libffmpegkitcmd.dylib"
-    val sdk = if (targetName == "IosSimulatorArm64") "iphonesimulator" else "iphoneos"
-    val minVersionFlag = if (targetName == "IosSimulatorArm64") {
-        "-miphonesimulator-version-min=16.0"
-    } else {
-        "-miphoneos-version-min=16.0"
-    }
-    val fftoolsDir = buildDir.resolve("fftools")
-    val fftoolsObjects = fftoolsDir.walkTopDown()
-        .filter { it.isFile && it.extension == "o" }
-        .map(File::getAbsolutePath)
-        .toList()
-    require(fftoolsObjects.isNotEmpty()) {
-        "No fftools object files found in $fftoolsDir while building $wrapperName."
-    }
-
-    val wrapperOut = buildDir.resolve(wrapperName)
-    val ffmpegIncludes = listOf(
-        installDir.resolve("include"),
-        buildDir.resolve("source"),
-    )
-        .distinctBy { it.absolutePath }
-        .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
-    val linkCmd = mutableListOf(
-        "xcrun", "-sdk", sdk, "clang",
-        "-dynamiclib",
-        "-arch", "arm64",
-        minVersionFlag,
-        "-fembed-bitcode",
-        *ffmpegIncludes.flatMap { listOf("-I", it.absolutePath) }.toTypedArray(),
-        "-Wl,-install_name,@rpath/$wrapperName",
-        "-o", wrapperOut.absolutePath,
-        wrapperSource.absolutePath,
-    )
-    linkCmd.addAll(fftoolsObjects)
-    linkCmd.addAll(
-        listOf(
-            "-L${buildDir.resolve("libavdevice").absolutePath}",
-            "-L${buildDir.resolve("libavfilter").absolutePath}",
-            "-L${buildDir.resolve("libavformat").absolutePath}",
-            "-L${buildDir.resolve("libavcodec").absolutePath}",
-            "-L${buildDir.resolve("libswresample").absolutePath}",
-            "-L${buildDir.resolve("libswscale").absolutePath}",
-            "-L${buildDir.resolve("libavutil").absolutePath}",
-            "-lavdevice",
-            "-lavfilter",
-            "-lavformat",
-            "-lavcodec",
-            "-lswresample",
-            "-lswscale",
-            "-lavutil",
-            "-lm",
-            "-pthread",
-            "-framework", "CoreFoundation",
-            "-framework", "CoreVideo",
-            "-framework", "CoreMedia",
-        ),
-    )
-
-    execOperations.exec {
-        commandLine(linkCmd)
-        workingDir = buildDir
-    }
-
-    wrapperOut.copyTo(outputDir.resolve(wrapperName), overwrite = true)
-    logger.info("Built Apple FFmpeg wrapper: $wrapperOut")
-}
-
 private fun rewriteAppleInstallNames(
     execOperations: ExecOperations,
     targetName: String,
@@ -594,7 +500,7 @@ private fun rewriteAppleInstallNames(
     }
 }
 
-private fun readFfmpegConfig(configFile: File): Map<String, String> {
+internal fun readFfmpegConfig(configFile: File): Map<String, String> {
     require(configFile.isFile) { "FFmpeg config.mak not found at ${configFile.absolutePath}" }
     return configFile.readLines()
         .filter { line -> '=' in line && !line.startsWith('#') }
@@ -604,7 +510,7 @@ private fun readFfmpegConfig(configFile: File): Map<String, String> {
         }
 }
 
-private fun expandMakeVariables(value: String, config: Map<String, String>): String {
+internal fun expandMakeVariables(value: String, config: Map<String, String>): String {
     var expanded = value
     val pattern = Regex("""\$\(([^)]+)\)""")
     repeat(8) {
@@ -639,10 +545,10 @@ private fun jniIncludeFlags(targetName: String, config: Map<String, String>): Li
     }
 }
 
-private fun pathForShell(file: File, windowsMsys: Boolean): String =
+internal fun pathForShell(file: File, windowsMsys: Boolean): String =
     if (windowsMsys) file.absolutePath.toMsysPath() else file.absolutePath
 
-private fun shellQuote(value: String): String =
+internal fun shellQuote(value: String): String =
     "'${value.replace("'", "'\"'\"'")}'"
 
 private fun collectWindowsRuntimeDlls(

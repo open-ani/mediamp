@@ -11,7 +11,7 @@ Core API:
 ```kotlin
 implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
 ```
-setL
+
 Desktop runtime artifacts:
 
 ```kotlin
@@ -23,14 +23,21 @@ runtimeOnly("org.openani.mediamp:mediamp-ffmpeg-runtime-windows-x64:<version>")
 
 If your desktop Gradle variant resolution is configured correctly, the matching runtime JAR may be selected automatically. If runtime extraction fails at startup, add the platform-specific runtime dependency explicitly.
 
-iOS runtime artifacts:
+iOS runtime:
 
-```kotlin
-implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>")
-implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>")
+```bash
+./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework
 ```
 
-These iOS runtime artifacts are published separately from the Kotlin/Native `klib`. They contain the Apple FFmpeg binaries that must be embedded into the final app bundle.
+Published Apple runtime artifact:
+
+```text
+org.openani.mediamp:mediamp-ffmpeg-runtime-ios-xcframework:<version>@zip
+```
+
+The Apple runtime is built as `MediampFFmpegKit.xcframework` and published as a Maven `zip` artifact. This repository wires Kotlin/Native cinterop against the locally generated framework for the iOS targets in `mediamp-ffmpeg`. Automatic external consumption is not finalized yet, so the published zip is meant for manual resolution or a future consumer plugin rather than a direct `implementation(...)` dependency.
+
+For consumer-side wiring of the published Apple runtime, see [ios-embed-framework.md](ios-embed-framework.md).
 
 ## What gets published
 
@@ -40,7 +47,7 @@ Platform runtime behavior:
 
 - Android: native FFmpeg binaries are packaged into the AAR and then into the APK.
 - Desktop JVM: FFmpeg binaries are packaged in a separate runtime JAR.
-- iOS: the Kotlin API and Apple runtime artifacts are both published, but the app build must still unpack and embed the runtime files into the app bundle.
+- iOS: FFmpeg is linked into a locally generated Apple XCFramework and invoked through Kotlin/Native cinterop.
 
 ## API
 
@@ -123,42 +130,24 @@ If you see an error like `ffmpeg-natives.txt not found on classpath`, the platfo
 val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 ```
 
-The published Kotlin artifact does not automatically embed the Apple FFmpeg runtime into the final app bundle.
+Build the Apple runtime before compiling or linking the iOS targets:
 
-You still need two things:
-
-1. Add the matching Apple runtime artifact as a dependency for the target you build.
-2. Unpack that artifact during your app build and copy its runtime files into the app bundle resources.
-
-If you place the runtime in a custom directory inside the app bundle, configure that directory at app startup before the first FFmpeg call:
-
-```kotlin
-FFmpegKit.initialize("/path/to/YourApp.app/FFmpegRuntime")
+```bash
+./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework
 ```
 
-The iOS implementation searches the configured directory first, then falls back to the bundle resource directory and `Frameworks`.
+This produces `build/apple-xcframework/MediampFFmpegKit.xcframework` from two generated slices:
 
-Recommended runtime coordinates:
+- `ios-arm64`
+- `ios-arm64-simulator`
 
-- real device: `org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>`
-- arm64 simulator: `org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>`
+Repository-local behavior:
 
-The iOS `klib` metadata now carries a dependency constraint pointing at the matching runtime coordinate, but that only helps dependency resolution. It does not perform bundle embedding for you.
+- `mediamp-ffmpeg` configures Kotlin/Native cinterop against the generated `MediampFFmpegKit.framework` slices.
+- `FFmpegKit` calls `ffmpegkit_execute` and `ffmpegkit_set_log_callback` directly through cinterop.
+- `FFmpegKit.initialize(path)` is kept for source compatibility on iOS, but it is now a no-op.
 
-At minimum, the app bundle must contain:
-
-- `ffmpeg`
-- `libffmpegkitcmd.dylib`
-- the dependent FFmpeg dylibs such as `libavcodec*.dylib`, `libavformat*.dylib`, `libavutil*.dylib`, `libswresample*.dylib`, `libswscale*.dylib`
-
-Runtime expectations:
-
-- `FFmpegKit` looks up those files from the configured runtime directory if you called `FFmpegKit.initialize(...)`.
-- Otherwise it falls back to `NSBundle.mainBundle.resourcePath` and the bundle `Frameworks` directory.
-- The library configures `DYLD_LIBRARY_PATH` internally.
-- The wrapper entrypoint is `ffmpegkit_execute` inside `libffmpegkitcmd.dylib`.
-
-If the runtime files are not embedded, execution will fail with errors like `libffmpegkitcmd.dylib not found in app bundle resource path` or `dlopen(...) failed`.
+The old Apple runtime JAR model and loose `.dylib` embedding flow are no longer used by this module.
 
 ## Recommended dependency patterns
 
@@ -177,21 +166,12 @@ kotlin {
 iOS app:
 
 ```kotlin
-kotlin {
-    sourceSets {
-        iosArm64Main.dependencies {
-            implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
-            implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-arm64:<version>")
-        }
-        iosSimulatorArm64Main.dependencies {
-            implementation("org.openani.mediamp:mediamp-ffmpeg:<version>")
-            implementation("org.openani.mediamp:mediamp-ffmpeg-runtime-ios-simulator-arm64:<version>")
-        }
-    }
-}
+// Repository-local Apple flow:
+// 1. Build the Apple runtime
+//    ./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework
+// 2. Compile/link the iOS targets in this repo
+// 3. Embed MediampFFmpegKit.xcframework if you wrap this module in an Xcode app
 ```
-
-Then make your Xcode or Gradle-for-iOS packaging step unzip that runtime artifact and copy the contained `ffmpeg` and `.dylib` files into the app bundle resources.
 
 Android app:
 
@@ -212,6 +192,7 @@ dependencies {
 
 ## Known limitations
 
-- Apple runtime embedding is still not automated. The runtime artifacts are published, but app bundling must unpack and embed them.
+- Apple runtime is published as an XCFramework zip, but external automatic consumption is not finalized yet; consumers still need their own unzip and cinterop wiring.
+- Consumer-side Apple wiring is documented in [ios-embed-framework.md](ios-embed-framework.md), but it is still a manual integration flow.
 - Desktop runtime resolution may need an explicit platform runtime dependency in non-standard Gradle setups.
 - This wrapper currently exposes the FFmpeg CLI model, not a typed transcoding API.
