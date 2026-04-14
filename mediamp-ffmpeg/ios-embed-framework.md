@@ -111,11 +111,14 @@ kotlin {
             val frameworkSearchPath = layout.buildDirectory.dir(
                 "mediamp-ffmpeg/apple-runtime/MediampFFmpegKit.xcframework/$sliceName",
             )
+            val frameworkSearchPathValue = frameworkSearchPath.get().asFile.absolutePath
 
             compilations.getByName("main").cinterops.create("mediampffmpegkit") {
                 defFile(project.file("src/nativeInterop/cinterop/mediamp_ffmpegkit.def"))
-                compilerOpts("-F${frameworkSearchPath.get().asFile.absolutePath}")
-                linkerOpts("-F${frameworkSearchPath.get().asFile.absolutePath}", "-framework", "MediampFFmpegKit")
+                compilerOpts("-F$frameworkSearchPathValue")
+            }
+            binaries.configureEach {
+                linkerOpts("-F$frameworkSearchPathValue", "-framework", "MediampFFmpegKit")
             }
 
             tasks.named("cinteropMediampffmpegkit$capitalizedTargetName") {

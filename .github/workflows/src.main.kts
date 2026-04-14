@@ -362,7 +362,7 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "macos-x64",
         buildIosFramework = false,
         gradleHeap = "4g",
-        ffmpegBuildVariant = "macos",
+        ffmpegBuildVariant = "ios,macos",
         extraGradleArgs = listOf(),
         buildAllAndroidAbis = true,
     ),
