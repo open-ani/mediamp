@@ -61,7 +61,7 @@ kotlinMultiplatformExtension?.apply {
      *
      * `native - apple - ios` 的架构是为了契合 Kotlin 官方推荐的默认架构. 以后如果万一要添加其他平台, 可方便添加.
      */
-    if (project.enableIos) {
+    if (project.enableIos && getArch() == Arch.AARCH64) {
         iosArm64()
         iosSimulatorArm64() // to run tests
         // no x86
