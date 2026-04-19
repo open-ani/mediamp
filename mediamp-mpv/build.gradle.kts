@@ -10,7 +10,7 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
@@ -37,6 +37,10 @@ val archs = buildList {
 }
 
 kotlin {
+    androidLibrary {
+        namespace = "org.openani.mediamp.mpv"
+    }
+    
     sourceSets {
 //        androidMain {
 //            kotlin.srcDirs(listOf("gen/java"))
@@ -59,33 +63,6 @@ kotlin {
 //kotlin.sourceSets.getByName("jvmMain") {
 //    java.setSrcDirs(listOf("gen/java"))
 //}
-
-android {
-    namespace = "org.openani.mediamp.mpv"
-    defaultConfig {
-        ndk {
-            // Specifies the ABI configurations of your native
-            // libraries Gradle should build and package with your app.
-            abiFilters.clear()
-            //noinspection ChromeOsAbiSupport
-            abiFilters += archs
-        }
-    }
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            //noinspection ChromeOsAbiSupport
-            include(*archs.toTypedArray())
-            isUniversalApk = true // 额外构建一个
-        }
-    }
-    externalNativeBuild {
-        cmake {
-            path = projectDir.resolve("CMakeLists.txt")
-        }
-    }
-}
 
 val nativeBuildDir = projectDir.resolve("build-ci")
 
@@ -248,11 +225,14 @@ tasks.named("assemble") {
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, androidVariantsToPublish = listOf("release", "debug")))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    configure(
+        KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")),
+    )
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }
+
 
 tasks
     .matching { it.name.startsWith("publishDesktopPublicationTo") }
