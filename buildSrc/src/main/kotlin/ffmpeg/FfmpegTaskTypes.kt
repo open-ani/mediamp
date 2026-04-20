@@ -201,8 +201,14 @@ abstract class FfmpegBuildTask : DefaultTask() {
     @get:Input
     abstract val makeJobs: Property<Int>
 
+    @get:Input
+    abstract val hostOsName: Property<String>
+
     @get:InputDirectory
     abstract val buildDirPath: DirectoryProperty
+
+    @get:Input
+    abstract val installDirPath: Property<String>
 
     @get:OutputFile
     abstract val buildStamp: RegularFileProperty
@@ -213,12 +219,48 @@ abstract class FfmpegBuildTask : DefaultTask() {
     @TaskAction
     fun run() {
         val buildDir = buildDirPath.get().asFile
+        val installDirFile = File(installDirPath.get())
         val buildDirShellPath = buildDir.absolutePath
         execOperations.exec {
             commandLine(shell.get(), "-l", "-c", "cd '$buildDirShellPath' && make -j${makeJobs.get()} && make install")
             environment(envVars.get())
         }
+        rewritePkgConfigPaths(installDirFile, hostOsName.get(), logger)
         buildStamp.get().asFile.writeText(System.currentTimeMillis().toString())
+    }
+}
+
+private fun rewritePkgConfigPaths(
+    installDir: File,
+    hostOs: String,
+    logger: Logger,
+) {
+    if (hostOs != "Windows") return
+
+    val pkgConfigDir = installDir.resolve("lib/pkgconfig")
+    if (!pkgConfigDir.isDirectory) return
+
+    val msysPrefix = installDir.absolutePath.toMsysPath()
+    val nativePrefix = installDir.absolutePath.replace("\\", "/")
+    var rewrittenFiles = 0
+
+    pkgConfigDir.listFiles()
+        ?.filter { it.isFile && it.extension == "pc" }
+        .orEmpty()
+        .forEach { pcFile ->
+            val original = pcFile.readText()
+            val rewritten = original.replace(msysPrefix, nativePrefix)
+            if (rewritten != original) {
+                pcFile.writeText(rewritten)
+                rewrittenFiles += 1
+            }
+        }
+
+    if (rewrittenFiles > 0) {
+        logger.lifecycle(
+            "Rewrote $rewrittenFiles FFmpeg pkg-config file(s) under ${pkgConfigDir.absolutePath} " +
+                "to use native Windows paths.",
+        )
     }
 }
 
@@ -333,7 +375,7 @@ abstract class FfmpegAssembleTask : DefaultTask() {
                         buildDir = buildDirFile,
                         installDir = installDirFile,
                         outputDir = outputDirFile,
-                        msys2Dir = null,
+                        msys2Dir = msys2Dir.orNull?.asFile,
                     )
                 }
             }
@@ -389,16 +431,17 @@ private fun buildJvmJniWrapper(
         "No fftools object files found in $fftoolsDir while building $wrapperName."
     }
 
-    val shell = if (targetName == "WindowsX64") {
+    val windowsMsys = msys2Dir != null
+    val shell = if (windowsMsys) {
         msys2Dir?.resolve("usr/bin/bash.exe")?.absolutePath
-            ?: error("MSYS2 directory must be configured for Windows FFmpeg JNI wrapper build.")
+            ?: error("MSYS2 directory must be configured for FFmpeg JNI wrapper build on Windows.")
     } else {
         "bash"
     }
-    val commandWrapper = shellQuote(pathForShell(commandWrapperSource, targetName == "WindowsX64"))
-    val jniWrapper = shellQuote(pathForShell(jniWrapperSource, targetName == "WindowsX64"))
-    val outputPath = shellQuote(pathForShell(wrapperOut, targetName == "WindowsX64"))
-    val buildDirPath = shellQuote(pathForShell(buildDir, targetName == "WindowsX64"))
+    val commandWrapper = shellQuote(pathForShell(commandWrapperSource, windowsMsys))
+    val jniWrapper = shellQuote(pathForShell(jniWrapperSource, windowsMsys))
+    val outputPath = shellQuote(pathForShell(wrapperOut, windowsMsys))
+    val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys))
     val jniIncludes = jniIncludeFlags(targetName, config).joinToString(" ")
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
@@ -406,20 +449,20 @@ private fun buildJvmJniWrapper(
     )
         .distinctBy { it.absolutePath }
         .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
-        .joinToString(" ") { "-I${shellQuote(pathForShell(it, targetName == "WindowsX64"))}" }
+        .joinToString(" ") { "-I${shellQuote(pathForShell(it, windowsMsys))}" }
     val linkerMode = when {
         targetName == "WindowsX64" -> "-shared"
         targetName.startsWith("Macos") -> "-dynamiclib -Wl,-install_name,@loader_path/$wrapperName"
         else -> "-shared"
     }
     val linkLibraries = buildString {
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavdevice"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavfilter"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavformat"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavcodec"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libswresample"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libswscale"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavutil"), targetName == "WindowsX64"))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavdevice"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavfilter"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavformat"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavcodec"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libswresample"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libswscale"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavutil"), windowsMsys))} ")
         append("-lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil -lm -pthread")
         if (targetName == "WindowsX64") {
             append(" -lstdc++")
@@ -446,14 +489,14 @@ private fun buildJvmJniWrapper(
         append(' ')
         append(jniWrapper)
         append(' ')
-        append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), targetName == "WindowsX64")) })
+        append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), windowsMsys)) })
         append(' ')
         append(linkLibraries)
     }
 
     execOperations.exec {
         commandLine(shell, "-l", "-c", "cd $buildDirPath && $command")
-        if (targetName == "WindowsX64") {
+        if (windowsMsys) {
             environment("MSYSTEM", "UCRT64")
         }
     }

@@ -178,7 +178,9 @@ private fun registerFfmpegTasks(
         shell.set(target.shell)
         envVars.set(target.env)
         makeJobs.set(context.makeJobs)
+        hostOsName.set(context.hostOs.name)
         buildDirPath.set(buildDir)
+        installDirPath.set(installDir.map { it.asFile.absolutePath })
         this.buildStamp.set(buildStamp)
     }
 
