@@ -8,13 +8,6 @@
 
 package org.openani.mediamp.mpv
 
-import org.openani.mediamp.internal.Platform
-import org.openani.mediamp.internal.currentPlatform
-
-internal object LibraryLoader {
-    fun loadLibraries() {
-        if (currentPlatform() is Platform.Android) {
-            System.loadLibrary("mediampv")
-        }
-    }
+internal expect object LibraryLoader {
+    fun loadLibraries(context: Any? = null)
 }
