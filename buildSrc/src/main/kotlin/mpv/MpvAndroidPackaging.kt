@@ -1,6 +1,7 @@
 package mpv
 
 import com.android.build.api.variant.KotlinMultiplatformAndroidComponentsExtension
+import nativebuild.androidTargetName
 import org.gradle.api.DefaultTask
 import org.gradle.api.Task
 import org.gradle.api.tasks.InputDirectory
@@ -33,7 +34,7 @@ internal fun registerMpvAndroidJniPackaging(context: MpvBuildContext): TaskProvi
 
     val androidJniCopyTasks = mutableListOf<TaskProvider<out Task>>()
     context.androidAbis.forEach { abi ->
-        val targetName = context.androidTargetName(abi)
+        val targetName = androidTargetName(abi)
         val assembleTaskName = "mpvAssemble$targetName"
         if (!context.project.tasks.names.contains(assembleTaskName)) {
             context.project.logger.lifecycle(

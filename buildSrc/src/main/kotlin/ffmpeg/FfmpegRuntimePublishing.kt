@@ -2,34 +2,27 @@ package ffmpeg
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.MavenPublishBaseExtension
 import com.vanniktech.maven.publish.SourcesJar
-import org.gradle.api.Project
-import org.gradle.api.attributes.Bundling
-import org.gradle.api.attributes.Category
-import org.gradle.api.attributes.LibraryElements
-import org.gradle.api.attributes.Usage
-import org.gradle.api.attributes.java.TargetJvmEnvironment
-import org.gradle.api.component.SoftwareComponentFactory
+import configurePom
+import nativebuild.DesktopRuntimeTarget
+import nativebuild.PublishedArtifact
+import nativebuild.addCompilePomDependency
+import nativebuild.artifactSuffix
+import nativebuild.createDependencyOnlyDesktopRuntimeElements
+import nativebuild.publicationSuffix
+import nativebuild.publishDesktopRuntimeAggregator
+import nativebuild.registerCompositeDesktopRuntimeElements
+import nativebuild.wireDesktopRuntimeDependencyConstraints
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.bundling.Zip
 import org.gradle.jvm.tasks.Jar
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
-import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.register
-import org.gradle.kotlin.dsl.support.serviceOf
-import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
-import org.gradle.nativeplatform.MachineArchitecture
-import org.gradle.nativeplatform.OperatingSystemFamily
+import signAllPublicationsIfEnabled
 
 private const val APPLE_XCFRAMEWORK_ARTIFACT_ID = "mediamp-ffmpeg-runtime-ios-xcframework"
-
-internal data class PublishedArtifact(
-    val artifactNotation: Any,
-    val builtBy: Any? = null,
-)
 
 internal fun registerDesktopRuntimeJarTasks(
     context: FfmpegBuildContext,
@@ -37,16 +30,16 @@ internal fun registerDesktopRuntimeJarTasks(
     val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, PublishedArtifact>()
 
     context.desktopRuntimeTargets.forEach { target ->
-        val taskName = "ffmpegRuntimeJar${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}"
-        val assembleTaskName = "ffmpegAssemble${target.ffmpegTargetName}"
+        val taskName = "ffmpegRuntimeJar${target.publicationSuffix()}"
+        val assembleTaskName = "ffmpegAssemble${target.targetName}"
         if (context.project.tasks.names.contains(assembleTaskName)) {
-            val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/${target.ffmpegTargetName}")
+            val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/${target.targetName}")
 
             val jarTask = context.project.tasks.register<Jar>(taskName) {
                 group = "ffmpeg"
-                description = "Package FFmpeg runtime for ${target.os}-${target.arch}"
+                description = "Package FFmpeg runtime for ${target.artifactSuffix()}"
                 archiveBaseName.set("mediamp-ffmpeg-runtime")
-                archiveClassifier.set("${target.os}-${target.arch}")
+                archiveClassifier.set(target.artifactSuffix())
                 dependsOn(assembleTaskName)
 
                 from(outputDir) {
@@ -73,18 +66,18 @@ internal fun registerDesktopRuntimeJarTasks(
         }
 
         val prebuiltJar = context.project.layout.buildDirectory.file(
-            "prebuilt-runtime-jars/${target.os}-${target.arch}/mediamp-ffmpeg-runtime-${context.project.version}-${target.os}-${target.arch}.jar",
+            "prebuilt-runtime-jars/${target.artifactSuffix()}/mediamp-ffmpeg-runtime-${context.project.version}-${target.artifactSuffix()}.jar",
         ).get().asFile
         if (prebuiltJar.isFile) {
             context.project.logger.lifecycle(
-                "Using prebuilt runtime jar for ${target.os}-${target.arch}: ${prebuiltJar.absolutePath}",
+                "Using prebuilt runtime jar for ${target.artifactSuffix()}: ${prebuiltJar.absolutePath}",
             )
             runtimeJarTasks[target] = PublishedArtifact(prebuiltJar)
             return@forEach
         }
 
         context.project.logger.lifecycle(
-            "Skipping runtime publication task for ${target.os}-${target.arch}: neither $assembleTaskName nor ${prebuiltJar.absolutePath} is available.",
+            "Skipping runtime publication task for ${target.artifactSuffix()}: neither $assembleTaskName nor ${prebuiltJar.absolutePath} is available.",
         )
     }
 
@@ -138,9 +131,9 @@ internal fun configureRuntimePublishing(
 
     context.project.extensions.getByType<PublishingExtension>().publications.apply {
         desktopRuntimeJarTasks.forEach { (target, jarTask) ->
-            create<MavenPublication>("ffmpegRuntime${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}") {
+            create<MavenPublication>("ffmpegRuntime${target.publicationSuffix()}") {
                 groupId = "org.openani.mediamp"
-                artifactId = "mediamp-ffmpeg-runtime-${target.os}-${target.arch}"
+                artifactId = "mediamp-ffmpeg-runtime-${target.artifactSuffix()}"
                 version = deployVersion
 
                 artifact(jarTask.artifactNotation) {
@@ -148,7 +141,11 @@ internal fun configureRuntimePublishing(
                     jarTask.builtBy?.let { builtBy(it) }
                 }
 
-                addMainModulePomDependency(deployVersion)
+                addCompilePomDependency(
+                    groupId = "org.openani.mediamp",
+                    artifactId = "mediamp-ffmpeg",
+                    version = deployVersion,
+                )
             }
         }
 
@@ -168,211 +165,34 @@ internal fun configureRuntimePublishing(
     }
 
     desktopRuntimeJarTasks.forEach { (target, jarTask) ->
-        registerCompositeRuntimeElements(
-            context = context,
-            configurationName = "ffmpegCompositeRuntimeElements-${target.os}-${target.arch}",
-            moduleName = "mediamp-ffmpeg-runtime-${target.os}-${target.arch}",
+        context.project.registerCompositeDesktopRuntimeElements(
+            configurationName = "ffmpegCompositeRuntimeElements-${target.artifactSuffix()}",
+            moduleName = "mediamp-ffmpeg-runtime-${target.artifactSuffix()}",
             runtimeJarArtifact = jarTask,
-        ) {
-            attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
-            attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
-            attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
-            attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, context.project.objects.named<LibraryElements>(LibraryElements.JAR))
-            attributes.attribute(KotlinPlatformType.attribute, KotlinPlatformType.jvm)
-            attributes.attribute(
-                TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
-                context.project.objects.named<TargetJvmEnvironment>(TargetJvmEnvironment.STANDARD_JVM),
-            )
-            attributes.attribute(
-                OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE,
-                context.project.objects.named<OperatingSystemFamily>(
-                    when (target.os) {
-                        "linux" -> OperatingSystemFamily.LINUX
-                        "windows" -> OperatingSystemFamily.WINDOWS
-                        "macos" -> OperatingSystemFamily.MACOS
-                        else -> error("Unknown OS: ${target.os}")
-                    },
-                ),
-            )
-            attributes.attribute(
-                MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
-                context.project.objects.named<MachineArchitecture>(
-                    when (target.arch) {
-                        "x64" -> MachineArchitecture.X86_64
-                        "arm64" -> MachineArchitecture.ARM64
-                        else -> error("Unknown arch: ${target.arch}")
-                    },
-                ),
-            )
-        }
+            target = target,
+        )
     }
 
     val allRuntimeVariants = runtimeTargets.map { target ->
-        context.project.configurations.create("ffmpegRuntimeElements-${target.os}-${target.arch}").apply {
-            attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
-            attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
-            attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
-            attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, context.project.objects.named<LibraryElements>(LibraryElements.JAR))
-            attributes.attribute(KotlinPlatformType.attribute, KotlinPlatformType.jvm)
-            attributes.attribute(
-                TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
-                context.project.objects.named<TargetJvmEnvironment>(TargetJvmEnvironment.STANDARD_JVM),
-            )
-            attributes.attribute(
-                OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE,
-                context.project.objects.named<OperatingSystemFamily>(
-                    when (target.os) {
-                        "linux" -> OperatingSystemFamily.LINUX
-                        "windows" -> OperatingSystemFamily.WINDOWS
-                        "macos" -> OperatingSystemFamily.MACOS
-                        else -> error("Unknown OS: ${target.os}")
-                    },
-                ),
-            )
-            attributes.attribute(
-                MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
-                context.project.objects.named<MachineArchitecture>(
-                    when (target.arch) {
-                        "x64" -> MachineArchitecture.X86_64
-                        "arm64" -> MachineArchitecture.ARM64
-                        else -> error("Unknown arch: ${target.arch}")
-                    },
-                ),
-            )
-            dependencies.add(
-                context.project.dependencies.create(
-                    "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.os}-${target.arch}:$deployVersion",
-                ),
-            )
-        }
+        context.project.createDependencyOnlyDesktopRuntimeElements(
+            configurationName = "ffmpegRuntimeElements-${target.artifactSuffix()}",
+            dependencyNotation = "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.artifactSuffix()}:$deployVersion",
+            target = target,
+        )
     }
 
-    if (allRuntimeVariants.isNotEmpty()) {
-        val runtimeComponent = context.project.serviceOf<SoftwareComponentFactory>().adhoc("ffmpegRuntimeElements")
-        allRuntimeVariants.forEach { variant ->
-            runtimeComponent.addVariantsFromConfiguration(variant) {
-                mapToMavenScope("runtime")
-            }
-        }
+    context.project.publishDesktopRuntimeAggregator(
+        componentName = "ffmpegRuntimeElements",
+        publicationName = "ffmpegRuntime",
+        groupId = "org.openani.mediamp",
+        artifactId = "mediamp-ffmpeg-runtime",
+        version = deployVersion,
+        variantConfigurations = allRuntimeVariants,
+    )
 
-        context.project.extensions.getByType<PublishingExtension>().publications.create<MavenPublication>("ffmpegRuntime") {
-            from(runtimeComponent)
-            groupId = "org.openani.mediamp"
-            artifactId = "mediamp-ffmpeg-runtime"
-            version = deployVersion
-            pom.withXml {
-                val deps = asElement().getElementsByTagName("dependencies")
-                for (index in 0 until deps.length) {
-                    deps.item(index).parentNode.removeChild(deps.item(index))
-                }
-            }
-        }
-    }
-
-    wireDesktopRuntimeDependencyConstraints(context.project, deployVersion, runtimeTargets)
-}
-
-private fun registerCompositeRuntimeElements(
-    context: FfmpegBuildContext,
-    configurationName: String,
-    moduleName: String,
-    runtimeJarArtifact: PublishedArtifact,
-    configureAttributes: org.gradle.api.artifacts.Configuration.() -> Unit,
-) {
-    context.project.configurations.create(configurationName).apply {
-        isCanBeConsumed = true
-        isCanBeResolved = false
-        configureAttributes()
-
-        outgoing.artifact(runtimeJarArtifact.artifactNotation) {
-            runtimeJarArtifact.builtBy?.let { builtBy(it) }
-        }
-        outgoing.capability("org.openani.mediamp:$moduleName:${context.project.version}")
-    }
-}
-
-private fun MavenPublication.addMainModulePomDependency(deployVersion: String) {
-    pom.withXml {
-        asNode().appendNode("dependencies")
-            .appendNode("dependency").apply {
-                appendNode("groupId", "org.openani.mediamp")
-                appendNode("artifactId", "mediamp-ffmpeg")
-                appendNode("version", "[$deployVersion]")
-                appendNode("scope", "compile")
-            }
-    }
-}
-
-private fun wireDesktopRuntimeDependencyConstraints(
-    project: Project,
-    deployVersion: String,
-    runtimeTargets: List<DesktopRuntimeTarget>,
-) {
-    val desktopPlatformRuntimeNotations = runtimeTargets.map { target ->
-        "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.os}-${target.arch}:$deployVersion"
-    }
-
-    project.afterEvaluate {
-        listOf("desktopApiElements", "desktopRuntimeElements").forEach { configName ->
-            configurations.findByName(configName)?.let { config ->
-                desktopPlatformRuntimeNotations.forEach { notation ->
-                    config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
-                }
-            }
-        }
-    }
-}
-
-private fun MavenPublishBaseExtension.signAllPublicationsIfEnabled(project: Project) {
-    if (project.findProperty("mediamp.sign.publications.disabled")?.toString()?.toBoolean() == true) return
-    if (!project.hasSigningCredentials()) {
-        project.logger.lifecycle("Skipping publication signing: no Gradle signing credentials are configured.")
-        return
-    }
-    signAllPublications()
-}
-
-private fun Project.hasSigningCredentials(): Boolean {
-    fun prop(name: String): String? = findProperty(name)?.toString()?.takeIf { it.isNotBlank() }
-
-    val inMemoryKey = prop("signingInMemoryKey")
-    val inMemoryPassword = prop("signingInMemoryKeyPassword")
-    val legacyKey = prop("signingKey")
-    val legacyPassword = prop("signingPassword")
-    val keyRing = prop("signing.secretKeyRingFile")
-    val signingPassword = prop("signing.password")
-
-    return (inMemoryKey != null && inMemoryPassword != null) ||
-        (legacyKey != null && legacyPassword != null) ||
-        (keyRing != null && signingPassword != null)
-}
-
-private fun MavenPublishBaseExtension.configurePom(project: Project) {
-    pom {
-        name.set(project.name)
-        description.set(project.description)
-        url.set("https://github.com/open-ani/mediamp")
-
-        licenses {
-            license {
-                name.set("GNU General Public License, Version 3")
-                url.set("https://github.com/open-ani/mediamp/blob/main/LICENSE")
-                distribution.set("https://www.gnu.org/licenses/gpl-3.0.txt")
-            }
-        }
-
-        developers {
-            developer {
-                id.set("openani")
-                name.set("OpenAni and contributors")
-                email.set("support@openani.org")
-            }
-        }
-
-        scm {
-            connection.set("scm:git:https://github.com/open-ani/mediamp.git")
-            developerConnection.set("scm:git:git@github.com:open-ani/mediamp.git")
-            url.set("https://github.com/open-ani/mediamp")
-        }
-    }
+    context.project.wireDesktopRuntimeDependencyConstraints(
+        runtimeTargets.map { target ->
+            "org.openani.mediamp:mediamp-ffmpeg-runtime-${target.artifactSuffix()}:$deployVersion"
+        },
+    )
 }

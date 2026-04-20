@@ -1,7 +1,10 @@
 package mpv
 
-import ffmpeg.pathForShell
-import ffmpeg.shellQuote
+import nativebuild.copyTreePreservingLinks
+import nativebuild.jniIncludeFlags
+import nativebuild.pathForShell
+import nativebuild.shellQuote
+import nativebuild.shellScriptWithExports
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -21,38 +24,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.nio.file.StandardCopyOption
 import javax.inject.Inject
-
-abstract class PrepareMpvSourceTask : DefaultTask() {
-    @get:InputDirectory
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val sourceDir: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val outputDir: DirectoryProperty
-
-    init {
-        outputs.upToDateWhen {
-            val preparedDir = outputDir.orNull?.asFile
-            preparedDir?.isDirectory == true && preparedDir.resolve("meson.build").isFile
-        }
-    }
-
-    @TaskAction
-    fun run() {
-        val src = sourceDir.get().asFile
-        val dst = outputDir.get().asFile
-        require(src.resolve("meson.build").isFile) {
-            "mpv source tree is missing meson.build at ${src.absolutePath}"
-        }
-        dst.deleteRecursively()
-        copyTreePreservingLinks(src, dst)
-        logger.lifecycle("Prepared mpv source from ${src.absolutePath} to ${dst.absolutePath}")
-    }
-}
 
 abstract class MpvConfigureTask : DefaultTask() {
     @get:InputDirectory
@@ -433,21 +405,6 @@ abstract class MpvJniBuildTask : DefaultTask() {
     }
 }
 
-private fun shellScriptWithExports(
-    env: Map<String, String>,
-    command: String,
-): String = buildString {
-    append("set -e\n")
-    env.forEach { (key, value) ->
-        append("export ")
-        append(key)
-        append("=")
-        append(shellQuote(value))
-        append('\n')
-    }
-    append(command)
-}
-
 abstract class MpvAssembleTask : DefaultTask() {
     @get:Input
     abstract val targetName: Property<String>
@@ -524,42 +481,6 @@ abstract class MpvAssembleTask : DefaultTask() {
             ffmpegInstallDir = ffmpegPrefix,
             outputDir = outputPrefix,
         )
-    }
-}
-
-private fun copyTreePreservingLinks(source: File, target: File) {
-    if (!source.exists()) return
-    Files.walk(source.toPath()).forEach { srcPath ->
-        val relative = source.toPath().relativize(srcPath)
-        val dstPath = target.toPath().resolve(relative.toString())
-
-        when {
-            Files.isSymbolicLink(srcPath) -> {
-                Files.createDirectories(dstPath.parent)
-                val linkTarget = Files.readSymbolicLink(srcPath)
-                runCatching {
-                    Files.deleteIfExists(dstPath)
-                    Files.createSymbolicLink(dstPath, linkTarget)
-                }.getOrElse {
-                    val realSource = srcPath.toRealPath()
-                    Files.copy(realSource, dstPath, StandardCopyOption.REPLACE_EXISTING)
-                }
-            }
-
-            Files.isDirectory(srcPath, LinkOption.NOFOLLOW_LINKS) -> {
-                Files.createDirectories(dstPath)
-            }
-
-            else -> {
-                Files.createDirectories(dstPath.parent)
-                Files.copy(
-                    srcPath,
-                    dstPath,
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.COPY_ATTRIBUTES,
-                )
-            }
-        }
     }
 }
 
@@ -673,24 +594,6 @@ private fun rewriteAppleInstallNames(
             }
         }
     }
-}
-
-private fun jniIncludeFlags(targetName: String, windowsMsys: Boolean): List<String> {
-    val javaHome = System.getenv("JAVA_HOME")
-        ?.takeIf { it.isNotBlank() }
-        ?.let(::File)
-        ?: File(System.getProperty("java.home"))
-    val includeDir = javaHome.resolve("include")
-    val platformDir = includeDir.resolve(
-        when {
-            targetName == "WindowsX64" -> "win32"
-            targetName.startsWith("Macos") -> "darwin"
-            else -> "linux"
-        },
-    )
-    return listOf(includeDir, platformDir)
-        .onEach { require(it.isDirectory) { "JNI include directory not found at ${it.absolutePath}" } }
-        .map { "-I${pathForShell(it, windowsMsys)}" }
 }
 
 private fun locateLinkLibrary(

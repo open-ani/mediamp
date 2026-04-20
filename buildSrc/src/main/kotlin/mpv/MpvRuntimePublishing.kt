@@ -1,28 +1,20 @@
 package mpv
 
-import org.gradle.api.Project
-import org.gradle.api.attributes.Bundling
-import org.gradle.api.attributes.Category
-import org.gradle.api.attributes.LibraryElements
-import org.gradle.api.attributes.Usage
-import org.gradle.api.attributes.java.TargetJvmEnvironment
-import org.gradle.api.component.SoftwareComponentFactory
+import nativebuild.DesktopRuntimeTarget
+import nativebuild.PublishedArtifact
+import nativebuild.addCompilePomDependency
+import nativebuild.artifactSuffix
+import nativebuild.createDependencyOnlyDesktopRuntimeElements
+import nativebuild.publicationSuffix
+import nativebuild.publishDesktopRuntimeAggregator
+import nativebuild.registerCompositeDesktopRuntimeElements
+import nativebuild.wireDesktopRuntimeDependencyConstraints
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.jvm.tasks.Jar
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
-import org.gradle.kotlin.dsl.named
 import org.gradle.kotlin.dsl.register
-import org.gradle.kotlin.dsl.support.serviceOf
-import org.gradle.nativeplatform.MachineArchitecture
-import org.gradle.nativeplatform.OperatingSystemFamily
-import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
-
-internal data class PublishedArtifact(
-    val artifactNotation: Any,
-    val builtBy: Any? = null,
-)
 
 internal fun registerDesktopRuntimeJarTasks(
     context: MpvBuildContext,
@@ -30,16 +22,16 @@ internal fun registerDesktopRuntimeJarTasks(
     val runtimeJarTasks = linkedMapOf<DesktopRuntimeTarget, PublishedArtifact>()
 
     context.desktopRuntimeTargets.forEach { target ->
-        val taskName = "mpvRuntimeJar${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}"
-        val assembleTaskName = "mpvAssemble${target.mpvTargetName}"
+        val taskName = "mpvRuntimeJar${target.publicationSuffix()}"
+        val assembleTaskName = "mpvAssemble${target.targetName}"
         if (context.project.tasks.names.contains(assembleTaskName)) {
-            val outputDir = context.project.layout.buildDirectory.dir("mpv-output/${target.mpvTargetName}")
+            val outputDir = context.project.layout.buildDirectory.dir("mpv-output/${target.targetName}")
 
             val jarTask = context.project.tasks.register<Jar>(taskName) {
                 group = "mpv"
-                description = "Package mpv runtime for ${target.os}-${target.arch}"
+                description = "Package mpv runtime for ${target.artifactSuffix()}"
                 archiveBaseName.set("mediamp-mpv-runtime")
-                archiveClassifier.set("${target.os}-${target.arch}")
+                archiveClassifier.set(target.artifactSuffix())
                 dependsOn(assembleTaskName)
 
                 when (target.os) {
@@ -79,18 +71,18 @@ internal fun registerDesktopRuntimeJarTasks(
         }
 
         val prebuiltJar = context.project.layout.buildDirectory.file(
-            "prebuilt-runtime-jars/${target.os}-${target.arch}/mediamp-mpv-runtime-${context.project.version}-${target.os}-${target.arch}.jar",
+            "prebuilt-runtime-jars/${target.artifactSuffix()}/mediamp-mpv-runtime-${context.project.version}-${target.artifactSuffix()}.jar",
         ).get().asFile
         if (prebuiltJar.isFile) {
             context.project.logger.lifecycle(
-                "Using prebuilt mpv runtime jar for ${target.os}-${target.arch}: ${prebuiltJar.absolutePath}",
+                "Using prebuilt mpv runtime jar for ${target.artifactSuffix()}: ${prebuiltJar.absolutePath}",
             )
             runtimeJarTasks[target] = PublishedArtifact(prebuiltJar)
             return@forEach
         }
 
         context.project.logger.lifecycle(
-            "Skipping mpv runtime publication task for ${target.os}-${target.arch}: neither $assembleTaskName nor ${prebuiltJar.absolutePath} is available.",
+            "Skipping mpv runtime publication task for ${target.artifactSuffix()}: neither $assembleTaskName nor ${prebuiltJar.absolutePath} is available.",
         )
     }
 
@@ -106,9 +98,9 @@ internal fun configureRuntimePublishing(
 
     context.project.extensions.getByType<PublishingExtension>().publications.apply {
         desktopRuntimeJarTasks.forEach { (target, jarTask) ->
-            create<MavenPublication>("mpvRuntime${target.os.replaceFirstChar { it.uppercase() }}${target.arch.replaceFirstChar { it.uppercase() }}") {
+            create<MavenPublication>("mpvRuntime${target.publicationSuffix()}") {
                 groupId = "org.openani.mediamp"
-                artifactId = "mediamp-mpv-runtime-${target.os}-${target.arch}"
+                artifactId = "mediamp-mpv-runtime-${target.artifactSuffix()}"
                 version = deployVersion
 
                 artifact(jarTask.artifactNotation) {
@@ -116,114 +108,46 @@ internal fun configureRuntimePublishing(
                     jarTask.builtBy?.let { builtBy(it) }
                 }
 
-                addMainModulePomDependency(deployVersion)
+                addCompilePomDependency(
+                    groupId = "org.openani.mediamp",
+                    artifactId = "mediamp-mpv",
+                    version = deployVersion,
+                )
             }
         }
     }
 
     desktopRuntimeJarTasks.forEach { (target, jarTask) ->
-        registerCompositeRuntimeElements(
-            context = context,
-            configurationName = "mpvCompositeRuntimeElements-${target.os}-${target.arch}",
-            moduleName = "mediamp-mpv-runtime-${target.os}-${target.arch}",
+        context.project.registerCompositeDesktopRuntimeElements(
+            configurationName = "mpvCompositeRuntimeElements-${target.artifactSuffix()}",
+            moduleName = "mediamp-mpv-runtime-${target.artifactSuffix()}",
             runtimeJarArtifact = jarTask,
-        ) {
-            attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
-            attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
-            attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
-            attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, context.project.objects.named<LibraryElements>(LibraryElements.JAR))
-            attributes.attribute(KotlinPlatformType.attribute, KotlinPlatformType.jvm)
-            attributes.attribute(
-                TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
-                context.project.objects.named<TargetJvmEnvironment>(TargetJvmEnvironment.STANDARD_JVM),
-            )
-            attributes.attribute(
-                OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE,
-                context.project.objects.named<OperatingSystemFamily>(
-                    when (target.os) {
-                        "linux" -> OperatingSystemFamily.LINUX
-                        "windows" -> OperatingSystemFamily.WINDOWS
-                        "macos" -> OperatingSystemFamily.MACOS
-                        else -> error("Unknown OS: ${target.os}")
-                    },
-                ),
-            )
-            attributes.attribute(
-                MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
-                context.project.objects.named<MachineArchitecture>(
-                    when (target.arch) {
-                        "x64" -> MachineArchitecture.X86_64
-                        "arm64" -> MachineArchitecture.ARM64
-                        else -> error("Unknown arch: ${target.arch}")
-                    },
-                ),
-            )
-        }
+            target = target,
+        )
     }
 
     val allRuntimeVariants = runtimeTargets.map { target ->
-        context.project.configurations.create("mpvRuntimeElements-${target.os}-${target.arch}").apply {
-            attributes.attribute(Usage.USAGE_ATTRIBUTE, context.project.objects.named<Usage>(Usage.JAVA_RUNTIME))
-            attributes.attribute(Category.CATEGORY_ATTRIBUTE, context.project.objects.named<Category>(Category.LIBRARY))
-            attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, context.project.objects.named<Bundling>(Bundling.EXTERNAL))
-            attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, context.project.objects.named<LibraryElements>(LibraryElements.JAR))
-            attributes.attribute(KotlinPlatformType.attribute, KotlinPlatformType.jvm)
-            attributes.attribute(
-                TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
-                context.project.objects.named<TargetJvmEnvironment>(TargetJvmEnvironment.STANDARD_JVM),
-            )
-            attributes.attribute(
-                OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE,
-                context.project.objects.named<OperatingSystemFamily>(
-                    when (target.os) {
-                        "linux" -> OperatingSystemFamily.LINUX
-                        "windows" -> OperatingSystemFamily.WINDOWS
-                        "macos" -> OperatingSystemFamily.MACOS
-                        else -> error("Unknown OS: ${target.os}")
-                    },
-                ),
-            )
-            attributes.attribute(
-                MachineArchitecture.ARCHITECTURE_ATTRIBUTE,
-                context.project.objects.named<MachineArchitecture>(
-                    when (target.arch) {
-                        "x64" -> MachineArchitecture.X86_64
-                        "arm64" -> MachineArchitecture.ARM64
-                        else -> error("Unknown arch: ${target.arch}")
-                    },
-                ),
-            )
-            dependencies.add(
-                context.project.dependencies.create(
-                    "org.openani.mediamp:mediamp-mpv-runtime-${target.os}-${target.arch}:$deployVersion",
-                ),
-            )
-        }
+        context.project.createDependencyOnlyDesktopRuntimeElements(
+            configurationName = "mpvRuntimeElements-${target.artifactSuffix()}",
+            dependencyNotation = "org.openani.mediamp:mediamp-mpv-runtime-${target.artifactSuffix()}:$deployVersion",
+            target = target,
+        )
     }
 
-    if (allRuntimeVariants.isNotEmpty()) {
-        val runtimeComponent = context.project.serviceOf<SoftwareComponentFactory>().adhoc("mpvRuntimeElements")
-        allRuntimeVariants.forEach { variant ->
-            runtimeComponent.addVariantsFromConfiguration(variant) {
-                mapToMavenScope("runtime")
-            }
-        }
+    context.project.publishDesktopRuntimeAggregator(
+        componentName = "mpvRuntimeElements",
+        publicationName = "mpvRuntime",
+        groupId = "org.openani.mediamp",
+        artifactId = "mediamp-mpv-runtime",
+        version = deployVersion,
+        variantConfigurations = allRuntimeVariants,
+    )
 
-        context.project.extensions.getByType<PublishingExtension>().publications.create<MavenPublication>("mpvRuntime") {
-            from(runtimeComponent)
-            groupId = "org.openani.mediamp"
-            artifactId = "mediamp-mpv-runtime"
-            version = deployVersion
-            pom.withXml {
-                val deps = asElement().getElementsByTagName("dependencies")
-                for (index in 0 until deps.length) {
-                    deps.item(index).parentNode.removeChild(deps.item(index))
-                }
-            }
-        }
-    }
-
-    wireDesktopRuntimeDependencyConstraints(context.project, deployVersion, runtimeTargets)
+    context.project.wireDesktopRuntimeDependencyConstraints(
+        runtimeTargets.map { target ->
+            "org.openani.mediamp:mediamp-mpv-runtime-${target.artifactSuffix()}:$deployVersion"
+        },
+    )
 }
 
 private fun runtimeManifestEntries(
@@ -247,54 +171,3 @@ private fun runtimeManifestEntries(
 
     else -> error("Unknown desktop runtime OS: ${target.os}")
 }.sorted()
-
-private fun registerCompositeRuntimeElements(
-    context: MpvBuildContext,
-    configurationName: String,
-    moduleName: String,
-    runtimeJarArtifact: PublishedArtifact,
-    configureAttributes: org.gradle.api.artifacts.Configuration.() -> Unit,
-) {
-    context.project.configurations.create(configurationName).apply {
-        isCanBeConsumed = true
-        isCanBeResolved = false
-        configureAttributes()
-
-        outgoing.artifact(runtimeJarArtifact.artifactNotation) {
-            runtimeJarArtifact.builtBy?.let { builtBy(it) }
-        }
-        outgoing.capability("org.openani.mediamp:$moduleName:${context.project.version}")
-    }
-}
-
-private fun MavenPublication.addMainModulePomDependency(deployVersion: String) {
-    pom.withXml {
-        asNode().appendNode("dependencies")
-            .appendNode("dependency").apply {
-                appendNode("groupId", "org.openani.mediamp")
-                appendNode("artifactId", "mediamp-mpv")
-                appendNode("version", "[$deployVersion]")
-                appendNode("scope", "compile")
-            }
-    }
-}
-
-private fun wireDesktopRuntimeDependencyConstraints(
-    project: Project,
-    deployVersion: String,
-    runtimeTargets: List<DesktopRuntimeTarget>,
-) {
-    val desktopPlatformRuntimeNotations = runtimeTargets.map { target ->
-        "org.openani.mediamp:mediamp-mpv-runtime-${target.os}-${target.arch}:$deployVersion"
-    }
-
-    project.afterEvaluate {
-        listOf("desktopApiElements", "desktopRuntimeElements").forEach { configName ->
-            configurations.findByName(configName)?.let { config ->
-                desktopPlatformRuntimeNotations.forEach { notation ->
-                    config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
-                }
-            }
-        }
-    }
-}

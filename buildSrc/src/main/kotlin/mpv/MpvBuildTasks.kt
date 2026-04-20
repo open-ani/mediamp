@@ -2,8 +2,11 @@ package mpv
 
 import Arch
 import Os
-import ffmpeg.pathForShell
 import getPropertyOrNull
+import nativebuild.PrepareSourceTreeTask
+import nativebuild.pathForShell
+import nativebuild.resolveNdkDir
+import nativebuild.resolveMsys2Dir
 import org.gradle.api.Task
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
@@ -12,11 +15,14 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
     val project = context.project
     val sourceTemplateDir = project.layout.buildDirectory.dir("mpv-source-template")
 
-    val sourceTemplateTask = project.tasks.register<PrepareMpvSourceTask>("prepareMpvSourceTemplate") {
+    val sourceTemplateTask = project.tasks.register<PrepareSourceTreeTask>("prepareMpvSourceTemplate") {
         group = "mpv"
         description = "Create a stable mpv source snapshot for this build"
         sourceDir.set(context.mpvSrcDir)
         outputDir.set(sourceTemplateDir)
+        markerFileRelativePath.set("meson.build")
+        sourceDisplayName.set("mpv")
+        preserveSymbolicLinks.set(true)
     }
 
     var previousTargetTask: TaskProvider<out Task>? = null
@@ -64,7 +70,7 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
 
 private fun registerAndroidTargetsIfAvailable(
     context: MpvBuildContext,
-    sourceTemplateTask: TaskProvider<PrepareMpvSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     sourceTemplateDirProvider: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
@@ -73,7 +79,7 @@ private fun registerAndroidTargetsIfAvailable(
         return previousTargetTask
     }
 
-    val ndkAvailable = runCatching { context.resolveNdkDir() }.isSuccess
+    val ndkAvailable = runCatching { context.project.resolveNdkDir() }.isSuccess
     if (!ndkAvailable) {
         context.project.logger.warn("Android NDK not found – skipping Android mpv targets. Set ndk.dir or ANDROID_NDK_HOME to enable.")
         return previousTargetTask
@@ -89,7 +95,7 @@ private fun registerAndroidTargetsIfAvailable(
 private fun registerMpvTasks(
     context: MpvBuildContext,
     target: MpvBuildTarget,
-    sourceTemplateTask: TaskProvider<PrepareMpvSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     sourceTemplateDirProvider: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
@@ -108,7 +114,7 @@ private fun registerMpvTasks(
         )
         return previousTargetTask
     }
-    val msys2Dir = if (context.hostOs == Os.Windows) context.resolveMsys2Dir() else null
+    val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
 
     val configureTask = project.tasks.register<MpvConfigureTask>("mpvConfigure${target.name}") {
         group = "mpv"

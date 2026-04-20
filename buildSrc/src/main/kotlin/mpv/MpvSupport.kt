@@ -2,11 +2,21 @@ package mpv
 
 import Arch
 import Os
-import ffmpeg.AndroidAbi
-import ffmpeg.toMsysPath
 import getArch
 import getOs
 import getPropertyOrNull
+import nativebuild.AndroidAbi
+import nativebuild.DEFAULT_ANDROID_ABIS
+import nativebuild.DEFAULT_DESKTOP_RUNTIME_TARGETS
+import nativebuild.DesktopRuntimeTarget
+import nativebuild.androidNdkHostTag
+import nativebuild.androidTargetName
+import nativebuild.includesBuildVariant
+import nativebuild.resolveAndroidAbis
+import nativebuild.resolveEnabledBuildVariantFamilies
+import nativebuild.resolveMsys2Dir
+import nativebuild.resolveNdkDir
+import nativebuild.toMsysPath
 import org.gradle.api.Project
 import java.io.File
 import java.util.Locale
@@ -22,12 +32,6 @@ internal data class MpvBuildTarget(
     val wrapDependencies: List<String> = emptyList(),
     val wrapFiles: Map<String, String> = emptyMap(),
     val msys2Packages: List<String> = emptyList(),
-)
-
-internal data class DesktopRuntimeTarget(
-    val os: String,
-    val arch: String,
-    val mpvTargetName: String,
 )
 
 internal data class AndroidToolchain(
@@ -57,49 +61,19 @@ internal class MpvBuildContext(
     val hostArch: Arch = getArch()
 
     val enabledBuildVariantFamilies: Set<String> =
-        project.getPropertyOrNull("mediamp.mpv.buildvariant")
-            ?.split(",")
-            ?.map { it.trim().lowercase(Locale.getDefault()) }
-            ?.filter { it.isNotEmpty() }
-            ?.toSet()
-            ?.also { selected ->
-                val unknown = selected - ALL_BUILD_VARIANT_FAMILIES
-                require(unknown.isEmpty()) {
-                    "Unknown values in mediamp.mpv.buildvariant: ${unknown.joinToString()}. " +
-                        "Supported values: ${ALL_BUILD_VARIANT_FAMILIES.joinToString()}."
-                }
-            }
-            ?: ALL_BUILD_VARIANT_FAMILIES
+        project.resolveEnabledBuildVariantFamilies("mediamp.mpv.buildvariant", ALL_BUILD_VARIANT_FAMILIES)
 
     val mesonBuildType: String =
         project.getPropertyOrNull("mediamp.mpv.buildtype")?.trim()?.takeIf { it.isNotEmpty() } ?: "release"
 
-    private val allAndroidAbis: List<AndroidAbi> = listOf(
-        AndroidAbi("armeabi-v7a", "arm", "armv7a-linux-androideabi", 21),
-        AndroidAbi("arm64-v8a", "aarch64", "aarch64-linux-android", 21),
-        AndroidAbi("x86", "x86", "i686-linux-android", 21),
-        AndroidAbi("x86_64", "x86_64", "x86_64-linux-android", 21),
-    )
-
     val androidAbis: List<AndroidAbi> =
-        project.getPropertyOrNull("mediamp.mpv.androidabis")
-            ?.split(",")
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?.let(::resolveAndroidAbis)
-            ?: project.getPropertyOrNull("mediamp.ffmpeg.androidabis")
-                ?.split(",")
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                ?.let(::resolveAndroidAbis)
-            ?: allAndroidAbis
+        project.resolveAndroidAbis(
+            propertyName = "mediamp.mpv.androidabis",
+            fallbackPropertyName = "mediamp.ffmpeg.androidabis",
+            availableAbis = DEFAULT_ANDROID_ABIS,
+        )
 
-    val desktopRuntimeTargets: List<DesktopRuntimeTarget> = listOf(
-        DesktopRuntimeTarget("windows", "x64", "WindowsX64"),
-        DesktopRuntimeTarget("linux", "x64", "LinuxX64"),
-        DesktopRuntimeTarget("macos", "arm64", "MacosArm64"),
-        DesktopRuntimeTarget("macos", "x64", "MacosX64"),
-    )
+    val desktopRuntimeTargets: List<DesktopRuntimeTarget> = DEFAULT_DESKTOP_RUNTIME_TARGETS
 
     val commonMesonOptions: List<String> = buildList {
         add("-Dlibmpv=true")
@@ -153,7 +127,7 @@ internal class MpvBuildContext(
     }
 
     fun isBuildVariantEnabled(family: String): Boolean =
-        family.lowercase(Locale.getDefault()) in enabledBuildVariantFamilies
+        enabledBuildVariantFamilies.includesBuildVariant(family)
 
     fun hostDesktopTargetName(): String? = when (hostOs) {
         Os.Windows -> "WindowsX64"
@@ -171,10 +145,8 @@ internal class MpvBuildContext(
 
     fun ffmpegAssembleTaskName(targetName: String): String = "ffmpegAssemble$targetName"
 
-    fun androidTargetName(abi: AndroidAbi): String = "Android${abi.abi.replace("-", "")}"
-
     fun windowsTarget(): MpvBuildTarget {
-        val msysShell = resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath
+        val msysShell = project.resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath
         return MpvBuildTarget(
             name = "WindowsX64",
             family = "windows",
@@ -269,7 +241,7 @@ internal class MpvBuildContext(
             family = "android",
             ffmpegTargetName = androidTargetName(abi),
             androidAbi = abi,
-            shell = if (hostOs == Os.Windows) resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath else "bash",
+            shell = if (hostOs == Os.Windows) project.resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath else "bash",
             env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
             wrapDependencies = listOf(
                 "expat",
@@ -316,47 +288,9 @@ internal class MpvBuildContext(
         )
     }
 
-    fun resolveNdkDir(): File {
-        val explicit = project.getPropertyOrNull("ndk.dir")
-            ?: project.getPropertyOrNull("ANDROID_NDK_HOME")
-            ?: System.getenv("ANDROID_NDK_HOME")
-        if (explicit != null) {
-            return project.file(explicit).also {
-                require(it.isDirectory) { "Android NDK not found at '$explicit'." }
-            }
-        }
-
-        val sdkDir = project.getPropertyOrNull("sdk.dir")
-            ?: project.getPropertyOrNull("ANDROID_HOME")
-            ?: project.getPropertyOrNull("ANDROID_SDK_ROOT")
-            ?: System.getenv("ANDROID_HOME")
-            ?: System.getenv("ANDROID_SDK_ROOT")
-            ?: error("Android SDK/NDK not found. Set ndk.dir or ANDROID_NDK_HOME.")
-        val ndkRoot = project.file(sdkDir).resolve("ndk")
-        require(ndkRoot.isDirectory) {
-            "Android NDK directory not found under '$sdkDir/ndk'. Set ndk.dir or ANDROID_NDK_HOME."
-        }
-        val versions = ndkRoot.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name }.orEmpty()
-        return versions.firstOrNull() ?: error("No Android NDK versions found under '$ndkRoot'.")
-    }
-
-    fun resolveMsys2Dir(): File {
-        val path = project.getPropertyOrNull("msys2.dir") ?: "C:\\msys64"
-        val dir = project.file(path)
-        require(dir.isDirectory) {
-            "MSYS2 directory not found at '$path'. Set Gradle property msys2.dir to your MSYS2 installation root."
-        }
-        return dir
-    }
-
     fun androidToolchain(abi: AndroidAbi): AndroidToolchain {
-        val ndkDir = resolveNdkDir()
-        val hostTag = when (hostOs) {
-            Os.Windows -> "windows-x86_64"
-            Os.Linux -> "linux-x86_64"
-            Os.MacOS -> "darwin-x86_64"
-            Os.Unknown -> error("Unsupported host OS for Android mpv builds")
-        }
+        val ndkDir = project.resolveNdkDir()
+        val hostTag = androidNdkHostTag(hostOs)
 
         val binDir = ndkDir.resolve("toolchains/llvm/prebuilt/$hostTag/bin")
         require(binDir.isDirectory) {
@@ -478,16 +412,6 @@ internal class MpvBuildContext(
             cpu = '${toolchain.cpu}'
             endian = 'little'
         """.trimIndent()
-    }
-
-    private fun resolveAndroidAbis(selected: List<String>): List<AndroidAbi> {
-        val byAbi = allAndroidAbis.associateBy(AndroidAbi::abi)
-        val unknown = selected.filterNot(byAbi::containsKey)
-        require(unknown.isEmpty()) {
-            "Unknown values in mediamp.mpv.androidabis: ${unknown.joinToString()}. " +
-                "Supported values: ${allAndroidAbis.joinToString { it.abi }}."
-        }
-        return selected.map { byAbi.getValue(it) }
     }
 
     private fun macosTarget(
