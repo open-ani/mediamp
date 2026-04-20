@@ -449,6 +449,8 @@ internal class MpvBuildContext(
             }
 
         val ffmpegPkgConfigDir = ffmpegInstallDir(androidTargetName(abi)).resolve("lib/pkgconfig")
+        val sysrootFlag = "--sysroot=${mesonPath(toolchain.sysroot)}"
+
         return """
             [binaries]
             c = ${shellArray(toolchain.cc, toolchain.ccArgs)}
@@ -461,11 +463,12 @@ internal class MpvBuildContext(
             ranlib = '${mesonPath(toolchain.ranlib)}'
 
             [built-in options]
-            c_args = ['-fPIC']
-            cpp_args = ['-fPIC']
+            c_args = ['-fPIC', '$sysrootFlag']
+            cpp_args = ['-fPIC', '$sysrootFlag']
+            c_link_args = ['$sysrootFlag']
+            cpp_link_args = ['$sysrootFlag']
 
             [properties]
-            sys_root = '${mesonPath(toolchain.sysroot)}'
             pkg_config_libdir = ['${mesonPath(ffmpegPkgConfigDir)}']
             needs_exe_wrapper = true
 
