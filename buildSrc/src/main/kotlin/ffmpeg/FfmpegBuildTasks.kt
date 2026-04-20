@@ -10,6 +10,10 @@ package ffmpeg
 
 import Arch
 import Os
+import nativebuild.PrepareSourceTreeTask
+import nativebuild.resolveNdkDir
+import nativebuild.resolveMsys2Dir
+import nativebuild.toMsysPath
 import org.gradle.api.GradleException
 import org.gradle.api.Task
 import org.gradle.api.tasks.Exec
@@ -39,13 +43,16 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
         workingDir = context.ffmpegSrcDir
     }
 
-    val sourceTemplateTask = project.tasks.register<PrepareFfmpegSourceTask>("prepareFfmpegSourceTemplate") {
+    val sourceTemplateTask = project.tasks.register<PrepareSourceTreeTask>("prepareFfmpegSourceTemplate") {
         group = "ffmpeg"
         description = "Create a stable FFmpeg source snapshot for this build"
         dependsOn(applyPatchesTask)
         finalizedBy(revertPatchesTask)
         sourceDir.set(context.ffmpegSrcDir)
         outputDir.set(sourceTemplateDir)
+        markerFileRelativePath.set("configure")
+        sourceDisplayName.set("FFmpeg")
+        preserveExecutablePermissions.set(true)
     }
     var previousTargetTask: TaskProvider<out Task>? = null
     when (context.hostOs) {
@@ -117,7 +124,7 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
 
 private fun registerAndroidTargetsIfAvailable(
     context: FfmpegBuildContext,
-    sourceTemplateTask: TaskProvider<PrepareFfmpegSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     templateSnapshotDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
@@ -126,7 +133,7 @@ private fun registerAndroidTargetsIfAvailable(
         return previousTargetTask
     }
 
-    val ndkAvailable = runCatching { context.resolveNdkDir() }.isSuccess
+    val ndkAvailable = runCatching { context.project.resolveNdkDir() }.isSuccess
     if (!ndkAvailable) {
         context.project.logger.warn("Android NDK not found – skipping Android FFmpeg targets. Set ndk.dir or ANDROID_NDK_HOME to enable.")
         return previousTargetTask
@@ -142,7 +149,7 @@ private fun registerAndroidTargetsIfAvailable(
 private fun registerFfmpegTasks(
     context: FfmpegBuildContext,
     target: FfmpegBuildTarget,
-    sourceTemplateTask: TaskProvider<PrepareFfmpegSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     templateSnapshotDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task> {
@@ -151,7 +158,7 @@ private fun registerFfmpegTasks(
     val installDir = project.layout.buildDirectory.dir("ffmpeg/${target.name}/install")
     val configStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.config_stamp")
     val buildStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.build_stamp")
-    val msys2Dir = if (context.hostOs == Os.Windows) context.resolveMsys2Dir() else null
+    val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
 
     val configureTask = project.tasks.register<FfmpegConfigureTask>("ffmpegConfigure${target.name}") {
         group = "ffmpeg"
@@ -178,7 +185,9 @@ private fun registerFfmpegTasks(
         shell.set(target.shell)
         envVars.set(target.env)
         makeJobs.set(context.makeJobs)
+        hostOsName.set(context.hostOs.name)
         buildDirPath.set(buildDir)
+        installDirPath.set(installDir.map { it.asFile.absolutePath })
         this.buildStamp.set(buildStamp)
     }
 
@@ -251,22 +260,4 @@ private fun registerAppleXcframeworkTask(context: FfmpegBuildContext) {
             project.layout.buildDirectory.dir("apple-xcframework/${context.appleFrameworkName}.xcframework"),
         )
     }
-}
-
-internal fun restoreExecutablePermissions(sourceDir: File, targetDir: File) {
-    sourceDir.walkTopDown()
-        .filter { src ->
-            src.isFile && (
-                src.canExecute() ||
-                    src.name == "configure" ||
-                    src.extension == "sh"
-                )
-        }
-        .forEach { src ->
-            val relative = src.relativeTo(sourceDir)
-            val target = targetDir.resolve(relative.path)
-            if (target.exists()) {
-                target.setExecutable(true)
-            }
-        }
 }

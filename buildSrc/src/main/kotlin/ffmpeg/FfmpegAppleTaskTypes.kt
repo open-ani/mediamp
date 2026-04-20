@@ -8,6 +8,8 @@
 
 package ffmpeg
 
+import nativebuild.pathForShell
+import nativebuild.shellQuote
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty

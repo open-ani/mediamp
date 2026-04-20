@@ -1,5 +1,11 @@
 package ffmpeg
 
+import nativebuild.copyTreeRecursively
+import nativebuild.jniIncludeFlags
+import nativebuild.pathForShell
+import nativebuild.restoreExecutablePermissions
+import nativebuild.shellQuote
+import nativebuild.toMsysPath
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
@@ -20,49 +26,6 @@ import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
-
-abstract class PrepareFfmpegSourceTask : DefaultTask() {
-    @get:InputDirectory
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val sourceDir: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val outputDir: DirectoryProperty
-
-    init {
-        outputs.upToDateWhen {
-            val preparedDir = outputDir.orNull?.asFile
-            preparedDir?.isDirectory == true && preparedDir.resolve("configure").isFile
-        }
-    }
-
-    @TaskAction
-    fun run() {
-        val src = sourceDir.get().asFile
-        val dst = outputDir.get().asFile
-        require(src.resolve("configure").isFile) {
-            "FFmpeg source tree is missing configure at ${src.absolutePath}"
-        }
-        dst.deleteRecursively()
-        var copiedFiles = 0
-        src.walkTopDown().forEach { input ->
-            val relative = input.relativeTo(src)
-            val output = if (relative.path.isEmpty()) dst else dst.resolve(relative.path)
-            if (input.isDirectory) {
-                output.mkdirs()
-            } else {
-                output.parentFile.mkdirs()
-                input.copyTo(output, overwrite = true)
-                copiedFiles += 1
-            }
-        }
-        restoreExecutablePermissions(src, dst)
-        logger.lifecycle("Prepared FFmpeg source from ${src.absolutePath} to ${dst.absolutePath}")
-        require(dst.resolve("configure").isFile) {
-            "Failed to prepare FFmpeg source: ${dst.resolve("configure").absolutePath} was not copied."
-        }
-    }
-}
 
 abstract class FfmpegConfigureTask : DefaultTask() {
     @get:InputDirectory
@@ -171,20 +134,9 @@ abstract class FfmpegConfigureTask : DefaultTask() {
         require(src.resolve("configure").isFile) {
             "FFmpeg source tree is missing configure at ${src.absolutePath}"
         }
-        var copiedFiles = 0
-        src.walkTopDown().forEach { input ->
-            val relative = input.relativeTo(src)
-            val output = if (relative.path.isEmpty()) dst else dst.resolve(relative.path)
-            if (input.isDirectory) {
-                output.mkdirs()
-            } else {
-                output.parentFile.mkdirs()
-                input.copyTo(output, overwrite = true)
-                copiedFiles += 1
-            }
-        }
+        copyTreeRecursively(src, dst)
         restoreExecutablePermissions(src, dst)
-        logger.lifecycle("Prepared FFmpeg source from ${src.absolutePath} to ${dst.absolutePath} ($copiedFiles files)")
+        logger.lifecycle("Prepared FFmpeg source from ${src.absolutePath} to ${dst.absolutePath}")
     }
 }
 
@@ -201,8 +153,14 @@ abstract class FfmpegBuildTask : DefaultTask() {
     @get:Input
     abstract val makeJobs: Property<Int>
 
+    @get:Input
+    abstract val hostOsName: Property<String>
+
     @get:InputDirectory
     abstract val buildDirPath: DirectoryProperty
+
+    @get:Input
+    abstract val installDirPath: Property<String>
 
     @get:OutputFile
     abstract val buildStamp: RegularFileProperty
@@ -213,12 +171,48 @@ abstract class FfmpegBuildTask : DefaultTask() {
     @TaskAction
     fun run() {
         val buildDir = buildDirPath.get().asFile
+        val installDirFile = File(installDirPath.get())
         val buildDirShellPath = buildDir.absolutePath
         execOperations.exec {
             commandLine(shell.get(), "-l", "-c", "cd '$buildDirShellPath' && make -j${makeJobs.get()} && make install")
             environment(envVars.get())
         }
+        rewritePkgConfigPaths(installDirFile, hostOsName.get(), logger)
         buildStamp.get().asFile.writeText(System.currentTimeMillis().toString())
+    }
+}
+
+private fun rewritePkgConfigPaths(
+    installDir: File,
+    hostOs: String,
+    logger: Logger,
+) {
+    if (hostOs != "Windows") return
+
+    val pkgConfigDir = installDir.resolve("lib/pkgconfig")
+    if (!pkgConfigDir.isDirectory) return
+
+    val msysPrefix = installDir.absolutePath.toMsysPath()
+    val nativePrefix = installDir.absolutePath.replace("\\", "/")
+    var rewrittenFiles = 0
+
+    pkgConfigDir.listFiles()
+        ?.filter { it.isFile && it.extension == "pc" }
+        .orEmpty()
+        .forEach { pcFile ->
+            val original = pcFile.readText()
+            val rewritten = original.replace(msysPrefix, nativePrefix)
+            if (rewritten != original) {
+                pcFile.writeText(rewritten)
+                rewrittenFiles += 1
+            }
+        }
+
+    if (rewrittenFiles > 0) {
+        logger.lifecycle(
+            "Rewrote $rewrittenFiles FFmpeg pkg-config file(s) under ${pkgConfigDir.absolutePath} " +
+                "to use native Windows paths.",
+        )
     }
 }
 
@@ -333,7 +327,7 @@ abstract class FfmpegAssembleTask : DefaultTask() {
                         buildDir = buildDirFile,
                         installDir = installDirFile,
                         outputDir = outputDirFile,
-                        msys2Dir = null,
+                        msys2Dir = msys2Dir.orNull?.asFile,
                     )
                 }
             }
@@ -389,37 +383,38 @@ private fun buildJvmJniWrapper(
         "No fftools object files found in $fftoolsDir while building $wrapperName."
     }
 
-    val shell = if (targetName == "WindowsX64") {
+    val windowsMsys = msys2Dir != null
+    val shell = if (windowsMsys) {
         msys2Dir?.resolve("usr/bin/bash.exe")?.absolutePath
-            ?: error("MSYS2 directory must be configured for Windows FFmpeg JNI wrapper build.")
+            ?: error("MSYS2 directory must be configured for FFmpeg JNI wrapper build on Windows.")
     } else {
         "bash"
     }
-    val commandWrapper = shellQuote(pathForShell(commandWrapperSource, targetName == "WindowsX64"))
-    val jniWrapper = shellQuote(pathForShell(jniWrapperSource, targetName == "WindowsX64"))
-    val outputPath = shellQuote(pathForShell(wrapperOut, targetName == "WindowsX64"))
-    val buildDirPath = shellQuote(pathForShell(buildDir, targetName == "WindowsX64"))
-    val jniIncludes = jniIncludeFlags(targetName, config).joinToString(" ")
+    val commandWrapper = shellQuote(pathForShell(commandWrapperSource, windowsMsys))
+    val jniWrapper = shellQuote(pathForShell(jniWrapperSource, windowsMsys))
+    val outputPath = shellQuote(pathForShell(wrapperOut, windowsMsys))
+    val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys))
+    val jniIncludes = jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
         buildDir.resolve("source"),
     )
         .distinctBy { it.absolutePath }
         .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
-        .joinToString(" ") { "-I${shellQuote(pathForShell(it, targetName == "WindowsX64"))}" }
+        .joinToString(" ") { "-I${shellQuote(pathForShell(it, windowsMsys))}" }
     val linkerMode = when {
         targetName == "WindowsX64" -> "-shared"
         targetName.startsWith("Macos") -> "-dynamiclib -Wl,-install_name,@loader_path/$wrapperName"
         else -> "-shared"
     }
     val linkLibraries = buildString {
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavdevice"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavfilter"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavformat"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavcodec"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libswresample"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libswscale"), targetName == "WindowsX64"))} ")
-        append("-L${shellQuote(pathForShell(buildDir.resolve("libavutil"), targetName == "WindowsX64"))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavdevice"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavfilter"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavformat"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavcodec"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libswresample"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libswscale"), windowsMsys))} ")
+        append("-L${shellQuote(pathForShell(buildDir.resolve("libavutil"), windowsMsys))} ")
         append("-lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil -lm -pthread")
         if (targetName == "WindowsX64") {
             append(" -lstdc++")
@@ -446,14 +441,14 @@ private fun buildJvmJniWrapper(
         append(' ')
         append(jniWrapper)
         append(' ')
-        append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), targetName == "WindowsX64")) })
+        append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), windowsMsys)) })
         append(' ')
         append(linkLibraries)
     }
 
     execOperations.exec {
         commandLine(shell, "-l", "-c", "cd $buildDirPath && $command")
-        if (targetName == "WindowsX64") {
+        if (windowsMsys) {
             environment("MSYSTEM", "UCRT64")
         }
     }
@@ -522,34 +517,6 @@ internal fun expandMakeVariables(value: String, config: Map<String, String>): St
     }
     return expanded
 }
-
-private fun jniIncludeFlags(targetName: String, config: Map<String, String>): List<String> {
-    return if (targetName.startsWith("Android")) {
-        emptyList()
-    } else {
-        val javaHome = System.getenv("JAVA_HOME")
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::File)
-            ?: File(System.getProperty("java.home"))
-        val includeDir = javaHome.resolve("include")
-        val platformDir = includeDir.resolve(
-            when {
-                targetName == "WindowsX64" -> "win32"
-                targetName.startsWith("Macos") -> "darwin"
-                else -> "linux"
-            },
-        )
-        listOf(includeDir, platformDir)
-            .onEach { require(it.isDirectory) { "JNI include directory not found at ${it.absolutePath}" } }
-            .map { "-I${shellQuote(pathForShell(it, targetName == "WindowsX64"))}" }
-    }
-}
-
-internal fun pathForShell(file: File, windowsMsys: Boolean): String =
-    if (windowsMsys) file.absolutePath.toMsysPath() else file.absolutePath
-
-internal fun shellQuote(value: String): String =
-    "'${value.replace("'", "'\"'\"'")}'"
 
 private fun collectWindowsRuntimeDlls(
     execOperations: ExecOperations,
