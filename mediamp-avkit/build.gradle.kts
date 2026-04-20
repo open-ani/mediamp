@@ -8,7 +8,6 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     kotlin("multiplatform")
@@ -21,8 +20,10 @@ plugins {
 
 description = "MediaMP backend using Apple AVKit"
 
-dependencies {
-    commonMainApi(projects.mediampApi)
+kotlin {
+    sourceSets.commonMain.dependencies { 
+        api(projects.mediampApi)
+    }
 }
 
 kotlin {
@@ -33,7 +34,6 @@ kotlin {
     listOf(
         iosArm64(),
         iosSimulatorArm64(),
-        iosX64(),
     ).forEach { target ->
         target.compilations.getByName("main") {
             // The default file path is src/nativeInterop/cinterop/<interop-name>.def
@@ -44,7 +44,7 @@ kotlin {
 
 mavenPublishing {
     configure(KotlinMultiplatform(JavadocJar.Empty(), true))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

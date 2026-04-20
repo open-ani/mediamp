@@ -8,23 +8,23 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("multiplatform")
-    id("com.android.library")
+    id("com.android.kotlin.multiplatform.library")
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
 }
 
 description = "MediaMP data source implementation for Kotlinx IO"
 
-android {
-    namespace = "org.openani.mediamp.source.ktxio"
-}
 
 kotlin {
     explicitApi()
+    androidLibrary {
+        namespace = "org.openani.mediamp.source.ktxio"
+    }
     sourceSets {
         commonMain.dependencies {
             api(projects.mediampApi)
@@ -33,7 +33,8 @@ kotlin {
             compileOnly(libs.androidx.annotation)
         }
         commonTest.dependencies {
-            api(libs.kotlinx.coroutines.test)
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
         androidMain.dependencies {
         }
@@ -46,8 +47,8 @@ kotlin {
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

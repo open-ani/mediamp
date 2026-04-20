@@ -29,21 +29,22 @@ fun getOs(): Os {
 enum class Arch {
     X86_64,
     AARCH64,
+    UNKNOWN,
 }
 
 fun getArch(): Arch {
-    val arch = System.getProperty("os.arch").lowercase(Locale.getDefault())
-    return when {
-        arch.contains("x86_64") -> Arch.X86_64
-        arch.contains("aarch64") || arch.contains("arm") -> Arch.AARCH64
-        else -> throw UnsupportedOperationException("Unknown architecture: $arch")
+    val archName = System.getProperty("os.arch").lowercase(Locale.getDefault())
+    return when (archName) {
+        "x86_64", "amd64" -> Arch.X86_64
+        "aarch64", "arm64" -> Arch.AARCH64
+        else -> Arch.UNKNOWN
     }
 }
 
 fun getOsTriple(): String {
     return when (getOs()) {
         Os.Windows -> "windows-x64"
-        Os.MacOS -> if (getArch() == Arch.AARCH64) "macos-aarch64" else "macos-x64"
+        Os.MacOS -> if (getArch() == Arch.AARCH64) "macos-arm64" else "macos-x64"
         Os.Linux -> "linux-x64"
         Os.Unknown -> throw UnsupportedOperationException("Unknown OS")
     }

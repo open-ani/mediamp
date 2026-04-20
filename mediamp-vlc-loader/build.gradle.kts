@@ -8,7 +8,7 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinJvm
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("jvm")
@@ -25,12 +25,12 @@ dependencies {
 
 kotlin {
     explicitApi()
-    jvmToolchain(8)
+    jvmToolchain(11)
 }
 
 mavenPublishing {
-    configure(KotlinJvm(JavadocJar.Empty(), true))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    configure(KotlinJvm(JavadocJar.Empty(), SourcesJar.Sources()))
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

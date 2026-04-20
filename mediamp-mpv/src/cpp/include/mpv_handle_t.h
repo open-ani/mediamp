@@ -6,6 +6,7 @@
 #define MEDIAMP_MPV_HANDLE_T_H
 
 #include <iostream>
+#include <memory>
 #include <jni.h>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>

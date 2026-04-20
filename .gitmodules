@@ -1,0 +1,8 @@
+[submodule "mediamp-ffmpeg/ffmpeg"]
+	path = mediamp-ffmpeg/ffmpeg
+	url = https://github.com/FFmpeg/FFmpeg.git
+	branch = release/8.0
+[submodule "mediamp-mpv/mpv"]
+	path = mediamp-mpv/mpv
+	url = https://github.com/mpv-player/mpv
+	branch = release/0.41

@@ -1,28 +1,29 @@
 [versions]
-gradle-maven-publish-plugin = "0.28.0"
-kotlin = "2.1.20"
+gradle-maven-publish-plugin = "0.36.0"
+kotlin = "2.3.10"
 
 ### KOTLINX ###
-kotlinx-coroutines = "1.10.1" # https://github.com/Kotlin/kotlinx.coroutines/releases
-kotlinx-atomicfu = "0.27.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
-kotlinx-io = "0.6.0" # https://github.com/Kotlin/kotlinx-io/releases
+kotlinx-coroutines = "1.10.2" # https://github.com/Kotlin/kotlinx.coroutines/releases
+kotlinx-atomicfu = "0.31.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
+kotlinx-io = "0.8.2" # https://github.com/Kotlin/kotlinx-io/releases
 
 #
 jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
 
-android-gradle-plugin = "8.9.3"
+android-gradle-plugin = "9.0.1"
 androidx-annotation = "1.9.1"
-androidx-media3 = "1.5.1"
+androidx-media3 = "1.9.0"
 
 junit4 = "4.13.2"
 
 # Compose
 # https://developer.android.com/jetpack/androidx/releases/compose-material3
-compose-material3 = "1.3.1"
-jetpack-compose = "1.9.0"
+compose-material3 = "1.10.0-alpha05"
+compose-material = "1.7.3"
+jetpack-compose = "1.10.3"
 # https://github.com/JetBrains/compose-multiplatform/releases
 # https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-compatibility-and-versioning.html#use-a-developer-version-of-compose-multiplatform-compiler
-compose-multiplatform = "1.9.0"
+compose-multiplatform = "1.10.1"
 
 vlcj = "4.8.2"
 androidx-test-ext-junit = "1.1.2"
@@ -38,13 +39,14 @@ kotlinx-atomicfu = { id = "org.jetbrains.kotlinx.atomicfu", version.ref = "kotli
 compose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 android-library = { id = "com.android.library", version.ref = "android-gradle-plugin" }
 android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
+android-kotlin-multipaltform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "android-gradle-plugin" }
 vanniktech-mavenPublish = { id = "com.vanniktech.maven.publish", version = "gradle-maven-publish-plugin" }
 
 [libraries]
 # Build
 android-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "android-gradle-plugin" }
 android-library-gradle-plugin = { module = "com.android.library:com.android.library.gradle.plugin", version.ref = "android-gradle-plugin" }
-android-application-gradle-plugin = { module = "com.android.application:com.android.application.gradle.plugin", version.ref = "android-gradle-plugin" }
+android-kotlin-multiplatform-library-gradle-plugin = { module = "com.android.kotlin.multiplatform.library:com.android.kotlin.multiplatform.library.gradle.plugin", version.ref = "android-gradle-plugin" }
 
 gradle-maven-publish-plugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "gradle-maven-publish-plugin" }
 junit = { module = "junit:junit", version.ref = "junit4" }
@@ -68,13 +70,19 @@ androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", versi
 androidx-media3-exoplayer-dash = { module = "androidx.media3:media3-exoplayer-dash", version.ref = "androidx-media3" }
 androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "androidx-media3" }
 
-androidx-compose-ui = { module = "androidx.compose.ui:ui", version.ref = "jetpack-compose" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+compose-animation = { module = "org.jetbrains.compose.animation:animation", version.ref = "compose-multiplatform" }
+compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose-multiplatform" }
+compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-material = { module = "org.jetbrains.compose.material:material", version.ref = "compose-multiplatform" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "compose-material3" }
+compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "compose-material" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "jetpack-compose" }
-androidx-compose-foundation = { module = "androidx.compose.foundation:foundation", version.ref = "jetpack-compose" }
-androidx-compose-material = { module = "androidx.compose.material:material", version.ref = "jetpack-compose" }
-androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "compose-material3" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "jetpack-compose" }
 androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidx-annotation" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version.ref = "jetpack-compose" }
 
 # VLC
 # NOTE: YOU WILL NEVER WANT TO CHANGE VLCJ AND JNA VERSIONS.

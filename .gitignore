@@ -32,3 +32,5 @@ out/
 
 **/.cxx/
 **/build-ci/
+
+test-projects/*

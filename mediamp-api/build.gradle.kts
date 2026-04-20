@@ -8,11 +8,11 @@
 
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     kotlin("multiplatform")
-    id("com.android.library")
+    id("com.android.kotlin.multiplatform.library")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
@@ -23,12 +23,13 @@ plugins {
 
 description = "Core API for MediaMP"
 
-android {
-    namespace = "org.openani.mediamp.api"
-}
 
 kotlin {
     explicitApi()
+    androidLibrary {
+        namespace = "org.openani.mediamp.api"
+        /*publishLibraryVariants("release")*/
+    }
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
@@ -37,11 +38,11 @@ kotlin {
             api(compose.runtime)
         }
         commonTest.dependencies {
-            api(kotlin("test"))
-            api(libs.kotlinx.coroutines.test)
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
         getByName("jvmTest").dependencies {
-            api(libs.junit)
+            implementation(libs.junit)
         }
         desktopMain.dependencies {
         }
@@ -53,14 +54,11 @@ kotlin {
             api(libs.androidx.annotation)
         }
     }
-    androidTarget {
-        publishLibraryVariants("release")
-    }
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))
+    publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
     configurePom(project)
 }

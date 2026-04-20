@@ -21,7 +21,7 @@ import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
     kotlin("multiplatform")
-    id("com.android.library")
+    id("com.android.kotlin.multiplatform.library")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
 
@@ -75,7 +75,7 @@ kotlin {
 }
 
 mavenPublishing {
-    configure(KotlinMultiplatform(JavadocJar.Empty(), true, listOf("debug", "release")))
+    configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublicationsIfEnabled(project)
     configurePom(project)

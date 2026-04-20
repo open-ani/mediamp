@@ -14,11 +14,11 @@ fun Project.getProperty(name: String) =
     getPropertyOrNull(name) ?: error("Property $name not found")
 
 fun Project.getPropertyOrNull(name: String) =
-    getLocalProperty(name)
+    findProperty(name)?.toString()
+        ?: properties[name]?.toString()
         ?: System.getProperty(name)
         ?: System.getenv(name)
-        ?: findProperty(name)?.toString()
-        ?: properties[name]?.toString()
+        ?: getLocalProperty(name)
         ?: extensions.extraProperties.runCatching { get(name).toString() }.getOrNull()
 
 

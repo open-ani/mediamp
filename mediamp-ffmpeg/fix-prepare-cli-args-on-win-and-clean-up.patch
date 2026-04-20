@@ -1,0 +1,377 @@
+Index: fftools/ffmpeg_opt.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/ffmpeg_opt.c b/fftools/ffmpeg_opt.c
+--- a/fftools/ffmpeg_opt.c	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/ffmpeg_opt.c	(date 1773321491861)
+@@ -90,6 +90,50 @@
+ int copy_unknown_streams = 0;
+ int recast_media = 0;
+ 
++void reset_ffmpeg_options(void)
++{
++    filter_hw_device = NULL;
++
++    av_freep(&vstats_filename);
++    vstats_filename = NULL;
++
++    dts_delta_threshold = 10;
++    dts_error_threshold = 3600 * 30;
++#if FFMPEG_OPT_VSYNC
++    video_sync_method = VSYNC_AUTO;
++#endif
++    frame_drop_threshold = 0;
++    do_benchmark = 0;
++    do_benchmark_all = 0;
++    do_hex_dump = 0;
++    do_pkt_dump = 0;
++    copy_ts = 0;
++    start_at_zero = 0;
++    copy_tb = -1;
++    debug_ts = 0;
++    exit_on_error = 0;
++    abort_on_flags = 0;
++    print_stats = -1;
++    stdin_interaction = 1;
++    max_error_rate = 2.0 / 3;
++
++    av_freep(&filter_nbthreads);
++    filter_complex_nbthreads = 0;
++    filter_buffered_frames = 0;
++    vstats_version = 2;
++    print_graphs = 0;
++    av_freep(&print_graphs_file);
++    av_freep(&print_graphs_format);
++    auto_conversion_filters = 1;
++    stats_period = 500000;
++
++    file_overwrite = 0;
++    no_file_overwrite = 0;
++    ignore_unknown_streams = 0;
++    copy_unknown_streams = 0;
++    recast_media = 0;
++}
++
+ // this struct is passed as the optctx argument
+ // to func_arg() for global options
+ typedef struct GlobalOptionsContext {
+Index: fftools/cmdutils.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/cmdutils.h b/fftools/cmdutils.h
+--- a/fftools/cmdutils.h	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/cmdutils.h	(date 1773321093036)
+@@ -60,6 +60,11 @@
+  */
+ void uninit_opts(void);
+ 
++/**
++ * Reset process-global cmdutils state before re-entering a tool main().
++ */
++void reset_cmdutils_state(void);
++
+ /**
+  * Trivial log callback.
+  * Only suitable for opt_help and similar since it lacks prefix handling.
+Index: fftools/opt_common.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/opt_common.c b/fftools/opt_common.c
+--- a/fftools/opt_common.c	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/opt_common.c	(date 1773321562408)
+@@ -69,6 +69,7 @@
+ 
+ static FILE *report_file;
+ static int report_file_level = AV_LOG_DEBUG;
++static int report_print_prefix = 1;
+ 
+ int show_license(void *optctx, const char *opt, const char *arg)
+ {
+@@ -1131,18 +1132,27 @@
+ {
+     va_list vl2;
+     char line[1024];
+-    static int print_prefix = 1;
+ 
+     va_copy(vl2, vl);
+     av_log_default_callback(ptr, level, fmt, vl);
+-    av_log_format_line(ptr, level, fmt, vl2, line, sizeof(line), &print_prefix);
++    av_log_format_line(ptr, level, fmt, vl2, line, sizeof(line), &report_print_prefix);
+     va_end(vl2);
+-    if (report_file_level >= level) {
++    if (report_file && report_file_level >= level) {
+         fputs(line, report_file);
+         fflush(report_file);
+     }
+ }
+ 
++void uninit_report(void)
++{
++    if (report_file)
++        fclose(report_file);
++    report_file = NULL;
++    report_file_level = AV_LOG_DEBUG;
++    report_print_prefix = 1;
++    warned_cfg = 0;
++}
++
+ int init_report(const char *env, FILE **file)
+ {
+     char *filename_template = NULL;
+Index: fftools/ffmpeg.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/ffmpeg.h b/fftools/ffmpeg.h
+--- a/fftools/ffmpeg.h	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/ffmpeg.h	(date 1773321458138)
+@@ -758,6 +758,8 @@
+ 
+ extern FILE *vstats_file;
+ 
++void reset_ffmpeg_options(void);
++
+ void term_init(void);
+ void term_exit(void);
+ 
+Index: fftools/cmdutils.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/cmdutils.c b/fftools/cmdutils.c
+--- a/fftools/cmdutils.c	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/cmdutils.c	(date 1773321650111)
+@@ -67,6 +67,12 @@
+     av_dict_free(&codec_opts);
+ }
+ 
++void reset_cmdutils_state(void)
++{
++    uninit_opts();
++    hide_banner = 0;
++}
++
+ void log_callback_help(void *ptr, int level, const char *fmt, va_list vl)
+ {
+     vfprintf(stdout, fmt, vl);
+@@ -167,6 +173,11 @@
+ /* _WIN32 means using the windows libc - cygwin doesn't define that
+  * by default. HAVE_COMMANDLINETOARGVW is true on cygwin, while
+  * it doesn't provide the actual command line via GetCommandLineW(). */
++// mediamp calls ffmpeg main() directly via JNI. HAVE_COMMANDLINETOARGVW is
++// defined, but GetCommandLineW() returns the host JVM command line, not the
++// arguments we passed. Disable the Win32 argument re-parsing so that the
++// original argv from the caller is used as-is.
++#undef HAVE_COMMANDLINETOARGVW
+ #if HAVE_COMMANDLINETOARGVW && defined(_WIN32)
+ #include <shellapi.h>
+ /* Will be leaked on exit */
+Index: fftools/opt_common.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/opt_common.h b/fftools/opt_common.h
+--- a/fftools/opt_common.h	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/opt_common.h	(date 1773321579326)
+@@ -183,6 +183,7 @@
+ 
+ int opt_report(void *optctx, const char *opt, const char *arg);
+ int init_report(const char *env, FILE **file);
++void uninit_report(void);
+ 
+ int opt_max_alloc(void *optctx, const char *opt, const char *arg);
+ 
+Index: fftools/ffmpeg.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/fftools/ffmpeg.c b/fftools/ffmpeg.c
+--- a/fftools/ffmpeg.c	(revision fa4ee7ab3c1734795149f6dbc3746e834e859e8c)
++++ b/fftools/ffmpeg.c	(date 1773321431654)
+@@ -81,6 +81,7 @@
+ #include "ffmpeg.h"
+ #include "ffmpeg_sched.h"
+ #include "ffmpeg_utils.h"
++#include "opt_common.h"
+ #include "graph/graphprint.h"
+ 
+ const char program_name[] = "ffmpeg";
+@@ -96,6 +97,7 @@
+ 
+ static BenchmarkTimeStamps get_benchmark_time_stamps(void);
+ static int64_t getmaxrss(void);
++static void ffmpeg_reset_globals(void);
+ 
+ atomic_uint nb_output_dumped = 0;
+ 
+@@ -124,8 +126,10 @@
+ static void term_exit_sigsafe(void)
+ {
+ #if HAVE_TERMIOS_H
+-    if(restore_tty)
++    if(restore_tty) {
+         tcsetattr (0, TCSANOW, &oldtty);
++        restore_tty = 0;
++    }
+ #endif
+ }
+ 
+@@ -140,6 +144,9 @@
+ static atomic_int transcode_init_done = 0;
+ static volatile int ffmpeg_exited = 0;
+ static int64_t copy_ts_first_pts = AV_NOPTS_VALUE;
++static int64_t print_report_last_time = -1;
++static int print_report_first_report = 1;
++static int64_t keyboard_last_time = 0;
+ 
+ static void
+ sigterm_handler(int sig)
+@@ -337,6 +344,7 @@
+                    "Error closing vstats file, loss of information possible: %s\n",
+                    av_err2str(AVERROR(errno)));
+     }
++    vstats_file = NULL;
+     av_freep(&vstats_filename);
+     of_enc_stats_close();
+ 
+@@ -347,9 +355,22 @@
+     av_freep(&print_graphs_file);
+     av_freep(&print_graphs_format);
+ 
++    if (progress_avio) {
++        int close_ret = avio_closep(&progress_avio);
++        if (close_ret < 0)
++            av_log(NULL, AV_LOG_ERROR,
++                   "Error closing progress log, loss of information possible: %s\n",
++                   av_err2str(close_ret));
++    }
++
+     av_freep(&input_files);
+     av_freep(&output_files);
+ 
++    nb_input_files = 0;
++    nb_output_files = 0;
++    nb_filtergraphs = 0;
++    nb_decoders = 0;
++
+     uninit_opts();
+ 
+     avformat_network_deinit();
+@@ -364,6 +385,40 @@
+     ffmpeg_exited = 1;
+ }
+ 
++static void ffmpeg_reset_globals(void)
++{
++    reset_cmdutils_state();
++    reset_ffmpeg_options();
++    uninit_report();
++
++    atomic_store(&nb_output_dumped, 0);
++    current_time = (BenchmarkTimeStamps){ 0 };
++    progress_avio = NULL;
++
++    input_files = NULL;
++    nb_input_files = 0;
++    output_files = NULL;
++    nb_output_files = 0;
++    filtergraphs = NULL;
++    nb_filtergraphs = 0;
++    decoders = NULL;
++    nb_decoders = 0;
++
++    received_sigterm = 0;
++    received_nb_signals = 0;
++    atomic_store(&transcode_init_done, 0);
++    ffmpeg_exited = 0;
++    copy_ts_first_pts = AV_NOPTS_VALUE;
++
++    vstats_file = NULL;
++    print_report_last_time = -1;
++    print_report_first_report = 1;
++    keyboard_last_time = 0;
++#if HAVE_TERMIOS_H
++    restore_tty = 0;
++#endif
++}
++
+ OutputStream *ost_iter(OutputStream *prev)
+ {
+     int of_idx  = prev ? prev->file->index : 0;
+@@ -559,8 +614,6 @@
+     int vid;
+     double bitrate;
+     double speed;
+-    static int64_t last_time = -1;
+-    static int first_report = 1;
+     uint64_t nb_frames_dup = 0, nb_frames_drop = 0;
+     int mins, secs, ms, us;
+     int64_t hours;
+@@ -572,13 +625,13 @@
+         return;
+ 
+     if (!is_last_report) {
+-        if (last_time == -1) {
+-            last_time = cur_time;
++        if (print_report_last_time == -1) {
++            print_report_last_time = cur_time;
+         }
+-        if (((cur_time - last_time) < stats_period && !first_report) ||
+-            (first_report && atomic_load(&nb_output_dumped) < nb_output_files))
++        if (((cur_time - print_report_last_time) < stats_period && !print_report_first_report) ||
++            (print_report_first_report && atomic_load(&nb_output_dumped) < nb_output_files))
+             return;
+-        last_time = cur_time;
++        print_report_last_time = cur_time;
+     }
+ 
+     t = (cur_time-timer_start) / 1000000.0;
+@@ -711,7 +764,7 @@
+         }
+     }
+ 
+-    first_report = 0;
++    print_report_first_report = 0;
+ }
+ 
+ static void print_stream_maps(void)
+@@ -805,11 +858,10 @@
+ static int check_keyboard_interaction(int64_t cur_time)
+ {
+     int i, key;
+-    static int64_t last_time;
+     /* read_key() returns 0 on EOF */
+-    if (cur_time - last_time >= 100000) {
++    if (cur_time - keyboard_last_time >= 100000) {
+         key =  read_key();
+-        last_time = cur_time;
++        keyboard_last_time = cur_time;
+     }else
+         key = -1;
+     if (key == 'q') {
+@@ -968,6 +1020,7 @@
+     int ret;
+     BenchmarkTimeStamps ti;
+ 
++    ffmpeg_reset_globals();
+     init_dynload();
+ 
+     setvbuf(stderr,NULL,_IONBF,0); /* win32 runtime needs this */
+@@ -1032,6 +1085,7 @@
+ 
+     av_log(NULL, AV_LOG_VERBOSE, "\n");
+     av_log(NULL, AV_LOG_VERBOSE, "Exiting with exit code %d\n", ret);
++    uninit_report();
+ 
+     return ret;
+ }

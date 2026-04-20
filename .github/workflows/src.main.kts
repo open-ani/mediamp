@@ -37,6 +37,7 @@
 
 import Secrets.GITHUB_REPOSITORY
 import io.github.typesafegithub.workflows.actions.actions.Checkout
+import io.github.typesafegithub.workflows.actions.actions.DownloadArtifact
 import io.github.typesafegithub.workflows.actions.actions.GithubScript
 import io.github.typesafegithub.workflows.actions.actions.UploadArtifact
 import io.github.typesafegithub.workflows.actions.bhowell2.GithubSubstringAction_Untyped
@@ -157,6 +158,7 @@ class MatrixInstance(
     val installNativeDeps: Boolean = !selfHosted,
     val buildIosFramework: Boolean = false,
     val buildAllAndroidAbis: Boolean = true,
+    val ffmpegBuildVariant: String? = null,
 
     // Gradle command line args
     gradleHeap: String = "4g",
@@ -199,6 +201,10 @@ class MatrixInstance(
 
         extraGradleArgs.forEach {
             add(quote(it))
+        }
+
+        ffmpegBuildVariant?.let {
+            add(quote("-Pmediamp.ffmpeg.buildvariant=$it"))
         }
     }.joinToString(" ")
 
@@ -280,13 +286,14 @@ sealed class Runner(
         labels = setOf("macos-15"),
     )
 
-    object GithubUbuntu2004 : GithubHosted(
-        id = "github-ubuntu-2004",
-        displayName = "Ubuntu 20.04 x86_64 (GitHub)",
+    object GithubUbuntu2404 : GithubHosted(
+        id = "github-ubuntu-2404",
+        displayName = "Ubuntu 24.04 x86_64 (GitHub)",
         os = OS.UBUNTU,
         arch = Arch.X64,
-        labels = setOf("ubuntu-20.04"),
+        labels = setOf("ubuntu-24.04"),
     )
+
 
     // Objects under SelfHosted
     object SelfHostedWindows10 : SelfHosted(
@@ -332,10 +339,22 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "windows-x64",
         gradleHeap = "4g",
         uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "windows",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=x86_64",
         ),
         buildAllAndroidAbis = false,
+    ),
+    MatrixInstance(
+        runner = Runner.GithubUbuntu2404,
+        name = "Ubuntu 24.04 x86_64",
+        uploadApk = false,
+        composeResourceTriple = "linux-x64",
+        gradleHeap = "4g",
+        uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "linux",
+        extraGradleArgs = emptyList(),
+        buildAllAndroidAbis = true,
     ),
     MatrixInstance(
         runner = Runner.GithubMacOS15Intel,
@@ -343,6 +362,7 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "macos-x64",
         buildIosFramework = false,
         gradleHeap = "4g",
+        ffmpegBuildVariant = "ios,macos",
         extraGradleArgs = listOf(),
         buildAllAndroidAbis = true,
     ),
@@ -351,6 +371,7 @@ val buildMatrixInstances = listOf(
         uploadApk = true, // upload arm64-v8a once finished
         composeResourceTriple = "macos-arm64",
         uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "ios,macos,android",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=arm64-v8a", // speed up testing
         ),
@@ -373,6 +394,8 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         setupGradle()
 
         gradleCheck()
+        buildFfmpegArtifacts()
+        verifyAppleXcframeworkPublication()
         // uploadMediampBackendMpv()
 
         cleanupTempFiles()
@@ -381,6 +404,8 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 
 object ArtifactNames {
     fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-mpv-${os}-${arch}"
+    fun ffmpegRuntimeJar(platformId: String) = "mediamp-ffmpeg-runtime-$platformId"
+    fun ffmpegAppleXcframeworkZip() = "mediamp-ffmpeg-runtime-ios-xcframework"
 }
 
 workflow(
@@ -517,7 +542,7 @@ workflow(
 
                 runGradle(
                     name = "Update Release Version Name",
-                    tasks = ["updateReleaseVersionNameFromGit"],
+                    tasks = arrayOf("updateReleaseVersionNameFromGit"),
                     env = mapOf(
                         "GITHUB_TOKEN" to expr { secrets.GITHUB_TOKEN },
                         "GITHUB_REPOSITORY" to expr { secrets.GITHUB_REPOSITORY },
@@ -537,33 +562,50 @@ workflow(
         },
     )
 
-    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022])
-    val macAarch64 = addJob(buildMatrixInstances[Runner.SelfHostedMacOS15])
+    val win = addJob(buildMatrixInstances[Runner.GithubWindowsServer2022]) {
+        with(WithMatrix(it)) {
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarWindowsX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("windows-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-x64.jar",
+            )
+        }
+    }
+    val linux = addJob(buildMatrixInstances[Runner.GithubUbuntu2404]) {
+        with(WithMatrix(it)) {
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarLinuxX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("linux-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-linux-x64.jar",
+            )
+        }
+    }
+    val macX8664 = addJob(buildMatrixInstances[Runner.GithubMacOS15Intel]) {
+        with(WithMatrix(it)) {
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarMacosX64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("macos-x64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-macos-x64.jar",
+            )
+        }
+    }
 
-    addJob(buildMatrixInstances[Runner.GithubMacOS15Intel], needs = listOf(win, macAarch64)) { matrix ->
+    addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, linux, macX8664)) { matrix ->
         with(WithMatrix(matrix)) {
-            /*listOf(
-                OS.WINDOWS to Arch.X64,
-                OS.MACOS to Arch.AARCH64,
-            ).forEach { (os, arch) ->
+            uploadFfmpegAppleXcframeworkZip()
+            listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
                 uses(
                     action = DownloadArtifact(
-                        name = ArtifactNames.mediampBackendMpvNativeJar(os, arch),
-                        path = "mediamp-mpv/build/native-jars/",
+                        name = ArtifactNames.ffmpegRuntimeJar(platformId),
+                        path = "mediamp-ffmpeg/build/prebuilt-runtime-jars/$platformId",
                     ),
                 )
             }
-
-            run(command = "ls -l mediamp-mpv/build/native-jars")*/
+            run(command = "ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true")
             runGradle(
-                tasks = ["publish"],
-                env = mapOf(
-                    "ORG_GRADLE_PROJECT_mavenCentralUsername" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralUsername"]!! },
-                    "ORG_GRADLE_PROJECT_mavenCentralPassword" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralPassword"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKey" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKey"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKeyId" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyId"]!! },
-                    "ORG_GRADLE_PROJECT_signingInMemoryKeyPassword" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyPassword"]!! },
-                ),
+                name = "Publish",
+                tasks = arrayOf("publish"),
+                env = mavenCentralPublishEnv(),
             )
         }
     }
@@ -800,10 +842,16 @@ class WithMatrix(
     }
 
     fun JobBuilder<*>.installDependencies() {
-        if (matrix.isMacOS && !matrix.selfHosted) {
+        if (matrix.isMacOSX64) {
             run(
                 name = "Install dependencies for macOS",
-                command = shell($$"""brew install ninja"""),
+                command = shell($$"""brew install nasm"""),
+            )
+        }
+        if (matrix.isUbuntu && matrix.ffmpegBuildVariant != null) {
+            run(
+                name = "Install FFmpeg Dependencies for Ubuntu",
+                command = shell("""chmod +x ./ci-helper/install-ffmpeg-deps-ubuntu.sh && ./ci-helper/install-ffmpeg-deps-ubuntu.sh"""),
             )
         }
     }
@@ -821,10 +869,83 @@ class WithMatrix(
         }
     }
 
+    fun JobBuilder<*>.buildFfmpegArtifacts() {
+        if (matrix.ffmpegBuildVariant != null) {
+            runGradle(
+                name = "Build FFmpeg artifacts",
+                tasks = arrayOf(":mediamp-ffmpeg:ffmpegBuildAll"),
+            )
+        }
+    }
+
+    fun JobBuilder<*>.verifyAppleXcframeworkPublication() {
+        if (matrix.isMacOSAArch64 && matrix.hasFfmpegBuildVariant("ios")) {
+            runGradle(
+                name = "Verify Apple XCFramework publication",
+                tasks = arrayOf(
+                    "-Dmaven.repo.local=mediamp-ffmpeg/build/maven-local",
+                    ":mediamp-ffmpeg:publishFfmpegRuntimeIosXcframeworkPublicationToMavenLocal",
+                ),
+            )
+        }
+    }
+
+    fun mavenCentralPublishEnv(): Map<String, String> = mapOf(
+        "ORG_GRADLE_PROJECT_mavenCentralUsername" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralUsername"]!! },
+        "ORG_GRADLE_PROJECT_mavenCentralPassword" to expr { secrets["ORG_GRADLE_PROJECT_mavenCentralPassword"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKey" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKey"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKeyId" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyId"]!! },
+        "ORG_GRADLE_PROJECT_signingInMemoryKeyPassword" to expr { secrets["ORG_GRADLE_PROJECT_signingInMemoryKeyPassword"]!! },
+    )
+
+    fun JobBuilder<*>.publishFfmpegToMavenCentral(vararg tasks: String) {
+        runGradle(
+            name = "Publish FFmpeg artifacts",
+            tasks = tasks,
+            env = mavenCentralPublishEnv(),
+        )
+    }
+
+    fun JobBuilder<*>.uploadFfmpegRuntimeJar(
+        task: String,
+        artifactName: String,
+        path: String,
+    ): ActionStep<UploadArtifact.Outputs> {
+        runGradle(
+            name = "Build FFmpeg runtime jar",
+            tasks = arrayOf(task),
+        )
+        return uses(
+            name = "Upload FFmpeg runtime jar",
+            action = UploadArtifact(
+                name = artifactName,
+                path_Untyped = path,
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
+            ),
+        )
+    }
+
+    fun JobBuilder<*>.uploadFfmpegAppleXcframeworkZip(): ActionStep<UploadArtifact.Outputs> {
+        runGradle(
+            name = "Build FFmpeg Apple XCFramework zip",
+            tasks = arrayOf(":mediamp-ffmpeg:ffmpegAppleXcframeworkZip"),
+        )
+        return uses(
+            name = "Upload FFmpeg Apple XCFramework zip",
+            action = UploadArtifact(
+                name = ArtifactNames.ffmpegAppleXcframeworkZip(),
+                path_Untyped = "mediamp-ffmpeg/build/distributions/mediamp-ffmpeg-runtime-ios-xcframework-*.zip",
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
+            ),
+        )
+    }
+
     fun JobBuilder<*>.uploadMediampBackendMpv(): ActionStep<UploadArtifact.Outputs> {
         runGradle(
             name = "Build mediamp-mpv",
-            tasks = ["copyNativeJarForCurrentPlatform"],
+            tasks = arrayOf("copyNativeJarForCurrentPlatform"),
         )
         return uses(
             name = "Upload mediamp-mpv native builds",
@@ -873,6 +994,9 @@ val MatrixInstance.isUnix get() = (os == OS.UBUNTU) or (os == (OS.MACOS))
 
 val MatrixInstance.isMacOSAArch64 get() = (os == OS.MACOS) and (arch == Arch.AARCH64)
 val MatrixInstance.isMacOSX64 get() = (os == OS.MACOS) and (arch == Arch.X64)
+fun MatrixInstance.hasFfmpegBuildVariant(variant: String): Boolean {
+    return ffmpegBuildVariant?.split(',')?.map { it.trim() }?.any { it == variant } == true
+}
 
 // only for highlighting (though this does not work in KT 2.1.0)
 fun shell(@Language("shell") command: String) = command
