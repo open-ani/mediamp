@@ -8,6 +8,10 @@
 
 package org.openani.mediamp.mpv
 
+import com.sun.jna.Native
+import com.sun.jna.WString
+import com.sun.jna.win32.StdCallLibrary
+import com.sun.jna.win32.W32APIOptions
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -43,9 +47,7 @@ internal actual object LibraryLoader {
         synchronized(loadLock) {
             val key = canonicalDir.absolutePath
             if (key in loadedRuntimeDirs) return
-            runtimeLibrariesInLoadOrder(canonicalDir).forEach { library ->
-                System.load(library.absolutePath)
-            }
+            loadRuntimeLibraries(runtimeLibrariesInLoadOrder(canonicalDir))
             loadedRuntimeDirs += key
         }
     }
@@ -81,73 +83,71 @@ internal actual object LibraryLoader {
     }
 
     private fun runtimeLibrariesInLoadOrder(runtimeDir: File): List<File> {
-        val wrapper = runtimeDir.resolve(wrapperLibraryName())
-        require(wrapper.isFile) {
-            "MPV JNI wrapper not found at ${wrapper.absolutePath}. Ensure the runtime artifact was packaged correctly."
+        val libraries = LibraryLoader::class.java.classLoader
+            .getResourceAsStream("mpv-natives.txt")
+            ?.bufferedReader()
+            ?.readLines()
+            ?.asSequence()
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.map { runtimeDir.resolve(it) }
+            ?.filter { candidate -> candidate.isFile && candidate.isSharedRuntimeLibrary(osName) }
+            ?.distinctBy(File::getAbsolutePath)
+            ?.toList()
+            ?: error(
+                "mpv-natives.txt not found on classpath. " +
+                    "Make sure mediamp-mpv-runtime-{os}-{arch} is on the classpath.",
+            )
+
+        require(libraries.any { it.name.equals(wrapperLibraryName(), ignoreCase = true) }) {
+            "mpv-natives.txt does not list the MPV JNI wrapper '${wrapperLibraryName()}'."
+        }
+        return libraries
+    }
+
+    private fun loadRuntimeLibraries(libraries: List<File>) {
+        if (!osName.contains("win")) {
+            libraries.forEach { library -> System.load(library.absolutePath) }
+            return
         }
 
-        val allSharedLibraries = runtimeDir.listFiles()
-            ?.filter { candidate ->
-                candidate.isFile &&
-                    candidate != wrapper &&
-                    candidate.isSharedRuntimeLibrary(osName)
-            }
-            .orEmpty()
+        withWindowsDllDirectory(libraries.first().parentFile) {
+            val remaining = libraries.toMutableList()
+            val deferredFailures = linkedMapOf<String, UnsatisfiedLinkError>()
 
-        val ffmpegPrefixes = listOf(
-            "avutil-",
-            "swresample-",
-            "swscale-",
-            "avcodec-",
-            "avformat-",
-            "avfilter-",
-            "avdevice-",
-        )
-        val mpvPrefixes = listOf(
-            "libmpv",
-            "libass",
-            "libplacebo",
-        )
-
-        return buildList {
-            if (osName.contains("win")) {
-                allSharedLibraries
-                    .filterNot { candidate ->
-                        ffmpegPrefixes.any(candidate.name::startsWith) ||
-                            mpvPrefixes.any(candidate.name::startsWith)
+            while (remaining.isNotEmpty()) {
+                var loadedAny = false
+                val iterator = remaining.iterator()
+                while (iterator.hasNext()) {
+                    val library = iterator.next()
+                    try {
+                        System.load(library.absolutePath)
+                        deferredFailures.remove(library.absolutePath)
+                        iterator.remove()
+                        loadedAny = true
+                    } catch (error: UnsatisfiedLinkError) {
+                        if (error.isMissingWindowsDependency()) {
+                            deferredFailures[library.absolutePath] = error
+                        } else {
+                            throw error
+                        }
                     }
-                    .sortedByDescending(File::getName)
-                    .let(::addAll)
-            } else {
-                allSharedLibraries
-                    .filterNot { candidate ->
-                        ffmpegPrefixes.any(candidate.name::startsWith) ||
-                            mpvPrefixes.any(candidate.name::startsWith)
+                }
+
+                if (!loadedAny) {
+                    val details = remaining.joinToString(separator = System.lineSeparator()) { library ->
+                        val message = deferredFailures[library.absolutePath]?.message.orEmpty()
+                        " - ${library.name}: $message"
                     }
-                    .sortedBy(File::getName)
-                    .let(::addAll)
+                    throw UnsatisfiedLinkError(
+                        "Failed to load Windows mpv runtime from ${libraries.first().parentFile.absolutePath}." +
+                            System.lineSeparator() +
+                            "Unresolved native libraries:" +
+                            System.lineSeparator() +
+                            details,
+                    )
+                }
             }
-
-            ffmpegPrefixes.forEach { prefix ->
-                allSharedLibraries
-                    .filter { it.name.startsWith(prefix) }
-                    .maxWithOrNull(compareBy<File>({ it.name.length }, { it.name }))
-                    ?.let(::add)
-            }
-
-            mpvPrefixes.forEach { prefix ->
-                allSharedLibraries
-                    .filter { it.name.startsWith(prefix) }
-                    .maxWithOrNull(compareBy<File>({ it.name.length }, { it.name }))
-                    ?.let(::add)
-            }
-
-            allSharedLibraries
-                .filter { candidate -> none { it.absolutePath == candidate.absolutePath } }
-                .sortedBy(File::getName)
-                .let(::addAll)
-
-            add(wrapper)
         }
     }
 
@@ -159,9 +159,41 @@ internal actual object LibraryLoader {
         }
 }
 
+private inline fun <T> withWindowsDllDirectory(runtimeDir: File, block: () -> T): T {
+    val configured = WindowsDllKernel32.INSTANCE.SetDllDirectoryW(WString(runtimeDir.absolutePath))
+    check(configured) {
+        "Failed to add Windows DLL search directory: ${runtimeDir.absolutePath}"
+    }
+    try {
+        return block()
+    } finally {
+        WindowsDllKernel32.INSTANCE.SetDllDirectoryW(null)
+    }
+}
+
 private fun File.isSharedRuntimeLibrary(osName: String): Boolean =
     when {
         osName.contains("win") -> name.endsWith(".dll", ignoreCase = true)
         osName.contains("mac") -> name.endsWith(".dylib", ignoreCase = true)
         else -> name.endsWith(".so") || name.contains(".so.")
     }
+
+private fun UnsatisfiedLinkError.isMissingWindowsDependency(): Boolean {
+    val text = message.orEmpty().lowercase(Locale.ROOT)
+    return "can't find dependent libraries" in text ||
+        "the specified module could not be found" in text ||
+        "找不到指定的模块" in text ||
+        "找不到依赖" in text
+}
+
+private interface WindowsDllKernel32 : StdCallLibrary {
+    fun SetDllDirectoryW(pathName: WString?): Boolean
+
+    companion object {
+        val INSTANCE: WindowsDllKernel32 = Native.load(
+            "kernel32",
+            WindowsDllKernel32::class.java,
+            W32APIOptions.DEFAULT_OPTIONS,
+        ) as WindowsDllKernel32
+    }
+}

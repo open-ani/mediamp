@@ -9,9 +9,14 @@ import nativebuild.PublishedArtifact
 import nativebuild.addCompilePomDependency
 import nativebuild.artifactSuffix
 import nativebuild.createDependencyOnlyDesktopRuntimeElements
+import nativebuild.isSharedRuntimeLibrary
+import nativebuild.manifestRelativePath
+import nativebuild.orderLibrariesByPrefixes
+import nativebuild.orderWindowsDllsByDependencies
 import nativebuild.publicationSuffix
 import nativebuild.publishDesktopRuntimeAggregator
 import nativebuild.registerCompositeDesktopRuntimeElements
+import nativebuild.resolveWindowsObjdump
 import nativebuild.wireDesktopRuntimeDependencyConstraints
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -20,6 +25,8 @@ import org.gradle.jvm.tasks.Jar
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
+import org.gradle.kotlin.dsl.support.serviceOf
+import org.gradle.process.ExecOperations
 import signAllPublicationsIfEnabled
 
 private const val APPLE_XCFRAMEWORK_ARTIFACT_ID = "mediamp-ffmpeg-runtime-ios-xcframework"
@@ -49,11 +56,12 @@ internal fun registerDesktopRuntimeJarTasks(
                 doFirst {
                     val dir = outputDir.get().asFile
                     if (dir.isDirectory) {
-                        val manifest = dir.walk()
-                            .filter { it.isFile && !it.path.contains("include") }
-                            .map { it.relativeTo(dir).path.replace("\\", "/") }
-                            .sorted()
-                            .joinToString("\n")
+                        val manifest = runtimeManifestEntries(
+                            outputDir = dir,
+                            target = target,
+                            execOperations = context.project.serviceOf<ExecOperations>(),
+                            msys2Dir = if (target.os == "windows") context.msys2Dir else null,
+                        ).joinToString("\n")
                         val manifestFile = temporaryDir.resolve("ffmpeg-natives.txt")
                         manifestFile.parentFile.mkdirs()
                         manifestFile.writeText(manifest)
@@ -196,3 +204,64 @@ internal fun configureRuntimePublishing(
         },
     )
 }
+
+private fun runtimeManifestEntries(
+    outputDir: java.io.File,
+    target: DesktopRuntimeTarget,
+    execOperations: ExecOperations,
+    msys2Dir: java.io.File?,
+): List<String> {
+    val allFiles = outputDir.walkTopDown()
+        .filter { candidate -> candidate.isFile && "include" !in candidate.relativeTo(outputDir).invariantPathSegments() }
+        .toList()
+    val sharedLibraries = allFiles.filter { candidate -> isSharedRuntimeLibrary(candidate, target.os) }
+    val wrapperFiles = sharedLibraries.filter { candidate -> candidate.name.equals(wrapperLibraryName(target.os), ignoreCase = true) }
+    val dependencyLibraries = sharedLibraries - wrapperFiles.toSet()
+
+    val orderedShared = when (target.os) {
+        "windows" -> {
+            val msys2Root = msys2Dir ?: error("MSYS2 directory must be available when packaging Windows FFmpeg runtimes.")
+            orderWindowsDllsByDependencies(
+                execOperations = execOperations,
+                objdumpExecutable = resolveWindowsObjdump(msys2Root),
+                dllFiles = dependencyLibraries,
+            )
+        }
+
+        else -> orderLibrariesByPrefixes(
+            files = dependencyLibraries,
+            orderedPrefixes = listOf(
+                sharedLibraryFamilyName(target.os, "avutil"),
+                sharedLibraryFamilyName(target.os, "swresample"),
+                sharedLibraryFamilyName(target.os, "swscale"),
+                sharedLibraryFamilyName(target.os, "avcodec"),
+                sharedLibraryFamilyName(target.os, "avformat"),
+                sharedLibraryFamilyName(target.os, "avfilter"),
+                sharedLibraryFamilyName(target.os, "avdevice"),
+            ),
+            unmatchedFirst = false,
+        )
+    }
+
+    val orderedNonShared = (allFiles - sharedLibraries.toSet())
+        .sortedBy { manifestRelativePath(outputDir, it) }
+
+    return (orderedShared + wrapperFiles.sortedBy { it.name.lowercase() } + orderedNonShared)
+        .map { manifestRelativePath(outputDir, it) }
+}
+
+private fun wrapperLibraryName(os: String): String =
+    when (os) {
+        "windows" -> "ffmpegkitjni.dll"
+        "macos" -> "libffmpegkitjni.dylib"
+        else -> "libffmpegkitjni.so"
+    }
+
+private fun sharedLibraryFamilyName(os: String, baseName: String): String =
+    when (os) {
+        "windows" -> "$baseName-"
+        else -> "lib$baseName"
+    }
+
+private fun java.io.File.invariantPathSegments(): List<String> =
+    path.replace("\\", "/").split('/')

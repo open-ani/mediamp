@@ -52,8 +52,11 @@ public actual class FFmpegKit actual constructor() {
 
             for (fileName in manifest) {
                 if (fileName.isBlank()) continue
-                val resource = classLoader.getResourceAsStream(fileName) ?: continue
-                val target = dir.resolve(fileName).toPath()
+                val resource = classLoader.getResourceAsStream(fileName)
+                    ?: error("Native runtime file '$fileName' listed in ffmpeg-natives.txt was not found on the classpath.")
+                val targetFile = dir.resolve(fileName)
+                targetFile.parentFile?.mkdirs()
+                val target = targetFile.toPath()
                 resource.use { input ->
                     Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
                 }

@@ -1,9 +1,12 @@
 package ffmpeg
 
 import nativebuild.copyTreeRecursively
+import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.parseWindowsImportedDllNames
 import nativebuild.recreateDirectory
+import nativebuild.resolveWindowsObjdump
 import nativebuild.restoreExecutablePermissions
 import nativebuild.shellQuote
 import nativebuild.toMsysPath
@@ -24,7 +27,6 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -526,28 +528,15 @@ private fun collectWindowsRuntimeDlls(
     outputDir: File,
 ) {
     val ucrt64Bin = msys2Dir.resolve("ucrt64/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir)
     val collectedDlls = mutableSetOf<String>()
 
     fun collectDeps(dllFile: File) {
         if (!dllFile.exists()) return
-        val stdout = ByteArrayOutputStream()
-        execOperations.exec {
-            commandLine(msys2Dir.resolve("ucrt64/bin/objdump.exe").absolutePath, "-p", dllFile.absolutePath)
-            standardOutput = stdout
-            isIgnoreExitValue = true
-        }
-        stdout.toString(Charsets.UTF_8).lineSequence()
-            .filter { it.contains("DLL Name:") }
-            .map { it.substringAfter("DLL Name:").trim() }
+        parseWindowsImportedDllNames(execOperations, objdumpExecutable, dllFile).asSequence()
             .filter { dllName ->
                 dllName !in collectedDlls &&
-                    !dllName.startsWith("api-ms-win-") &&
-                    !dllName.equals("KERNEL32.dll", ignoreCase = true) &&
-                    !dllName.equals("USER32.dll", ignoreCase = true) &&
-                    !dllName.equals("ADVAPI32.dll", ignoreCase = true) &&
-                    !dllName.equals("SHELL32.dll", ignoreCase = true) &&
-                    !dllName.equals("ole32.dll", ignoreCase = true) &&
-                    !dllName.equals("bcrypt.dll", ignoreCase = true) &&
+                    !isWindowsSystemLibrary(dllName) &&
                     ucrt64Bin.resolve(dllName).exists() &&
                     ffmpegLibNames.none { lib -> dllName.startsWith(lib) }
             }

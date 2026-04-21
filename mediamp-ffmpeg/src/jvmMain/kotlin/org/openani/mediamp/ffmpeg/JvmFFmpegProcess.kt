@@ -56,6 +56,8 @@ internal object JvmFFmpegProcess {
     }
 
     private fun runtimeLibrariesInLoadOrder(runtimeDir: File): List<File> {
+        runtimeLibrariesFromManifest(runtimeDir)?.let { return it }
+
         val wrapper = runtimeDir.resolve(wrapperLibraryName())
         require(wrapper.isFile) {
             "FFmpeg JNI runtime wrapper not found at ${wrapper.absolutePath}. Ensure the runtime artifact was packaged correctly."
@@ -105,6 +107,27 @@ internal object JvmFFmpegProcess {
             add(wrapper)
         }
         return orderedLibraries
+    }
+
+    private fun runtimeLibrariesFromManifest(runtimeDir: File): List<File>? {
+        val manifest = JvmFFmpegProcess::class.java.classLoader
+            .getResourceAsStream("ffmpeg-natives.txt")
+            ?.bufferedReader()
+            ?.readLines()
+            ?: return null
+
+        val libraries = manifest.asSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .map { runtimeDir.resolve(it) }
+            .filter { candidate -> candidate.isFile && candidate.isSharedRuntimeLibrary(osName) }
+            .distinctBy(File::getAbsolutePath)
+            .toList()
+
+        require(libraries.any { it.name.equals(wrapperLibraryName(), ignoreCase = true) }) {
+            "ffmpeg-natives.txt does not list the FFmpeg JNI wrapper '${wrapperLibraryName()}'."
+        }
+        return libraries
     }
 
     private fun wrapperLibraryName(): String =
@@ -163,3 +186,10 @@ internal object JvmFFmpegProcess {
         }
     }
 }
+
+private fun File.isSharedRuntimeLibrary(osName: String): Boolean =
+    when {
+        osName.contains("win") -> name.endsWith(".dll", ignoreCase = true)
+        osName.contains("mac") -> name.endsWith(".dylib", ignoreCase = true)
+        else -> name.endsWith(".so") || name.contains(".so.")
+    }

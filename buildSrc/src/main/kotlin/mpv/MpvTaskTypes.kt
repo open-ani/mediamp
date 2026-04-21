@@ -2,9 +2,12 @@ package mpv
 
 import nativebuild.copyTreePreservingLinks
 import nativebuild.deleteRecursivelyForce
+import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.parseWindowsImportedDllNames
 import nativebuild.recreateDirectory
+import nativebuild.resolveWindowsObjdump
 import nativebuild.shellQuote
 import nativebuild.shellScriptWithExports
 import org.gradle.api.DefaultTask
@@ -24,7 +27,6 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -491,32 +493,15 @@ private fun collectWindowsRuntimeDlls(
     outputBin: File,
 ) {
     val ucrt64Bin = msys2Dir.resolve("ucrt64/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir)
     val copied = mutableSetOf<String>()
 
-    fun shouldIgnore(dllName: String): Boolean = dllName.startsWith("api-ms-win-") ||
-        dllName.equals("KERNEL32.dll", ignoreCase = true) ||
-        dllName.equals("USER32.dll", ignoreCase = true) ||
-        dllName.equals("ADVAPI32.dll", ignoreCase = true) ||
-        dllName.equals("SHELL32.dll", ignoreCase = true) ||
-        dllName.equals("ole32.dll", ignoreCase = true) ||
-        dllName.equals("bcrypt.dll", ignoreCase = true) ||
-        dllName.equals("GDI32.dll", ignoreCase = true) ||
-        dllName.equals("WINMM.dll", ignoreCase = true) ||
-        dllName.equals("WS2_32.dll", ignoreCase = true)
+    fun shouldIgnore(dllName: String): Boolean = isWindowsSystemLibrary(dllName)
 
     fun collectDeps(dllFile: File) {
         if (!dllFile.isFile) return
 
-        val stdout = ByteArrayOutputStream()
-        execOperations.exec {
-            commandLine(msys2Dir.resolve("ucrt64/bin/objdump.exe").absolutePath, "-p", dllFile.absolutePath)
-            standardOutput = stdout
-            isIgnoreExitValue = true
-        }
-
-        stdout.toString(Charsets.UTF_8).lineSequence()
-            .filter { it.contains("DLL Name:") }
-            .map { it.substringAfter("DLL Name:").trim() }
+        parseWindowsImportedDllNames(execOperations, objdumpExecutable, dllFile).asSequence()
             .filterNot(::shouldIgnore)
             .forEach { dllName ->
                 val existing = outputBin.resolve(dllName)
