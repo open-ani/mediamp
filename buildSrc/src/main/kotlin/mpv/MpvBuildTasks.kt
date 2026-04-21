@@ -236,7 +236,7 @@ private fun MpvBuildContext.jniCompilerArgs(target: MpvBuildTarget): List<String
 
 private fun MpvBuildContext.jniLinkerArgs(target: MpvBuildTarget): List<String> {
     return when {
-        target.name == "WindowsX64" -> emptyList()
+        target.name == "WindowsX64" -> listOf("-lopengl32")
         target.androidAbi != null -> listOf("-landroid", "-llog")
         target.name.startsWith("Macos") -> appleArchArgs(target.name)
         target.name == "LinuxX64" -> listOf("-pthread", "-Wl,-rpath,\$ORIGIN")

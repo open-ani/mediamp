@@ -9,5 +9,13 @@
 package org.openani.mediamp.mpv
 
 import android.os.Build
+import kotlin.coroutines.CoroutineContext
+
+actual class MpvMediampPlayer(
+    context: Any,
+    parentCoroutineContext: CoroutineContext
+) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
+
+}
 
 actual fun limitDemuxer(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1

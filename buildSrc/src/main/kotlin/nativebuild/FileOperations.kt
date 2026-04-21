@@ -57,6 +57,30 @@ internal fun copyTreePreservingLinks(source: File, target: File) {
     }
 }
 
+internal fun recreateDirectory(dir: File) {
+    deleteRecursivelyForce(dir)
+    dir.mkdirs()
+}
+
+internal fun deleteRecursivelyForce(target: File) {
+    if (!target.exists()) return
+
+    target.walkBottomUp().forEach { entry ->
+        if (!entry.exists()) return@forEach
+
+        entry.setWritable(true, false)
+        repeat(6) { attempt ->
+            if (entry.delete() || !entry.exists()) {
+                return@forEach
+            }
+            if (attempt == 5) {
+                error("Failed to delete ${entry.absolutePath}")
+            }
+            Thread.sleep(50L * (attempt + 1))
+        }
+    }
+}
+
 internal fun restoreExecutablePermissions(sourceDir: File, targetDir: File) {
     sourceDir.walkTopDown()
         .filter { src ->

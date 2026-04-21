@@ -14,6 +14,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.getAndUpdate
@@ -53,7 +54,8 @@ import kotlin.coroutines.CoroutineContext
 public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     private val defaultDispatcher: CoroutineContext = Dispatchers.Default,
 ) : MediampPlayer {
-    override val playbackState: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.CREATED)
+    protected val playbackStateDelegate: MutableStateFlow<PlaybackState> = MutableStateFlow(PlaybackState.CREATED)
+    override val playbackState: StateFlow<PlaybackState> = playbackStateDelegate
 
     /**
      * Currently playing resource that should be closed when the controller is closed.
@@ -129,7 +131,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    playbackState.value = PlaybackState.ERROR
+                    playbackStateDelegate.value = PlaybackState.ERROR
                     throw e
                 }
 
@@ -145,7 +147,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
                 }
 
                 openResource.value = opened
-                playbackState.value = PlaybackState.READY
+                playbackStateDelegate.value = PlaybackState.READY
             }
         } finally {
             setMediaDataRequestMutex.withLock {

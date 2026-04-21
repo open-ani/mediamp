@@ -14,7 +14,7 @@ import org.openani.mediamp.compose.MediampPlayerSurfaceProvider
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import kotlin.reflect.KClass
 
-public class MpvMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<MpvMediampPlayer> {
+class MpvMediampPlayerSurfaceProvider : MediampPlayerSurfaceProvider<MpvMediampPlayer> {
     override val forClass: KClass<MpvMediampPlayer> = MpvMediampPlayer::class
 
     @Composable

@@ -1,8 +1,10 @@
 package mpv
 
 import nativebuild.copyTreePreservingLinks
+import nativebuild.deleteRecursivelyForce
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.recreateDirectory
 import nativebuild.shellQuote
 import nativebuild.shellScriptWithExports
 import org.gradle.api.DefaultTask
@@ -90,8 +92,7 @@ abstract class MpvConfigureTask : DefaultTask() {
                 "Build the matching mediamp-ffmpeg target first."
         }
 
-        buildRoot.deleteRecursively()
-        buildRoot.mkdirs()
+        recreateDirectory(buildRoot)
         copyTreePreservingLinks(sourceTemplateDir.get().asFile, sourceDir)
         writeWrapFiles(sourceDir, wrapFiles.get())
 
@@ -200,7 +201,7 @@ abstract class MpvConfigureTask : DefaultTask() {
 
         val wrapdbDir = sourceDir.parentFile.resolve("wrapdb")
         if (!wrapdbDir.resolve(".git").isDirectory) {
-            wrapdbDir.deleteRecursively()
+            deleteRecursivelyForce(wrapdbDir)
             execOperations.exec {
                 commandLine(
                     shell.get(),
@@ -228,7 +229,7 @@ abstract class MpvConfigureTask : DefaultTask() {
             val packagefilesDir = wrapdbDir.resolve("subprojects/packagefiles/$dependencyName")
             if (packagefilesDir.isDirectory) {
                 val targetPackagefiles = sourceDir.resolve("subprojects/packagefiles/$dependencyName")
-                targetPackagefiles.deleteRecursively()
+                deleteRecursivelyForce(targetPackagefiles)
                 copyTreePreservingLinks(packagefilesDir, targetPackagefiles)
             }
         }
@@ -439,8 +440,7 @@ abstract class MpvAssembleTask : DefaultTask() {
         val ffmpegPrefix = ffmpegInstallDir.get().asFile
         val outputPrefix = outputDir.get().asFile
 
-        outputPrefix.deleteRecursively()
-        outputPrefix.mkdirs()
+        recreateDirectory(outputPrefix)
         copyTreePreservingLinks(installPrefix, outputPrefix)
 
         jniLibrary.orNull?.asFile?.takeIf(File::isFile)?.let { wrapper ->

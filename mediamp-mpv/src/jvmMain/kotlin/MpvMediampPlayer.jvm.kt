@@ -10,8 +10,7 @@ package org.openani.mediamp.mpv
 
 import androidx.compose.ui.geometry.Size
 import kotlinx.coroutines.flow.MutableStateFlow
-import org.jetbrains.skia.BackendTexture
-import org.jetbrains.skia.Image
+import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
@@ -26,19 +25,16 @@ import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
 
 @kotlin.OptIn(InternalMediampApi::class)
-actual class MpvMediampPlayer(
+abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
-) : AbstractMediampPlayer<MpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
+) : AbstractMediampPlayer<JvmMpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
     class MPVPlayerData(mediaData: MediaData) : Data(mediaData)
 
     private val handle by lazy { MPVHandle(context) }
 
     var currentSize: Size? = null
         @InternalMediampApi set
-
-    internal var backendTexture: BackendTexture? = null
-    internal var image: Image? = null
 
     private val eventListener = object : EventListener {
         override fun onPropertyChange(name: String) {
@@ -47,10 +43,10 @@ actual class MpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: Boolean) {
             when (name) {
-                "pause" -> playbackState.value =
+                "pause" -> playbackStateDelegate.value =
                     if (value) PlaybackState.PAUSED else PlaybackState.PLAYING
 
-                "paused-for-cache" -> playbackState.value =
+                "paused-for-cache" -> playbackStateDelegate.value =
                     if (value) PlaybackState.PAUSED_BUFFERING else PlaybackState.PLAYING
 
             }
@@ -58,8 +54,8 @@ actual class MpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: Long) {
             when (name) {
-                "time-pos/full" -> currentPositionMillis.value = value * 1000
-                "duration/full" -> mediaProperties.value =
+                "time-pos/full" -> _currentPositionMillis.value = value * 1000
+                "duration/full" -> _mediaProperties.value =
                     if (mediaProperties.value == null) MediaProperties(null, value * 1000)
                     else mediaProperties.value?.copy(durationMillis = value * 1000)
             }
@@ -70,7 +66,7 @@ actual class MpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: String) {
             when (name) {
-                "media-title" -> mediaProperties.value =
+                "media-title" -> _mediaProperties.value =
                     if (mediaProperties.value == null) MediaProperties(value, -1)
                     else mediaProperties.value?.copy(title = value)
             }
@@ -78,11 +74,13 @@ actual class MpvMediampPlayer(
 
     }
 
-    override val impl: MPVHandle get() = handle
+    override val impl: Any get() = handle
 
-    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
+    private val _currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
+    override val currentPositionMillis: StateFlow<Long> = _currentPositionMillis
 
-    override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
+    private val _mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
+    override val mediaProperties: StateFlow<MediaProperties?> = _mediaProperties
 
     override val features: PlayerFeatures = buildPlayerFeatures { }
 
@@ -238,7 +236,7 @@ actual class MpvMediampPlayer(
                 when (val data = media.mediaData) {
                     is UriMediaData -> {
                         handle.command("loadfile", data.uri)
-                        playbackState.value = PlaybackState.PLAYING
+                        playbackStateDelegate.value = PlaybackState.PLAYING
                     }
 
                     is SeekableInputMediaData -> TODO()
@@ -261,18 +259,18 @@ actual class MpvMediampPlayer(
 
     override fun seekTo(positionMillis: Long) {
         handle.command("seek", (positionMillis / 1000L).toString(), "absolute+exact")
-        currentPositionMillis.value = positionMillis
+        _currentPositionMillis.value = positionMillis
     }
 
     override fun skip(deltaMillis: Long) {
         handle.command("seek", (deltaMillis / 1000L).toString(), "relative+relative")
-        currentPositionMillis.value += deltaMillis
+        _currentPositionMillis.value += deltaMillis
     }
 
     override fun stopPlaybackImpl() {
         handle.command("stop")
-        currentPositionMillis.value = 0L
-        playbackState.value = PlaybackState.FINISHED
+        _currentPositionMillis.value = 0L
+        playbackStateDelegate.value = PlaybackState.FINISHED
     }
 
 
@@ -282,9 +280,6 @@ actual class MpvMediampPlayer(
         handle.close()
 
     }
-
-    companion object {
-        internal const val GL_TEXTURE_2D = 0x0DE1
-        internal const val GL_RGBA8 = 0x8058
-    }
 }
+
+expect fun limitDemuxer(): Boolean

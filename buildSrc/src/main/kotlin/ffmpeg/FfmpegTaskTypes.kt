@@ -3,6 +3,7 @@ package ffmpeg
 import nativebuild.copyTreeRecursively
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.recreateDirectory
 import nativebuild.restoreExecutablePermissions
 import nativebuild.shellQuote
 import nativebuild.toMsysPath
@@ -72,8 +73,7 @@ abstract class FfmpegConfigureTask : DefaultTask() {
             "FFmpeg source tree is missing configure at ${templateSourceDir.absolutePath}"
         }
         logger.lifecycle("Configuring FFmpeg with buildDir=${buildDir.absolutePath} configure=${configureFile.absolutePath}")
-        buildDir.deleteRecursively()
-        buildDir.mkdirs()
+        recreateDirectory(buildDir)
         copySourceTree(templateSourceDir, sourceDir)
 
         require(configureFile.isFile) {
