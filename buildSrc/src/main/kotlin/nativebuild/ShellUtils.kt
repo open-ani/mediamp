@@ -21,22 +21,27 @@ internal fun jniIncludeFlags(
     targetName: String,
     windowsMsys: Boolean,
 ): List<String> {
+    @Suppress("UNUSED_VARIABLE")
+    val ignoredTargetName = targetName
     val javaHome = System.getenv("JAVA_HOME")
         ?.takeIf { it.isNotBlank() }
         ?.let(::File)
         ?: File(System.getProperty("java.home"))
     val includeDir = javaHome.resolve("include")
     val platformDir = includeDir.resolve(
-        when {
-            targetName == "WindowsX64" -> "win32"
-            targetName.startsWith("Macos") -> "darwin"
-            else -> "linux"
-        },
+        currentJniPlatformIncludeDirName(),
     )
     return listOf(includeDir, platformDir)
         .onEach { require(it.isDirectory) { "JNI include directory not found at ${it.absolutePath}" } }
         .map { "-I${pathForShell(it, windowsMsys)}" }
 }
+
+private fun currentJniPlatformIncludeDirName(): String =
+    when {
+        System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true) -> "win32"
+        System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true) -> "darwin"
+        else -> "linux"
+    }
 
 internal fun shellScriptWithExports(
     env: Map<String, String>,

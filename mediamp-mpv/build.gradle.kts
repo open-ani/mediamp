@@ -28,17 +28,6 @@ plugins {
 
 description = "MediaMP backend using MPV"
 
-val archs = buildList {
-    val abis = getPropertyOrNull("ani.android.abis")?.trim()
-    if (!abis.isNullOrEmpty()) {
-        addAll(abis.split(",").map { it.trim() })
-    } else {
-        add("arm64-v8a")
-        add("armeabi-v7a")
-        add("x86_64")
-    }
-}
-
 kotlin {
     androidLibrary {
         namespace = "org.openani.mediamp.mpv"

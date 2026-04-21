@@ -19,6 +19,24 @@ internal data class DesktopRuntimeTarget(
     val targetName: String,
 )
 
+internal data class NativeBuildProperties(
+    val moduleDisplayName: String,
+    val buildVariantPropertyName: String,
+    val androidAbiPropertyNames: List<String>,
+)
+
+internal val FFMPEG_NATIVE_BUILD_PROPERTIES: NativeBuildProperties = NativeBuildProperties(
+    moduleDisplayName = "FFmpeg",
+    buildVariantPropertyName = "mediamp.ffmpeg.buildvariant",
+    androidAbiPropertyNames = listOf("mediamp.ffmpeg.androidabis"),
+)
+
+internal val MPV_NATIVE_BUILD_PROPERTIES: NativeBuildProperties = NativeBuildProperties(
+    moduleDisplayName = "mpv",
+    buildVariantPropertyName = "mediamp.mpv.buildvariant",
+    androidAbiPropertyNames = listOf("mediamp.mpv.androidabis", "mediamp.ffmpeg.androidabis"),
+)
+
 internal val DEFAULT_ANDROID_ABIS: List<AndroidAbi> = listOf(
     AndroidAbi("armeabi-v7a", "arm", "armv7a-linux-androideabi", 21),
     AndroidAbi("arm64-v8a", "aarch64", "aarch64-linux-android", 21),
@@ -33,14 +51,45 @@ internal val DEFAULT_DESKTOP_RUNTIME_TARGETS: List<DesktopRuntimeTarget> = listO
     DesktopRuntimeTarget("macos", "x64", "MacosX64"),
 )
 
+private data class ResolvedPropertySelection(
+    val propertyName: String,
+    val values: List<String>,
+)
+
+private fun Project.resolveCommaSeparatedPropertySelection(
+    propertyNames: List<String>,
+    valueTransform: (String) -> String = { it },
+): ResolvedPropertySelection? {
+    propertyNames.distinct().forEach { propertyName ->
+        val values = getPropertyOrNull(propertyName)
+            ?.split(",")
+            ?.map(String::trim)
+            ?.map(valueTransform)
+            ?.filter(String::isNotEmpty)
+            ?.distinct()
+            ?: return@forEach
+        return ResolvedPropertySelection(propertyName, values)
+    }
+    return null
+}
+
+internal fun Project.resolveEnabledBuildVariantFamilies(
+    properties: NativeBuildProperties,
+    supportedFamilies: Set<String>,
+): Set<String> =
+    resolveEnabledBuildVariantFamilies(
+        propertyName = properties.buildVariantPropertyName,
+        supportedFamilies = supportedFamilies,
+    )
+
 internal fun Project.resolveEnabledBuildVariantFamilies(
     propertyName: String,
     supportedFamilies: Set<String>,
 ): Set<String> =
-    getPropertyOrNull(propertyName)
-        ?.split(",")
-        ?.map { it.trim().lowercase(Locale.getDefault()) }
-        ?.filter { it.isNotEmpty() }
+    resolveCommaSeparatedPropertySelection(propertyNames = listOf(propertyName)) { value ->
+        value.lowercase(Locale.getDefault())
+    }
+        ?.values
         ?.toSet()
         ?.also { selected ->
             val unknown = selected - supportedFamilies
@@ -55,29 +104,36 @@ internal fun Set<String>.includesBuildVariant(family: String): Boolean =
     family.lowercase(Locale.getDefault()) in this
 
 internal fun Project.resolveAndroidAbis(
+    properties: NativeBuildProperties,
+    availableAbis: List<AndroidAbi> = DEFAULT_ANDROID_ABIS,
+): List<AndroidAbi> =
+    resolveAndroidAbis(
+        propertyNames = properties.androidAbiPropertyNames,
+        availableAbis = availableAbis,
+    )
+
+internal fun Project.resolveAndroidAbis(
     propertyName: String,
     fallbackPropertyName: String? = null,
     availableAbis: List<AndroidAbi> = DEFAULT_ANDROID_ABIS,
-): List<AndroidAbi> {
-    fun resolveFromProperty(name: String?): List<AndroidAbi>? {
-        val propertyNameValue = name ?: return null
-        val selected = getPropertyOrNull(propertyNameValue)
-            ?.split(",")
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?: return null
-        val byAbi = availableAbis.associateBy(AndroidAbi::abi)
-        val unknown = selected.filterNot(byAbi::containsKey)
-        require(unknown.isEmpty()) {
-            "Unknown values in $propertyNameValue: ${unknown.joinToString()}. " +
-                "Supported values: ${availableAbis.joinToString { it.abi }}."
-        }
-        return selected.map { byAbi.getValue(it) }
-    }
+): List<AndroidAbi> =
+    resolveAndroidAbis(
+        propertyNames = listOfNotNull(propertyName, fallbackPropertyName),
+        availableAbis = availableAbis,
+    )
 
-    return resolveFromProperty(propertyName)
-        ?: resolveFromProperty(fallbackPropertyName)
-        ?: availableAbis
+internal fun Project.resolveAndroidAbis(
+    propertyNames: List<String>,
+    availableAbis: List<AndroidAbi> = DEFAULT_ANDROID_ABIS,
+): List<AndroidAbi> {
+    val resolved = resolveCommaSeparatedPropertySelection(propertyNames) ?: return availableAbis
+    val byAbi = availableAbis.associateBy(AndroidAbi::abi)
+    val unknown = resolved.values.filterNot(byAbi::containsKey)
+    require(unknown.isEmpty()) {
+        "Unknown values in ${resolved.propertyName}: ${unknown.joinToString()}. " +
+            "Supported values: ${availableAbis.joinToString { it.abi }}."
+    }
+    return resolved.values.map { byAbi.getValue(it) }
 }
 
 internal fun androidTargetName(abi: AndroidAbi): String =

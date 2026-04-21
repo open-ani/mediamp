@@ -99,22 +99,22 @@ public class TestMediampPlayer(
     }
 
     override fun resumeImpl() {
-        playbackState.value = PlaybackState.PLAYING
+        playbackStateDelegate.value = PlaybackState.PLAYING
     }
 
     override fun pauseImpl() {
-        playbackState.value = PlaybackState.PAUSED
+        playbackStateDelegate.value = PlaybackState.PAUSED
     }
 
     override fun stopPlaybackImpl() {
         currentPositionMillis.value = 0
         mediaProperties.value = null
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
         // TODO: 2025/1/5 We should encapsulate the mutable states to ensure consistency in flow emissions
     }
 
     override fun closeImpl() {
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
     }
 
     public object Factory : MediampPlayerFactory<TestMediampPlayer> {

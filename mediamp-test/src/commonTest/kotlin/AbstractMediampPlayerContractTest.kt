@@ -90,27 +90,27 @@ private class CountingPlayer : AbstractMediampPlayer<AbstractMediampPlayer.Data>
         private set
 
     fun setReady() {
-        playbackState.value = PlaybackState.READY
+        playbackStateDelegate.value = PlaybackState.READY
         openResource.value = Data(UriMediaData("file:///counting.mp4", emptyMap(), MediaExtraFiles.EMPTY))
     }
 
     override suspend fun setMediaDataImpl(data: MediaData): Data = Data(data)
 
     override fun resumeImpl() {
-        playbackState.value = PlaybackState.PLAYING
+        playbackStateDelegate.value = PlaybackState.PLAYING
     }
 
     override fun pauseImpl() {
-        playbackState.value = PlaybackState.PAUSED
+        playbackStateDelegate.value = PlaybackState.PAUSED
     }
 
     override fun stopPlaybackImpl() {
         stopCalls++
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
     }
 
     override fun closeImpl() {
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
     }
 
     override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
@@ -148,19 +148,19 @@ private class SuspendingSetMediaPlayer(
     }
 
     override fun resumeImpl() {
-        playbackState.value = PlaybackState.PLAYING
+        playbackStateDelegate.value = PlaybackState.PLAYING
     }
 
     override fun pauseImpl() {
-        playbackState.value = PlaybackState.PAUSED
+        playbackStateDelegate.value = PlaybackState.PAUSED
     }
 
     override fun stopPlaybackImpl() {
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
     }
 
     override fun closeImpl() {
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
     }
 
     override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value

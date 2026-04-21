@@ -396,7 +396,11 @@ private fun buildJvmJniWrapper(
     val jniWrapper = shellQuote(pathForShell(jniWrapperSource, windowsMsys))
     val outputPath = shellQuote(pathForShell(wrapperOut, windowsMsys))
     val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys))
-    val jniIncludes = jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
+    val jniIncludes = if (targetName.startsWith("Android")) {
+        ""
+    } else {
+        jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
+    }
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
         buildDir.resolve("source"),

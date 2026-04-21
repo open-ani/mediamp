@@ -12,10 +12,12 @@ import Arch
 import Os
 import getArch
 import getOs
+import nativebuild.FFMPEG_NATIVE_BUILD_PROPERTIES
 import nativebuild.AndroidAbi
 import nativebuild.DEFAULT_ANDROID_ABIS
 import nativebuild.DEFAULT_DESKTOP_RUNTIME_TARGETS
 import nativebuild.DesktopRuntimeTarget
+import nativebuild.NativeBuildProperties
 import nativebuild.androidNdkHostTag
 import nativebuild.includesBuildVariant
 import nativebuild.resolveAndroidAbis
@@ -46,6 +48,8 @@ internal class FfmpegBuildContext(
     val project: Project,
     val ffmpegPatch: File
 ) {
+    val buildProperties: NativeBuildProperties = FFMPEG_NATIVE_BUILD_PROPERTIES
+
     val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 
     val appleFrameworkName: String = "MediampFFmpegKit"
@@ -54,7 +58,7 @@ internal class FfmpegBuildContext(
     val jniWrapperSource: File = project.projectDir.resolve("src/jvmMain/c/ffmpegkit_jni.c")
 
     val enabledBuildVariantFamilies: Set<String> =
-        project.resolveEnabledBuildVariantFamilies("mediamp.ffmpeg.buildvariant", ALL_BUILD_VARIANT_FAMILIES)
+        project.resolveEnabledBuildVariantFamilies(buildProperties, ALL_BUILD_VARIANT_FAMILIES)
 
     val hostOs: Os = getOs()
     val hostArch: Arch = getArch()
@@ -148,10 +152,7 @@ internal class FfmpegBuildContext(
     )
 
     val androidAbis: List<AndroidAbi> =
-        project.resolveAndroidAbis(
-            propertyName = "mediamp.ffmpeg.androidabis",
-            availableAbis = DEFAULT_ANDROID_ABIS,
-        )
+        project.resolveAndroidAbis(buildProperties, availableAbis = DEFAULT_ANDROID_ABIS)
 
     val desktopRuntimeTargets: List<DesktopRuntimeTarget> = DEFAULT_DESKTOP_RUNTIME_TARGETS
 

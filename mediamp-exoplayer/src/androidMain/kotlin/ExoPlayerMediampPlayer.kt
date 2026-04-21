@@ -159,7 +159,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             if (mediaItem == null || playbackState.value <= PlaybackState.FINISHED) {
                 return
             }
-            playbackState.value = PlaybackState.READY
+            playbackStateDelegate.value = PlaybackState.READY
             buffering.isBuffering.value = false
         }
 
@@ -190,7 +190,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             if (playbackState.value == PlaybackState.DESTROYED) {
                 return
             }
-            playbackState.value = PlaybackState.ERROR
+            playbackStateDelegate.value = PlaybackState.ERROR
             println("ExoPlayer error: ${error.errorCodeName}") // TODO: 2024/12/16 error handling
             error.printStackTrace()
         }
@@ -282,7 +282,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
             currentState = playbackState.value,
         ) ?: return
 
-        playbackState.value = mappedState
+        playbackStateDelegate.value = mappedState
     }
 
     init {
@@ -400,7 +400,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     override fun stopPlaybackImpl() {
         playbackStateMapper.reset()
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
         buffering.isBuffering.value = false
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
@@ -409,7 +409,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
 
     override fun closeImpl() {
         playbackStateMapper.reset()
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
         buffering.isBuffering.value = false
         currentPositionMillis.value = 0
         exoPlayer.removeListener(mediaListener)

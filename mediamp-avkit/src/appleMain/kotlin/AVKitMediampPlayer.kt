@@ -192,7 +192,7 @@ public class AVKitMediampPlayer(
             `object` = playerItem,
             queue = null,
         ) { _ ->
-            playbackState.value = PlaybackState.FINISHED
+            playbackStateDelegate.value = PlaybackState.FINISHED
             bufferingFeature.isBuffering.value = false
         }
 
@@ -215,7 +215,7 @@ public class AVKitMediampPlayer(
         hasPlaybackStarted = false
         bufferingFeature.isBuffering.value = false
         bufferingFeature.bufferedPercentage.value = 0
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
         currentPositionMillis.value = 0L
         impl.pause()
         impl.replaceCurrentItemWithPlayerItem(null)
@@ -259,7 +259,7 @@ public class AVKitMediampPlayer(
     // Closing
     // ------------------------------------------------------------------------------------
     override fun closeImpl() {
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
         removePlayerItemObservers()
 
         timeControlStatusObserver?.let {
@@ -305,7 +305,7 @@ public class AVKitMediampPlayer(
         when (player.timeControlStatus) {
             // 2
             AVPlayerTimeControlStatusPlaying -> {
-                playbackState.value = PlaybackState.PLAYING
+                playbackStateDelegate.value = PlaybackState.PLAYING
                 bufferingFeature.isBuffering.value = false
                 hasPlaybackStarted = true
             }
@@ -314,7 +314,7 @@ public class AVKitMediampPlayer(
             AVPlayerTimeControlStatusPaused -> {
                 // Only transition to PAUSED after actual playback started.
                 if (currentState == PlaybackState.PLAYING || currentState == PlaybackState.PAUSED_BUFFERING) {
-                    playbackState.value = PlaybackState.PAUSED
+                    playbackStateDelegate.value = PlaybackState.PAUSED
                 }
                 bufferingFeature.isBuffering.value = false
             }
@@ -325,7 +325,7 @@ public class AVKitMediampPlayer(
                 if (currentState == PlaybackState.PLAYING ||
                     (currentState == PlaybackState.READY && hasPlaybackStarted)
                 ) {
-                    playbackState.value = PlaybackState.PAUSED_BUFFERING
+                    playbackStateDelegate.value = PlaybackState.PAUSED_BUFFERING
                     bufferingFeature.isBuffering.value = true
                 }
             }
@@ -388,7 +388,7 @@ public class AVKitMediampPlayer(
                         if (awaiting) {
                             resumeWithFailure(error)
                         } else {
-                            playbackState.value = PlaybackState.ERROR
+                            playbackStateDelegate.value = PlaybackState.ERROR
                         }
                     }
 

@@ -28,7 +28,9 @@ abstract class PrepareMpvAndroidJniLibsTask : DefaultTask() {
 
 internal fun registerMpvAndroidJniPackaging(context: MpvBuildContext): TaskProvider<PrepareMpvAndroidJniLibsTask>? {
     if (!context.isBuildVariantEnabled("android")) {
-        context.project.logger.lifecycle("Skipping Android JNI packaging tasks: mediamp.mpv.buildvariant does not include 'android'.")
+        context.project.logger.lifecycle(
+            "Skipping Android JNI packaging tasks: ${context.buildProperties.buildVariantPropertyName} does not include 'android'.",
+        )
         return null
     }
 

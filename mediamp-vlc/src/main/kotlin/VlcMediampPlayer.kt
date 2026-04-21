@@ -193,7 +193,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 override fun buffering(mediaPlayer: MediaPlayer?, newCache: Float) {
                     buffering.bufferedPercentage.value = newCache.roundToInt().coerceIn(0, 100)
                     playbackStateMapper.onBuffering(playbackState.value, newCache)?.let {
-                        playbackState.value = it
+                        playbackStateDelegate.value = it
                     }
                 }
 
@@ -216,7 +216,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
                 override fun playing(mediaPlayer: MediaPlayer) {
                     playbackStateMapper.onPlaying(playbackState.value)?.let {
-                        playbackState.value = it
+                        playbackStateDelegate.value = it
                     } ?: return
                     player.submit { player.media().parsing().parse() }
 
@@ -227,7 +227,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
                 override fun paused(mediaPlayer: MediaPlayer) {
                     playbackStateMapper.onPaused(playbackState.value)?.let {
-                        playbackState.value = it
+                        playbackStateDelegate.value = it
                     }
                 }
 
@@ -236,7 +236,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                         return
                     }
                     playbackStateMapper.reset()
-                    playbackState.value = PlaybackState.FINISHED
+                    playbackStateDelegate.value = PlaybackState.FINISHED
                 }
 
                 override fun stopped(mediaPlayer: MediaPlayer?) {
@@ -244,7 +244,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                         return
                     }
                     playbackStateMapper.reset()
-                    playbackState.value = PlaybackState.FINISHED
+                    playbackStateDelegate.value = PlaybackState.FINISHED
                 }
 
                 override fun error(mediaPlayer: MediaPlayer) {
@@ -253,7 +253,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     }
                     logger.error { "vlcj player error" }
                     playbackStateMapper.reset()
-                    playbackState.value = PlaybackState.ERROR
+                    playbackStateDelegate.value = PlaybackState.ERROR
                 }
 
                 override fun positionChanged(mediaPlayer: MediaPlayer?, newPosition: Float) {
@@ -376,7 +376,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     lastMedia = null
                 },
             ).also {
-                playbackState.value = PlaybackState.READY
+                playbackStateDelegate.value = PlaybackState.READY
             }
         }
 
@@ -409,7 +409,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                         }
                     }
                 }.also {
-                    playbackState.value = PlaybackState.READY
+                    playbackStateDelegate.value = PlaybackState.READY
                 }
             } catch (e: Throwable) {
                 awaitContext.cancel(CancellationException("Failed to create input", e))
@@ -483,7 +483,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override fun stopPlaybackImpl() {
         playbackStateMapper.reset()
-        playbackState.value = PlaybackState.FINISHED
+        playbackStateDelegate.value = PlaybackState.FINISHED
         currentPositionMillis.value = 0L
         lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
         try {
@@ -497,7 +497,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override fun closeImpl() {
         playbackStateMapper.reset()
-        playbackState.value = PlaybackState.DESTROYED
+        playbackStateDelegate.value = PlaybackState.DESTROYED
         lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
         lastMedia = null
         backgroundScope.launch(NonCancellable) {
