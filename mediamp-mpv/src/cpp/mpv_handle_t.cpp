@@ -70,7 +70,7 @@ JavaVM *global_jvm = nullptr;
 
 namespace {
 
-constexpr const char *kSeekableInputProtocol = "mediampseek";
+constexpr const char *kSeekableInputProtocol = "mediamp";
 
 struct stream_lock_guard final {
 #if defined(_WIN32) || defined(_WIN64)
@@ -483,40 +483,50 @@ bool mpv_handle_t::ensure_stream_protocol_registered() {
     return true;
 }
 
-std::string mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, int64_t size) {
+bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, const char *uri, int64_t size) {
     FP;
     if (!handle_) {
         LOG("mpv handle is not created when %s", __FUNCTION__);
-        return {};
+        return false;
     }
     if (!seekable_input) {
         LOG("seekable input is null when %s\n", __FUNCTION__);
-        return {};
+        return false;
     }
     if (!jvm_) {
         LOG("JVM is not initialized when %s\n", __FUNCTION__);
-        return {};
+        return false;
+    }
+    if (!uri || uri[0] == '\0') {
+        LOG("seekable input uri is null or empty when %s\n", __FUNCTION__);
+        return false;
     }
 
     jni_cache_classes(env);
     if (env->IsInstanceOf(seekable_input, mediampv::jni_mediamp_clazz_SeekableInput) != JNI_TRUE) {
         LOG("seekable input is not an instance of SeekableInput\n");
-        return {};
+        return false;
     }
 
     LOCK(stream_registry_lock);
     if (!ensure_stream_protocol_registered()) {
-        return {};
+        return false;
     }
 
     jobject global_input = env->NewGlobalRef(seekable_input);
     if (!global_input || clear_jni_exception(env, "NewGlobalRef(SeekableInput)")) {
-        return {};
+        return false;
     }
 
-    const std::string uri = std::string(kSeekableInputProtocol) + "://stream/" + std::to_string(next_stream_id_++);
-    seekable_streams_[uri] = std::make_shared<seekable_stream_entry>(jvm_, global_input, uri, size);
-    return uri;
+    const std::string stream_uri(uri);
+    if (seekable_streams_.find(stream_uri) != seekable_streams_.end()) {
+        LOG("seekable input uri is already registered: %s\n", uri);
+        env->DeleteGlobalRef(global_input);
+        return false;
+    }
+
+    seekable_streams_.emplace(stream_uri, std::make_shared<seekable_stream_entry>(jvm_, global_input, stream_uri, size));
+    return true;
 }
 
 bool mpv_handle_t::unregister_seekable_input(const char *uri) {
@@ -885,7 +895,6 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
         handle_ = nullptr;
     }
     stream_protocol_registered_ = false;
-    next_stream_id_ = 1;
 
     return true;
 }

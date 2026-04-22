@@ -24,7 +24,12 @@ import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.coroutineContext
+
+private const val SEEKABLE_INPUT_LOAD_TARGET_PREFIX = "mediamp://seekble_input_media/"
+
+private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
+    return SEEKABLE_INPUT_LOAD_TARGET_PREFIX + data.uri
+}
 
 @kotlin.OptIn(InternalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
@@ -289,15 +294,16 @@ abstract class JvmMpvMediampPlayer(
             handle.command("stop")
             handle.command("playlist-clear")
 
+            val loadTarget = buildSeekableInputLoadTarget(data)
             val input = data.createInput(currentCoroutineContext())
-            val loadTarget = try {
-                handle.registerSeekableInput(input)
+            val registeredTarget = try {
+                handle.registerSeekableInput(input, loadTarget)
             } catch (t: Throwable) {
                 input.close()
                 throw t
             }
 
-            SeekableInputPlayerData(data, loadTarget, handle)
+            SeekableInputPlayerData(data, registeredTarget, handle)
         }
     }
 

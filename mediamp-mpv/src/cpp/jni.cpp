@@ -73,7 +73,7 @@ extern "C" {
 
     JNIEXPORT jboolean JNICALL FN(nObserveProperty)(JNIEnv *env, jclass clazz, jlong ptr, jstring name, jint format, jlong reply_data);
     JNIEXPORT jboolean JNICALL FN(nUnobserveProperty)(JNIEnv *env, jclass clazz, jlong ptr, jlong reply_data);
-    JNIEXPORT jstring JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jobject input, jlong size);
+    JNIEXPORT jboolean JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jobject input, jstring uri, jlong size);
     JNIEXPORT jboolean JNICALL FN(nUnregisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jstring uri);
 
     // renderer
@@ -305,16 +305,14 @@ JNIEXPORT jboolean JNICALL FN(nUnobserveProperty)(JNIEnv *env, jclass clazz, jlo
     return instance ? instance->unobserve_property(reply_data) : JNI_FALSE;
 }
 
-JNIEXPORT jstring JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jobject input, jlong size) {
+JNIEXPORT jboolean JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jobject input, jstring uri, jlong size) {
     auto *instance = get_instance(ptr);
-    if (!instance) {
-        return nullptr;
+    scoped_utf_chars stream_uri(env, uri);
+    if (!instance || !stream_uri.valid()) {
+        return JNI_FALSE;
     }
-    std::string uri = instance->register_seekable_input(env, input, static_cast<int64_t>(size));
-    if (uri.empty()) {
-        return nullptr;
-    }
-    return env->NewStringUTF(uri.c_str());
+
+    return instance->register_seekable_input(env, input, stream_uri.get(), static_cast<int64_t>(size));
 }
 
 JNIEXPORT jboolean JNICALL FN(nUnregisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jstring uri) {

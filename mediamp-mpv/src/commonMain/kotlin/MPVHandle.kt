@@ -82,9 +82,11 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
         return nUnobserveProperty(ptr, replyData)
     }
 
-    fun registerSeekableInput(input: SeekableInput): String {
-        return nRegisterSeekableInput(ptr, input, input.size)
-            ?: error("Failed to register SeekableInput for mpv stream_cb")
+    fun registerSeekableInput(input: SeekableInput, uri: String): String {
+        if (!nRegisterSeekableInput(ptr, input, uri, input.size)) {
+            error("Failed to register SeekableInput for mpv stream_cb: $uri")
+        }
+        return uri
     }
 
     fun unregisterSeekableInput(uri: String): Boolean {
@@ -165,7 +167,7 @@ private external fun nSetPropertyDouble(ptr: Long, name: String, value: Double):
 private external fun nSetPropertyString(ptr: Long, name: String, value: String): Boolean
 private external fun nObserveProperty(ptr: Long, name: String, format: Int, replyData: Long): Boolean
 private external fun nUnobserveProperty(ptr: Long, replyData: Long): Boolean
-private external fun nRegisterSeekableInput(ptr: Long, input: SeekableInput, size: Long): String?
+private external fun nRegisterSeekableInput(ptr: Long, input: SeekableInput, uri: String, size: Long): Boolean
 private external fun nUnregisterSeekableInput(ptr: Long, uri: String): Boolean
 
 /**

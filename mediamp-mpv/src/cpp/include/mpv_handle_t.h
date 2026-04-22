@@ -43,7 +43,7 @@ public:
     bool set_property(const char *name, mpv_format format, void *in_value);
     bool observe_property(const char *property, mpv_format format, uint64_t reply_data);
     bool unobserve_property(uint64_t reply_data);
-    std::string register_seekable_input(JNIEnv *env, jobject seekable_input, int64_t size);
+    bool register_seekable_input(JNIEnv *env, jobject seekable_input, const char *uri, int64_t size);
     bool unregister_seekable_input(const char *uri);
 
     bool attach_android_surface(JNIEnv *env, jobject surface);
@@ -92,7 +92,6 @@ private:
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
     std::atomic_bool event_loop_request_exit{false};
     bool stream_protocol_registered_ = false;
-    uint64_t next_stream_id_ = 1;
     CREATE_LOCK(stream_registry_lock);
     std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> seekable_streams_;
 
