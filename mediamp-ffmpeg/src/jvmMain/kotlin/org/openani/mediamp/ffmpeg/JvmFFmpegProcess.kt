@@ -21,6 +21,7 @@ internal object JvmFFmpegProcess {
     private val loadMutex = Any()
     private val logDispatchLock = Any()
     private val loadedRuntimeDirs = mutableSetOf<String>()
+    private val configuredRuntimeDirs = mutableSetOf<String>()
     private val osName: String = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT)
     private var configuredLogHandler: FFmpegLogHandler? = null
     private var activeLogCollector: FFmpegLogLineCollector? = null
@@ -48,6 +49,10 @@ internal object JvmFFmpegProcess {
                     System.load(library.absolutePath)
                 }
                 loadedRuntimeDirs += key
+            }
+            if (key !in configuredRuntimeDirs) {
+                configureRuntimeEnvironment(canonicalDir.absolutePath)
+                configuredRuntimeDirs += key
             }
             if (androidAppContext != null) {
                 initializeAndroidContext(androidAppContext)
@@ -178,6 +183,9 @@ internal object JvmFFmpegProcess {
 
     @JvmStatic
     private external fun initializeAndroidContext(appContext: Any)
+
+    @JvmStatic
+    private external fun configureRuntimeEnvironment(runtimeDir: String)
 
     @JvmStatic
     fun onNativeLog(level: Int, message: String) {

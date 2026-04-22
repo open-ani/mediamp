@@ -89,8 +89,10 @@ abstract class FfmpegConfigureTask : DefaultTask() {
                 "make",
                 "diffutils",
                 "pkg-config",
+                "mingw-w64-ucrt-x86_64-ca-certificates",
                 "mingw-w64-ucrt-x86_64-gcc",
                 "mingw-w64-ucrt-x86_64-nasm",
+                "mingw-w64-ucrt-x86_64-openssl",
             )
             logger.lifecycle("Ensuring MSYS2 UCRT64 packages: ${packages.joinToString()}")
             execOperations.exec {
@@ -295,6 +297,11 @@ abstract class FfmpegAssembleTask : DefaultTask() {
                 )
                 val msys2Root = msys2Dir.orNull?.asFile
                     ?: error("MSYS2 directory must be configured for Windows FFmpeg runtime assembly.")
+                copyWindowsTlsCertificates(
+                    logger = logger,
+                    msys2Dir = msys2Root,
+                    outputDir = outputDirFile,
+                )
                 collectWindowsRuntimeDlls(
                     execOperations = execOperations,
                     logger = logger,
@@ -349,6 +356,20 @@ abstract class FfmpegAssembleTask : DefaultTask() {
 
         logger.lifecycle("FFmpeg ${targetName.get()} outputs assembled in: $outputDirFile")
     }
+}
+
+private fun copyWindowsTlsCertificates(
+    logger: Logger,
+    msys2Dir: File,
+    outputDir: File,
+) {
+    val certFile = msys2Dir.resolve("ucrt64/etc/ssl/cert.pem")
+    if (!certFile.isFile) return
+
+    val targetFile = outputDir.resolve("etc/ssl/cert.pem")
+    targetFile.parentFile.mkdirs()
+    certFile.copyTo(targetFile, overwrite = true)
+    logger.lifecycle("Bundled Windows TLS CA bundle: ${targetFile.absolutePath}")
 }
 
 private fun buildJvmJniWrapper(

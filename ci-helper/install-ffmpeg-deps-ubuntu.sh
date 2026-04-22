@@ -16,6 +16,8 @@ set -euo pipefail
 sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
+    libssl-dev \
     pkg-config \
     nasm \
     make

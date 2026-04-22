@@ -137,9 +137,24 @@ internal class FfmpegBuildContext(
         add("--enable-swresample")
         add("--enable-swscale")
         add("--disable-debug")
-        add("--disable-network")
         add("--disable-autodetect")
     }
+
+    private val httpTlsProtocolFlags: List<String> = listOf(
+        "--enable-protocol=udp",
+        "--enable-protocol=tcp",
+        "--enable-protocol=tls",
+        "--enable-protocol=http",
+        "--enable-protocol=https",
+    )
+
+    private val opensslHttpTlsFlags: List<String> = listOf(
+        "--enable-openssl",
+    ) + httpTlsProtocolFlags
+
+    private val secureTransportHttpTlsFlags: List<String> = listOf(
+        "--enable-securetransport",
+    ) + httpTlsProtocolFlags
 
     val ffmpegLibNames: List<String> = listOf(
         "avcodec",
@@ -163,7 +178,10 @@ internal class FfmpegBuildContext(
 
     val linuxX64Target = FfmpegBuildTarget(
         name = "LinuxX64",
-        extraFlags = listOf("--arch=x86_64", "--target-os=linux"),
+        extraFlags = listOf(
+            "--arch=x86_64",
+            "--target-os=linux",
+        ) + opensslHttpTlsFlags,
         libExtension = "so",
     )
 
@@ -176,7 +194,7 @@ internal class FfmpegBuildContext(
             "--cxx=clang++",
             "--extra-cflags=-arch arm64 -mmacosx-version-min=12.0",
             "--extra-ldflags=-arch arm64 -mmacosx-version-min=12.0",
-        ),
+        ) + secureTransportHttpTlsFlags,
         libExtension = "dylib",
     )
 
@@ -189,7 +207,7 @@ internal class FfmpegBuildContext(
             "--cxx=clang++",
             "--extra-cflags=-arch x86_64 -mmacosx-version-min=12.0",
             "--extra-ldflags=-arch x86_64 -mmacosx-version-min=12.0",
-        ),
+        ) + secureTransportHttpTlsFlags,
         libExtension = "dylib",
     )
 
@@ -205,7 +223,7 @@ internal class FfmpegBuildContext(
             "--cxx=xcrun --sdk iphoneos clang++",
             "--extra-cflags=-arch arm64 -miphoneos-version-min=16.0",
             "--extra-ldflags=-arch arm64 -miphoneos-version-min=16.0",
-        ) + appleHostToolFlags,
+        ) + appleHostToolFlags + secureTransportHttpTlsFlags,
         shell = "bash",
         libExtension = "a",
     )
@@ -222,7 +240,7 @@ internal class FfmpegBuildContext(
             "--cxx=xcrun --sdk iphonesimulator clang++",
             "--extra-cflags=-arch arm64 -miphonesimulator-version-min=16.0",
             "--extra-ldflags=-arch arm64 -miphonesimulator-version-min=16.0",
-        ) + appleHostToolFlags,
+        ) + appleHostToolFlags + secureTransportHttpTlsFlags,
         shell = "bash",
         libExtension = "a",
     )
@@ -262,6 +280,9 @@ internal class FfmpegBuildContext(
             shell = if (hostOs == Os.Windows) msys2Dir.resolve("usr/bin/bash.exe").absolutePath else "bash",
             env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
             extraFlags = listOf(
+                // Android keeps network disabled until a cross-compiled TLS backend
+                // is wired in for this target family.
+                "--disable-network",
                 "--arch=${abi.arch}",
                 "--target-os=android",
                 "--enable-cross-compile",

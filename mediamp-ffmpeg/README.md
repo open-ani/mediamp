@@ -121,6 +121,8 @@ Runtime behavior:
 - The library extracts FFmpeg binaries from the runtime JAR on first use.
 - On macOS and Linux it sets `DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH` for the child process.
 - On Windows it prepends the extraction directory to `PATH`.
+- Desktop runtimes built from this repository include FFmpeg `http` / `https` / `tls` protocol support.
+- When the packaged runtime contains `etc/ssl/cert.pem`, the library exports it as `SSL_CERT_FILE` before the first FFmpeg call.
 
 If you see an error like `ffmpeg-natives.txt not found on classpath`, the platform runtime JAR is missing from the runtime classpath.
 
