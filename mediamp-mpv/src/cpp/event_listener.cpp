@@ -111,6 +111,36 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
     if (value) env->DeleteLocalRef(value);
 }
 
+static void emit_log_message(JNIEnv *env, mpv_event_log_message *message) {
+    if (!env || !message || !jni_mediamp_clazz_MPVLogKt || !jni_mediamp_method_MPVLogKt_onNativeLog) {
+        return;
+    }
+
+    const char *prefix_chars = message->prefix ? message->prefix : "";
+    const char *text_chars = message->text ? message->text : "";
+
+    jstring prefix = env->NewStringUTF(prefix_chars);
+    jstring text = env->NewStringUTF(text_chars);
+    if (!prefix || !text) {
+        clear_jni_exception(env, "NewStringUTF(MPV log)");
+        if (prefix) env->DeleteLocalRef(prefix);
+        if (text) env->DeleteLocalRef(text);
+        return;
+    }
+
+    env->CallStaticVoidMethod(
+        jni_mediamp_clazz_MPVLogKt,
+        jni_mediamp_method_MPVLogKt_onNativeLog,
+        static_cast<jint>(message->log_level),
+        prefix,
+        text
+    );
+    clear_jni_exception(env, "MPVLogKt.onNativeLog");
+
+    env->DeleteLocalRef(prefix);
+    env->DeleteLocalRef(text);
+}
+
 void *(mpv_handle_t::event_loop)(void *arg) {
     if (!jvm_ || !handle_) {
         LOG("[event_loop] jvm or mpv handle_ is not initialized, event loop will not start");
@@ -123,6 +153,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         LOG("[event_loop] failed to attach current thread");
         return nullptr;
     }
+    jni_cache_classes(env);
 
     LOG("[event_loop] event loop is started.");
     while (!event_loop_request_exit.load(std::memory_order_acquire)) {
@@ -147,7 +178,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 break;
             case MPV_EVENT_LOG_MESSAGE:
                 log_message = (mpv_event_log_message *) event->data;
-                LOG("[event_loop] [%s:%s] %s", log_message->prefix, log_message->level, log_message->text);
+                emit_log_message(env, log_message);
                 break;
             case MPV_EVENT_IDLE:
                 LOG("[event_loop] idle");

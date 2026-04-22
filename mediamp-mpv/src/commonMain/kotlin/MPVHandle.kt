@@ -113,10 +113,14 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
         nFinalize(currentPtr)
     }
 
-    private companion object {
+    public companion object {
         private fun createHandle(context: Any): Long {
             LibraryLoader.loadLibraries(context)
             return nMake(context)
+        }
+
+        public fun setLogHandler(handler: MPVLogHandler?) {
+            setMPVLogHandler(handler)
         }
     }
 

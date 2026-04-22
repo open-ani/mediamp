@@ -360,6 +360,7 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     }
 
     jvm_ = global_jvm;
+    jni_cache_classes(env);
     event_loop_request_exit.store(false, std::memory_order_release);
     handle_ = mpv_create();
     if (!handle_) {

@@ -65,16 +65,18 @@ void jni_cache_classes(JNIEnv *env) {
     }
 
     jclass event_listener_class = find_global_class(env, "org/openani/mediamp/mpv/EventListener");
+    jclass mpv_log_class = find_global_class(env, "org/openani/mediamp/mpv/MPVLogKt");
     jclass seekable_input_class = find_global_class(env, "org/openani/mediamp/io/SeekableInput");
 #ifdef __ANDROID__
     jclass surface_class = find_global_class(env, "android/view/Surface");
 #endif
-    if (!event_listener_class || !seekable_input_class
+    if (!event_listener_class || !mpv_log_class || !seekable_input_class
 #ifdef __ANDROID__
         || !surface_class
 #endif
     ) {
         delete_global_ref(env, event_listener_class);
+        delete_global_ref(env, mpv_log_class);
         delete_global_ref(env, seekable_input_class);
 #ifdef __ANDROID__
         delete_global_ref(env, surface_class);
@@ -92,6 +94,11 @@ void jni_cache_classes(JNIEnv *env) {
             find_method(env, event_listener_class, "onPropertyChange", "(Ljava/lang/String;D)V");
     jmethodID on_property_change_string =
             find_method(env, event_listener_class, "onPropertyChange", "(Ljava/lang/String;Ljava/lang/String;)V");
+    jmethodID on_native_log =
+            env->GetStaticMethodID(mpv_log_class, "onNativeLog", "(ILjava/lang/String;Ljava/lang/String;)V");
+    if (!on_native_log) {
+        clear_jni_exception(env, "onNativeLog");
+    }
     jmethodID seekable_input_read =
             find_method(env, seekable_input_class, "read", "([BII)I");
     jmethodID seekable_input_seek_to =
@@ -104,10 +111,12 @@ void jni_cache_classes(JNIEnv *env) {
         !on_property_change_int64 ||
         !on_property_change_double ||
         !on_property_change_string ||
+        !on_native_log ||
         !seekable_input_read ||
         !seekable_input_seek_to ||
         !seekable_input_close) {
         delete_global_ref(env, event_listener_class);
+        delete_global_ref(env, mpv_log_class);
         delete_global_ref(env, seekable_input_class);
 #ifdef __ANDROID__
         delete_global_ref(env, surface_class);
@@ -121,6 +130,8 @@ void jni_cache_classes(JNIEnv *env) {
     jni_mediamp_method_EventListener_onPropertyChange_INT64 = on_property_change_int64;
     jni_mediamp_method_EventListener_onPropertyChange_DOUBLE = on_property_change_double;
     jni_mediamp_method_EventListener_onPropertyChange_STRING = on_property_change_string;
+    jni_mediamp_clazz_MPVLogKt = mpv_log_class;
+    jni_mediamp_method_MPVLogKt_onNativeLog = on_native_log;
     jni_mediamp_clazz_SeekableInput = seekable_input_class;
     jni_mediamp_method_SeekableInput_read = seekable_input_read;
     jni_mediamp_method_SeekableInput_seekTo = seekable_input_seek_to;
