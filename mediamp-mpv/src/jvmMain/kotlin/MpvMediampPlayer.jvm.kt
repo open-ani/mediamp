@@ -9,6 +9,7 @@
 package org.openani.mediamp.mpv
 
 import androidx.compose.ui.geometry.Size
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.AbstractMediampPlayer
@@ -23,15 +24,33 @@ import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 
 @kotlin.OptIn(InternalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
 ) : AbstractMediampPlayer<JvmMpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
-    class MPVPlayerData(mediaData: MediaData) : Data(mediaData)
+    open class MPVPlayerData(
+        mediaData: MediaData,
+        val loadTarget: String,
+    ) : Data(mediaData)
+
+    private class SeekableInputPlayerData(
+        mediaData: SeekableInputMediaData,
+        loadTarget: String,
+        private val handle: MPVHandle,
+    ) : MPVPlayerData(mediaData, loadTarget) {
+        override fun release() {
+            handle.unregisterSeekableInput(loadTarget)
+            super.release()
+        }
+    }
 
     private val handle by lazy { MPVHandle(context) }
+    private var pauseRequestedByUser: Boolean = false
+    private var pausedForCache: Boolean = false
+    private var playbackSessionActive: Boolean = false
 
     var currentSize: Size? = null
         @InternalMediampApi set
@@ -43,11 +62,22 @@ abstract class JvmMpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: Boolean) {
             when (name) {
-                "pause" -> playbackStateDelegate.value =
-                    if (value) PlaybackState.PAUSED else PlaybackState.PLAYING
+                "pause" -> {
+                    pauseRequestedByUser = value
+                    syncObservedPlaybackState()
+                }
 
-                "paused-for-cache" -> playbackStateDelegate.value =
-                    if (value) PlaybackState.PAUSED_BUFFERING else PlaybackState.PLAYING
+                "paused-for-cache" -> {
+                    pausedForCache = value
+                    syncObservedPlaybackState()
+                }
+
+                "idle-active" -> {
+                    if (value && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
+                        resetPlaybackSessionFlags()
+                        playbackStateDelegate.value = PlaybackState.FINISHED
+                    }
+                }
 
             }
         }
@@ -94,6 +124,35 @@ abstract class JvmMpvMediampPlayer(
 
     override fun getCurrentPositionMillis(): Long {
         return currentPositionMillis.value
+    }
+
+    private fun syncObservedPlaybackState() {
+        if (!playbackSessionActive || playbackState.value < PlaybackState.READY) {
+            return
+        }
+        playbackStateDelegate.value = when {
+            pauseRequestedByUser -> PlaybackState.PAUSED
+            pausedForCache -> PlaybackState.PAUSED_BUFFERING
+            else -> PlaybackState.PLAYING
+        }
+    }
+
+    private fun resetPlaybackSessionFlags() {
+        pauseRequestedByUser = false
+        pausedForCache = false
+        playbackSessionActive = false
+    }
+
+    private fun clearPlayerTransientState(resetPosition: Boolean) {
+        resetPlaybackSessionFlags()
+        _mediaProperties.value = null
+        if (resetPosition) {
+            _currentPositionMillis.value = 0L
+        }
+    }
+
+    private fun clearPlaybackSession(resetPosition: Boolean) {
+        clearPlayerTransientState(resetPosition = resetPosition)
     }
 
     @InternalMediampApi
@@ -181,6 +240,7 @@ abstract class JvmMpvMediampPlayer(
         handle.option("idle", "yes")
         handle.option("keep-open", "always")
 
+        handle.observeProperty("idle-active", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("time-pos/full", MPVFormat.MPV_FORMAT_INT64)
         handle.observeProperty("duration/full", MPVFormat.MPV_FORMAT_INT64)
         handle.observeProperty("pause", MPVFormat.MPV_FORMAT_FLAG)
@@ -204,6 +264,7 @@ abstract class JvmMpvMediampPlayer(
 
     override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
+            clearPlaybackSession(resetPosition = true)
             val headers = data.headers
 
             // 清除播放列表
@@ -220,11 +281,23 @@ abstract class JvmMpvMediampPlayer(
                 handle.option("http-header-fields", "$key: $value")
             }
 
-            MPVPlayerData(data)
+            MPVPlayerData(data, data.uri)
         }
 
         is SeekableInputMediaData -> {
-            TODO()
+            clearPlaybackSession(resetPosition = true)
+            handle.command("stop")
+            handle.command("playlist-clear")
+
+            val input = data.createInput(currentCoroutineContext())
+            val loadTarget = try {
+                handle.registerSeekableInput(input)
+            } catch (t: Throwable) {
+                input.close()
+                throw t
+            }
+
+            SeekableInputPlayerData(data, loadTarget, handle)
         }
     }
 
@@ -232,20 +305,21 @@ abstract class JvmMpvMediampPlayer(
         when (playbackState.value) {
             PlaybackState.READY -> {
                 val media = openResource.value ?: return
-                handle.option("pause", "true")
-                when (val data = media.mediaData) {
-                    is UriMediaData -> {
-                        handle.command("loadfile", data.uri)
-                        playbackStateDelegate.value = PlaybackState.PLAYING
-                    }
-
-                    is SeekableInputMediaData -> TODO()
-                    else -> {} // TODO: log unsupported media type
+                handle.setPropertyBoolean("pause", false)
+                if (handle.command("loadfile", media.loadTarget, "replace")) {
+                    playbackSessionActive = true
+                    pauseRequestedByUser = false
+                    pausedForCache = false
+                    playbackStateDelegate.value = PlaybackState.PLAYING
                 }
             }
 
-            PlaybackState.PLAYING -> {
-                handle.command("cycle", "pause")
+            PlaybackState.PAUSED, PlaybackState.PAUSED_BUFFERING -> {
+                if (handle.setPropertyBoolean("pause", false)) {
+                    playbackSessionActive = true
+                    pauseRequestedByUser = false
+                    playbackStateDelegate.value = PlaybackState.PLAYING
+                }
             }
 
             else -> {} // TODO: unreachable
@@ -253,32 +327,43 @@ abstract class JvmMpvMediampPlayer(
     }
 
     override fun pauseImpl() {
-        if (playbackState.value == PlaybackState.PAUSED) return
-        handle.command("cycle", "pause")
+        if (handle.setPropertyBoolean("pause", true)) {
+            playbackSessionActive = true
+            pauseRequestedByUser = true
+            playbackStateDelegate.value = PlaybackState.PAUSED
+        }
     }
 
     override fun seekTo(positionMillis: Long) {
-        handle.command("seek", (positionMillis / 1000L).toString(), "absolute+exact")
-        _currentPositionMillis.value = positionMillis
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) return
+
+        val targetPositionMillis = positionMillis.coerceAtLeast(0L)
+        if (handle.command("seek", (targetPositionMillis / 1000L).toString(), "absolute+exact")) {
+            _currentPositionMillis.value = targetPositionMillis
+        }
     }
 
     override fun skip(deltaMillis: Long) {
-        handle.command("seek", (deltaMillis / 1000L).toString(), "relative+relative")
-        _currentPositionMillis.value += deltaMillis
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) return
+
+        if (handle.command("seek", (deltaMillis / 1000L).toString(), "relative+exact")) {
+            _currentPositionMillis.value = (_currentPositionMillis.value + deltaMillis).coerceAtLeast(0L)
+        }
     }
 
     override fun stopPlaybackImpl() {
         handle.command("stop")
-        _currentPositionMillis.value = 0L
+        clearPlaybackSession(resetPosition = true)
         playbackStateDelegate.value = PlaybackState.FINISHED
     }
 
 
     override fun closeImpl() {
+        clearPlaybackSession(resetPosition = true)
         handle.command("stop")
         handle.destroy()
         handle.close()
-
+        playbackStateDelegate.value = PlaybackState.DESTROYED
     }
 }
 

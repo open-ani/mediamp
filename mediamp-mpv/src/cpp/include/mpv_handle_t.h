@@ -6,10 +6,14 @@
 #define MEDIAMP_MPV_HANDLE_T_H
 
 #include <iostream>
+#include <atomic>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <jni.h>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
+#include <mpv/stream_cb.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -26,7 +30,7 @@ public:
     explicit mpv_handle_t(JNIEnv *env, jobject app_context) {
         create(env, app_context);
     }
-    ~mpv_handle_t() = default;
+    ~mpv_handle_t();
 
     void create(JNIEnv *env, jobject app_context);
     bool initialize();
@@ -39,6 +43,8 @@ public:
     bool set_property(const char *name, mpv_format format, void *in_value);
     bool observe_property(const char *property, mpv_format format, uint64_t reply_data);
     bool unobserve_property(uint64_t reply_data);
+    std::string register_seekable_input(JNIEnv *env, jobject seekable_input, int64_t size);
+    bool unregister_seekable_input(const char *uri);
 
     bool attach_android_surface(JNIEnv *env, jobject surface);
     bool detach_android_surface(JNIEnv *env);
@@ -48,6 +54,7 @@ public:
     bool detach_window_surface();
 #endif
 
+#ifdef _WIN32
     // Render API (Windows x64 only)
     bool create_render_context(HDC device, HGLRC context);
     bool destroy_render_context();
@@ -56,19 +63,23 @@ public:
     bool release_texture();
 
     bool render_frame();
+#endif
+
+    struct seekable_stream_entry;
+    struct seekable_stream_cookie;
 
 private:
-    JavaVM *jvm_;
-    mpv_handle *handle_;
+    JavaVM *jvm_ = nullptr;
+    mpv_handle *handle_ = nullptr;
 
-    jobject *event_listener_ = nullptr;
+    jobject event_listener_ = nullptr;
 
 #ifdef __ANDROID__
     bool surface_attached_ = false;
-    jobject surface_;
+    jobject surface_ = nullptr;
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
     mpv_render_context *render_context_ = nullptr;
     HGLRC context_ = nullptr;
     HDC device_ = nullptr;
@@ -79,9 +90,24 @@ private:
 #endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
-    bool event_loop_request_exit = false;
+    std::atomic_bool event_loop_request_exit{false};
+    bool stream_protocol_registered_ = false;
+    uint64_t next_stream_id_ = 1;
+    CREATE_LOCK(stream_registry_lock);
+    std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> seekable_streams_;
 
     void *event_loop(void *arg);
+    bool ensure_stream_protocol_registered();
+    int open_seekable_stream(const char *uri, mpv_stream_cb_info *info);
+    static int open_seekable_stream(void *user_data, char *uri, mpv_stream_cb_info *info);
+    void clear_event_listener(JNIEnv *env);
+    void clear_seekable_streams();
+#ifdef __ANDROID__
+    void clear_android_surface(JNIEnv *env);
+#endif
+#ifdef _WIN32
+    void cleanup_render_resources();
+#endif
 };
 
 } // namespace mediampv

@@ -8,10 +8,18 @@
 
 package org.openani.mediamp.mpv
 
+import org.openani.mediamp.io.SeekableInput
+import kotlin.concurrent.Volatile
+
 @OptIn(ExperimentalStdlibApi::class)
-class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
+class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
+    @Volatile
+    private var nativePtr: Long = ptr
+
+    internal val ptr: Long
+        get() = nativePtr.takeIf { it != 0L } ?: error("MPVHandle has already been closed")
 
     constructor(context: Any) : this(createHandle(context)) {
         if (ptr == 0L) throw IllegalStateException("Failed to create native mpv handle")
@@ -74,17 +82,35 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
         return nUnobserveProperty(ptr, replyData)
     }
 
+    fun registerSeekableInput(input: SeekableInput): String {
+        return nRegisterSeekableInput(ptr, input, input.size)
+            ?: error("Failed to register SeekableInput for mpv stream_cb")
+    }
+
+    fun unregisterSeekableInput(uri: String): Boolean {
+        return nUnregisterSeekableInput(ptr, uri)
+    }
+
     /**
      * Stop this `mpv_context` instance, which will run into the unrecoverable state.
      *
      * You will not expect to call any method except [close] after calling this function.
      */
     fun destroy(): Boolean {
-        return nDestroy(ptr)
+        val currentPtr = nativePtr
+        if (currentPtr == 0L) {
+            return false
+        }
+        return nDestroy(currentPtr)
     }
 
     override fun close() {
-        nFinalize(ptr)
+        val currentPtr = nativePtr
+        if (currentPtr == 0L) {
+            return
+        }
+        nativePtr = 0L
+        nFinalize(currentPtr)
     }
 
     private companion object {
@@ -135,6 +161,8 @@ private external fun nSetPropertyDouble(ptr: Long, name: String, value: Double):
 private external fun nSetPropertyString(ptr: Long, name: String, value: String): Boolean
 private external fun nObserveProperty(ptr: Long, name: String, format: Int, replyData: Long): Boolean
 private external fun nUnobserveProperty(ptr: Long, replyData: Long): Boolean
+private external fun nRegisterSeekableInput(ptr: Long, input: SeekableInput, size: Long): String?
+private external fun nUnregisterSeekableInput(ptr: Long, uri: String): Boolean
 
 /**
  * Attach render surface to the mpv context.
