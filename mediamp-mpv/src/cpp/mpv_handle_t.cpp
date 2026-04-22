@@ -34,6 +34,7 @@ bool release_texture_impl(GLuint* texture_id, GLuint* framebuffer_object);
 static void* get_proc_address_mpv(void* ctx, const char* name);
 
 #define GL_FRAMEBUFFER            0x8D40
+#define GL_FRAMEBUFFER_BINDING    0x8CA6
 #define GL_COLOR_ATTACHMENT0      0x8CE0
 #define GL_RGBA8                  0x8058
 #define GL_FRAMEBUFFER_COMPLETE   0x8CD5
@@ -399,6 +400,13 @@ bool mpv_handle_t::initialize() {
     return true;
 }
 
+void mpv_handle_t::on_render_update(void *context) {
+    auto *instance = static_cast<mpv_handle_t *>(context);
+    if (instance) {
+        instance->notify_render_update();
+    }
+}
+
 bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
     FP;
     if (!env || !listener) {
@@ -419,6 +427,34 @@ bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
     event_listener_ = env->NewGlobalRef(listener);
     if (!event_listener_ || clear_jni_exception(env, "NewGlobalRef(EventListener)")) {
         event_listener_ = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
+    FP;
+    if (!env) {
+        return false;
+    }
+
+    mediampv::jni_cache_classes(env);
+    if (listener && (!mediampv::jni_mediamp_clazz_RenderUpdateListener ||
+        env->IsInstanceOf(listener, mediampv::jni_mediamp_clazz_RenderUpdateListener) != JNI_TRUE)) {
+        LOG("listener is not an instance of RenderUpdateListener");
+        return false;
+    }
+
+    LOCK(render_update_listener_lock);
+    clear_render_update_listener(env);
+    if (!listener) {
+        return true;
+    }
+
+    render_update_listener_ = env->NewGlobalRef(listener);
+    if (!render_update_listener_ || clear_jni_exception(env, "NewGlobalRef(RenderUpdateListener)")) {
+        render_update_listener_ = nullptr;
         return false;
     }
 
@@ -713,6 +749,8 @@ bool mpv_handle_t::create_render_context(HDC device, HGLRC context) {
         return false;
     }
 
+    mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
+
     wglMakeCurrent(old_dc, old_ctx);
 
     return true;
@@ -742,6 +780,7 @@ bool mpv_handle_t::destroy_render_context() {
     HGLRC old_ctx = wglGetCurrentContext();
     wglMakeCurrent(device_, context_);
 
+    mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
     mpv_render_context_free(render_context_);
 
     wglMakeCurrent(old_dc, old_ctx);
@@ -760,6 +799,11 @@ GLuint mpv_handle_t::create_texture(int width, int height) {
     HDC old_dc = wglGetCurrentDC();
     HGLRC old_ctx = wglGetCurrentContext();
     wglMakeCurrent(device_, context_);
+
+    GLint previous_texture_binding = 0;
+    GLint previous_framebuffer_binding = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture_binding);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer_binding);
 
     if (texture_ != GL_ZERO && fbo_ != GL_ZERO) {
         width_ = 0;
@@ -780,6 +824,8 @@ GLuint mpv_handle_t::create_texture(int width, int height) {
     pfnGlFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, texture_, 0);
 
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture_binding));
+    pfnGlBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer_binding));
     wglMakeCurrent(old_dc, old_ctx);
 
     width_ = width;
@@ -801,8 +847,15 @@ bool mpv_handle_t::release_texture() {
     HGLRC old_ctx = wglGetCurrentContext();
     wglMakeCurrent(device_, context_);
 
+    GLint previous_texture_binding = 0;
+    GLint previous_framebuffer_binding = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture_binding);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer_binding);
+
     bool released = release_texture_impl(&texture_, &fbo_);
 
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture_binding));
+    pfnGlBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer_binding));
     wglMakeCurrent(old_dc, old_ctx);
 
     return released;
@@ -811,10 +864,10 @@ bool mpv_handle_t::release_texture() {
 bool release_texture_impl(GLuint* texture_id, GLuint* framebuffer_object) {
     if (*texture_id == GL_ZERO || *framebuffer_object == GL_ZERO) return false;
 
-    GLuint textures_to_delete[1] = {*texture_id};
     GLuint framebuffer_to_delete[1] = {*framebuffer_object};
 
-    glDeleteTextures(1, textures_to_delete);
+    // The texture is adopted by Skia via Image.adoptTextureFrom(), so Skia owns its lifetime.
+    // Native code only tears down the FBO wrapper and forgets the texture handle.
     pfnGlDeleteFramebuffers(1, framebuffer_to_delete);
 
     *texture_id = GL_ZERO;
@@ -828,6 +881,8 @@ bool mpv_handle_t::render_frame() {
 
     if (!render_context_ || !context_ || !device_ || !fbo_ || !texture_ || !width_ || !height_)
         return false;
+
+    mpv_render_context_update(render_context_);
 
     HDC old_dc = wglGetCurrentDC();
     HGLRC old_ctx = wglGetCurrentContext();
@@ -851,7 +906,6 @@ bool mpv_handle_t::render_frame() {
             {MPV_RENDER_PARAM_INVALID, nullptr},
     };
 
-    // 无论是否有新帧，都调用 render（mpv 文档建议）
     int render_result = mpv_render_context_render(render_context_, params);
     if (render_result < 0) {
         LOG("mpv_render_context_render failed: %d", render_result);
@@ -882,6 +936,7 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     attached_jni_env attached_env(env ? nullptr : jvm_);
     JNIEnv *cleanup_env = env ? env : attached_env.env;
     clear_event_listener(cleanup_env);
+    clear_render_update_listener(cleanup_env);
 #ifdef __ANDROID__
     clear_android_surface(cleanup_env);
 #endif
@@ -902,6 +957,31 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
 void mpv_handle_t::clear_event_listener(JNIEnv *env) {
     attached_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, event_listener_);
+}
+
+void mpv_handle_t::clear_render_update_listener(JNIEnv *env) {
+    attached_jni_env attached_env(env ? nullptr : jvm_);
+    delete_global_ref(env ? env : attached_env.env, render_update_listener_);
+}
+
+void mpv_handle_t::notify_render_update() {
+    if (!jvm_) {
+        return;
+    }
+
+    attached_jni_env attached_env(jvm_);
+    JNIEnv *env = attached_env.env;
+    if (!env || !mediampv::jni_mediamp_method_RenderUpdateListener_onRenderUpdate) {
+        return;
+    }
+
+    LOCK(render_update_listener_lock);
+    if (!render_update_listener_) {
+        return;
+    }
+
+    env->CallVoidMethod(render_update_listener_, mediampv::jni_mediamp_method_RenderUpdateListener_onRenderUpdate);
+    clear_jni_exception(env, "RenderUpdateListener.onRenderUpdate");
 }
 
 void mpv_handle_t::clear_seekable_streams() {
@@ -947,6 +1027,7 @@ void mpv_handle_t::cleanup_render_resources() {
     height_ = 0;
 
     if (render_context_) {
+        mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
         mpv_render_context_free(render_context_);
         render_context_ = nullptr;
     }

@@ -13,18 +13,13 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.coroutineScope
+import org.openani.mediamp.mpv.RenderUpdateListener
 
-internal class FrameInterpolator {
+internal class FrameInterpolator : RenderUpdateListener {
     internal var updateSubscription by mutableLongStateOf(0L)
         private set
 
-    internal suspend fun frameLoop() {
-        coroutineScope {
-            while (true) {
-                withFrameNanos {
-                    updateSubscription++
-                }
-            }
-        }
+    override fun onRenderUpdate() {
+        updateSubscription++
     }
 }

@@ -35,6 +35,7 @@ public:
     void create(JNIEnv *env, jobject app_context);
     bool initialize();
     bool set_event_listener(JNIEnv *env, jobject listener);
+    bool set_render_update_listener(JNIEnv *env, jobject listener);
     bool destroy(JNIEnv *env);
 
     bool command(const char **args);
@@ -73,6 +74,8 @@ private:
     mpv_handle *handle_ = nullptr;
 
     jobject event_listener_ = nullptr;
+    jobject render_update_listener_ = nullptr;
+    CREATE_LOCK(render_update_listener_lock);
 
 #ifdef __ANDROID__
     bool surface_attached_ = false;
@@ -99,7 +102,10 @@ private:
     bool ensure_stream_protocol_registered();
     int open_seekable_stream(const char *uri, mpv_stream_cb_info *info);
     static int open_seekable_stream(void *user_data, char *uri, mpv_stream_cb_info *info);
+    static void on_render_update(void *context);
     void clear_event_listener(JNIEnv *env);
+    void clear_render_update_listener(JNIEnv *env);
+    void notify_render_update();
     void clear_seekable_streams();
 #ifdef __ANDROID__
     void clear_android_surface(JNIEnv *env);

@@ -185,6 +185,10 @@ abstract class JvmMpvMediampPlayer(
         return renderFrameToTexture(handle.ptr)
     }
 
+    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+        return handle.setRenderUpdateListener(listener)
+    }
+
     init {
         handle.setEventListener(eventListener)
 
@@ -210,6 +214,8 @@ abstract class JvmMpvMediampPlayer(
                 handle.option("vo", "libmpv")
                 handle.option("fbo-format", "rgba8")
                 handle.option("dither-depth", "no")
+                handle.option("video-sync", "audio")
+                handle.option("video-timing-offset", "0.0")
             }
 
             is Platform.MacOS -> {

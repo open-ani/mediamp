@@ -10,6 +10,7 @@
 package org.openani.mediamp.mpv.utils
 
 import org.jetbrains.skia.DirectContext
+import org.jetbrains.skia.GLBackendState
 import org.jetbrains.skiko.SkiaLayer
 import org.jetbrains.skiko.context.ContextHandler
 import org.jetbrains.skiko.context.OpenGLContextHandler
@@ -39,4 +40,28 @@ class OpenGLComponentProvider(skiaLayer: SkiaLayer) {
     val directContext: DirectContext
         get() = (contextHandlerHandleField.get(openglRedrawer) as OpenGLContextHandler)
             .let { directContextHandler.get(it) as DirectContext }
+
+    fun resetContextGLAfterMpvRender() {
+        // libmpv's OpenGL backend dirties modern GL state such as FBO/program/texture/view/blend/pixel-store.
+        // We only invalidate the state groups Skia can cache across those external calls.
+        directContext.resetGL(
+            GLBackendState.RENDER_TARGET,
+            GLBackendState.TEXTURE_BINDING,
+            GLBackendState.VIEW,
+            GLBackendState.BLEND,
+            GLBackendState.VERTEX,
+            GLBackendState.PIXEL_STORE,
+            GLBackendState.PROGRAM,
+            GLBackendState.MISC,
+        )
+    }
+
+    fun resetContextGLAfterTextureRecreate() {
+        directContext.resetGL(
+            GLBackendState.RENDER_TARGET,
+            GLBackendState.TEXTURE_BINDING,
+            GLBackendState.PIXEL_STORE,
+            GLBackendState.MISC,
+        )
+    }
 }

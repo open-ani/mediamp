@@ -50,6 +50,7 @@ extern "C" {
     JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context);
     JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr);
     JNIEXPORT jboolean JNICALL FN(nSetEventListener)(JNIEnv *env, jclass clazz, jlong ptr, jobject listener);
+    JNIEXPORT jboolean JNICALL FN(nSetRenderUpdateListener)(JNIEnv *env, jclass clazz, jlong ptr, jobject listener);
 
     /**
      * 执行 mpv 命令
@@ -118,6 +119,12 @@ JNIEXPORT jboolean JNICALL FN(nSetEventListener)
         (JNIEnv *env, jclass clazz, jlong ptr, jobject listener) {
     auto *instance = get_instance(ptr);
     return instance ? instance->set_event_listener(env, listener) : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN(nSetRenderUpdateListener)
+        (JNIEnv *env, jclass clazz, jlong ptr, jobject listener) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->set_render_update_listener(env, listener) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN(nCommand)(JNIEnv *env, jclass clazz, jlong ptr, jobjectArray args) {

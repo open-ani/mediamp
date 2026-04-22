@@ -18,6 +18,13 @@ actual class MpvMediampPlayer(
 ) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
     internal var backendTexture: BackendTexture? = null
     internal var image: Image? = null
+    
+    fun releaseSkiaTextureAndImage() {
+        image?.close()
+        image = null
+        backendTexture?.close()
+        backendTexture = null
+    }
 
     companion object {
         internal const val GL_TEXTURE_2D = 0x0DE1

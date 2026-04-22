@@ -15,6 +15,7 @@ import kotlin.concurrent.Volatile
 class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
+    private var renderUpdateListener: RenderUpdateListener? = null
     @Volatile
     private var nativePtr: Long = ptr
 
@@ -32,6 +33,11 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     fun setEventListener(listener: EventListener) {
         eventListener = listener
         nSetEventListener(ptr, listener)
+    }
+
+    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+        renderUpdateListener = listener
+        return nSetRenderUpdateListener(ptr, listener)
     }
 
     fun command(vararg command: String): Boolean {
@@ -155,6 +161,7 @@ private external fun nGlobalInit(): Boolean
 private external fun nMake(context: Any): Long
 private external fun nInitialize(ptr: Long): Boolean
 private external fun nSetEventListener(ptr: Long, eventListener: EventListener): Boolean
+private external fun nSetRenderUpdateListener(ptr: Long, listener: RenderUpdateListener?): Boolean
 private external fun nCommand(ptr: Long, command: Array<out String>): Boolean
 private external fun nOption(ptr: Long, key: String, value: String): Boolean
 private external fun nGetPropertyInt(ptr: Long, name: String): Int
