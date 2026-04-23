@@ -3,13 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include "libavutil/log.h"
 #if defined(_WIN32)
 #define strdup _strdup
 #else
 #include <dlfcn.h>
-#include <unistd.h>
 #endif
 
 int ffmpegkit_execute(int argc, char **argv);
@@ -31,43 +29,6 @@ static void throw_runtime_exception(JNIEnv *env, const char *message) {
     if (runtime_exception != NULL) {
         (*env)->ThrowNew(env, runtime_exception, message);
     }
-}
-
-static int path_is_regular_file(const char *path) {
-    struct stat info;
-    if (path == NULL || stat(path, &info) != 0) {
-        return 0;
-    }
-    return (info.st_mode & S_IFREG) != 0;
-}
-
-static void set_process_env(const char *name, const char *value) {
-    if (name == NULL || value == NULL) {
-        return;
-    }
-#if defined(_WIN32)
-    _putenv_s(name, value);
-#else
-    setenv(name, value, 1);
-#endif
-}
-
-static char *build_runtime_cert_file_path(const char *runtime_dir) {
-    const char *suffix =
-#if defined(_WIN32)
-        "\\etc\\ssl\\cert.pem";
-#else
-        "/etc/ssl/cert.pem";
-#endif
-    const size_t runtime_len = strlen(runtime_dir);
-    const size_t suffix_len = strlen(suffix);
-    char *path = (char *)malloc(runtime_len + suffix_len + 1U);
-    if (path == NULL) {
-        return NULL;
-    }
-    memcpy(path, runtime_dir, runtime_len);
-    memcpy(path + runtime_len, suffix, suffix_len + 1U);
-    return path;
 }
 
 static void release_log_dispatch(JNIEnv *env) {
@@ -169,12 +130,6 @@ JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initiali
     jobject app_context
 );
 
-JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_configureRuntimeEnvironment(
-    JNIEnv *env,
-    jclass clazz,
-    jstring runtime_dir
-);
-
 JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeNative(
     JNIEnv *env,
     jclass clazz,
@@ -200,31 +155,6 @@ JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_initiali
     (void)env;
     (void)app_context;
 #endif
-}
-
-JNIEXPORT void JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_configureRuntimeEnvironment(
-    JNIEnv *env,
-    jclass clazz,
-    jstring runtime_dir
-) {
-    (void)clazz;
-    if (runtime_dir == NULL) {
-        return;
-    }
-
-    const char *runtime_dir_chars = (*env)->GetStringUTFChars(env, runtime_dir, NULL);
-    char *cert_file = NULL;
-    if (runtime_dir_chars == NULL) {
-        return;
-    }
-
-    cert_file = build_runtime_cert_file_path(runtime_dir_chars);
-    if (cert_file != NULL && path_is_regular_file(cert_file)) {
-        set_process_env("SSL_CERT_FILE", cert_file);
-    }
-
-    free(cert_file);
-    (*env)->ReleaseStringUTFChars(env, runtime_dir, runtime_dir_chars);
 }
 
 JNIEXPORT jint JNICALL Java_org_openani_mediamp_ffmpeg_JvmFFmpegProcess_executeNative(

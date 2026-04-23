@@ -31,6 +31,7 @@ include(":mediamp-mpv")
 include(":mediamp-avkit")
 
 include(":mediamp-ffmpeg")
+include(":mediamp-native-loader")
 include(":mediamp-all")
 
 include(":mediamp-test")

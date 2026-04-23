@@ -127,6 +127,14 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
             return nMake(context)
         }
 
+        public fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean) {
+            LibraryLoader.setRuntimeLibraryDirectory(path, extractRuntimeLibrary)
+        }
+
+        public fun useDefaultRuntimeLibraryDirectory() {
+            LibraryLoader.useDefaultRuntimeLibraryDirectory()
+        }
+
         public fun setLogHandler(handler: MPVLogHandler?) {
             setMPVLogHandler(handler)
         }

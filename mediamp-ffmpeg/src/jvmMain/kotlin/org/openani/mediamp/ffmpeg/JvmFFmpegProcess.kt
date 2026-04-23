@@ -10,150 +10,29 @@ package org.openani.mediamp.ffmpeg
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Locale
 
 /**
  * Shared JVM implementation for running FFmpeg inside the current process via JNI.
  */
 internal object JvmFFmpegProcess {
     private val executionLock = Any()
-    private val loadMutex = Any()
     private val logDispatchLock = Any()
-    private val loadedRuntimeDirs = mutableSetOf<String>()
-    private val configuredRuntimeDirs = mutableSetOf<String>()
-    private val osName: String = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT)
     private var configuredLogHandler: FFmpegLogHandler? = null
     private var activeLogCollector: FFmpegLogLineCollector? = null
 
-    suspend fun execute(runtimeDir: File, args: List<String>, androidAppContext: Any? = null): FFmpegResult =
-        withContext(Dispatchers.IO) {
-            synchronized(executionLock) {
-                ensureRuntimeLoaded(runtimeDir, androidAppContext)
-                val collector = FFmpegLogLineCollector { message ->
-                    configuredLogHandler?.onLog(message)
-                }
-                val exitCode = withActiveLogCollector(collector) {
-                    executeNative(args.toTypedArray())
-                }
-                FFmpegResult(exitCode = exitCode)
+    suspend fun execute(
+        args: List<String>,
+    ): FFmpegResult = withContext(Dispatchers.IO) {
+        synchronized(executionLock) {
+            val collector = FFmpegLogLineCollector { message ->
+                configuredLogHandler?.onLog(message)
             }
-        }
-
-    private fun ensureRuntimeLoaded(runtimeDir: File, androidAppContext: Any?) {
-        val canonicalDir = runtimeDir.canonicalFile
-        synchronized(loadMutex) {
-            val key = canonicalDir.absolutePath
-            if (key !in loadedRuntimeDirs) {
-                runtimeLibrariesInLoadOrder(canonicalDir).forEach { library ->
-                    System.load(library.absolutePath)
-                }
-                loadedRuntimeDirs += key
+            val exitCode = withActiveLogCollector(collector) {
+                executeNative(args.toTypedArray())
             }
-            if (key !in configuredRuntimeDirs) {
-                configureRuntimeEnvironment(canonicalDir.absolutePath)
-                configuredRuntimeDirs += key
-            }
-            if (androidAppContext != null) {
-                initializeAndroidContext(androidAppContext)
-            }
+            FFmpegResult(exitCode = exitCode)
         }
     }
-
-    private fun runtimeLibrariesInLoadOrder(runtimeDir: File): List<File> {
-        runtimeLibrariesFromManifest(runtimeDir)?.let { return it }
-
-        val wrapper = runtimeDir.resolve(wrapperLibraryName())
-        require(wrapper.isFile) {
-            "FFmpeg JNI runtime wrapper not found at ${wrapper.absolutePath}. Ensure the runtime artifact was packaged correctly."
-        }
-
-        val allSharedLibraries = runtimeDir.listFiles()
-            ?.filter { candidate ->
-                candidate.isFile &&
-                        candidate != wrapper &&
-                        candidate.extension.equals(sharedLibraryExtension(), ignoreCase = true)
-            }
-            .orEmpty()
-        val ffmpegLibraryPrefixes = listOf(
-            sharedLibraryName("avutil"),
-            sharedLibraryName("swresample"),
-            sharedLibraryName("swscale"),
-            sharedLibraryName("avcodec"),
-            sharedLibraryName("avformat"),
-            sharedLibraryName("avfilter"),
-            sharedLibraryName("avdevice"),
-        )
-
-        val orderedLibraries = buildList {
-            if (osName.contains("win")) {
-                // Windows FFmpeg DLLs depend on the toolchain runtime DLLs we package
-                // alongside them (for example libwinpthread/libgcc). Load those first,
-                // in reverse-alphabetical order so that leaf dependencies (libwinpthread)
-                // are loaded before their dependents (libgcc_s_seh) – this prevents the
-                // OS from picking up an incompatible version from the system PATH.
-                allSharedLibraries
-                    .filter { candidate -> ffmpegLibraryPrefixes.none(candidate.name::startsWith) }
-                    .sortedByDescending { it.name }
-                    .let(::addAll)
-            }
-
-            ffmpegLibraryPrefixes.forEach { libraryName ->
-                allSharedLibraries
-                    .firstOrNull { candidate -> candidate.name.startsWith(libraryName) }
-                    ?.let(::add)
-            }
-
-            allSharedLibraries
-                .filter { candidate -> none { it.absolutePath == candidate.absolutePath } }
-                .sortedBy { it.name }
-                .let(::addAll)
-
-            add(wrapper)
-        }
-        return orderedLibraries
-    }
-
-    private fun runtimeLibrariesFromManifest(runtimeDir: File): List<File>? {
-        val manifest = JvmFFmpegProcess::class.java.classLoader
-            .getResourceAsStream("ffmpeg-natives.txt")
-            ?.bufferedReader()
-            ?.readLines()
-            ?: return null
-
-        val libraries = manifest.asSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .map { runtimeDir.resolve(it) }
-            .filter { candidate -> candidate.isFile && candidate.isSharedRuntimeLibrary(osName) }
-            .distinctBy(File::getAbsolutePath)
-            .toList()
-
-        require(libraries.any { it.name.equals(wrapperLibraryName(), ignoreCase = true) }) {
-            "ffmpeg-natives.txt does not list the FFmpeg JNI wrapper '${wrapperLibraryName()}'."
-        }
-        return libraries
-    }
-
-    private fun wrapperLibraryName(): String =
-        when {
-            osName.contains("win") -> "ffmpegkitjni.dll"
-            osName.contains("mac") -> "libffmpegkitjni.dylib"
-            else -> "libffmpegkitjni.so"
-        }
-
-    private fun sharedLibraryName(baseName: String): String =
-        when {
-            osName.contains("win") -> "$baseName-"
-            else -> "lib$baseName"
-        }
-
-    private fun sharedLibraryExtension(): String =
-        when {
-            osName.contains("win") -> "dll"
-            osName.contains("mac") -> "dylib"
-            else -> "so"
-        }
 
     fun setLogHandler(handler: FFmpegLogHandler?) {
         synchronized(logDispatchLock) {
@@ -182,10 +61,7 @@ internal object JvmFFmpegProcess {
     private external fun executeNative(args: Array<String>): Int
 
     @JvmStatic
-    private external fun initializeAndroidContext(appContext: Any)
-
-    @JvmStatic
-    private external fun configureRuntimeEnvironment(runtimeDir: String)
+    internal external fun initializeAndroidContext(appContext: Any)
 
     @JvmStatic
     fun onNativeLog(level: Int, message: String) {
@@ -194,10 +70,3 @@ internal object JvmFFmpegProcess {
         }
     }
 }
-
-private fun File.isSharedRuntimeLibrary(osName: String): Boolean =
-    when {
-        osName.contains("win") -> name.endsWith(".dll", ignoreCase = true)
-        osName.contains("mac") -> name.endsWith(".dylib", ignoreCase = true)
-        else -> name.endsWith(".so") || name.contains(".so.")
-    }

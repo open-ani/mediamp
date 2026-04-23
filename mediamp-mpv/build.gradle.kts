@@ -44,10 +44,7 @@ kotlin {
             }
         }
         getByName("jvmMain").dependencies {
-
-        }
-        desktopMain.dependencies {
-            api(libs.jna.platform)
+            implementation(projects.mediampNativeLoader)
         }
     }
 }

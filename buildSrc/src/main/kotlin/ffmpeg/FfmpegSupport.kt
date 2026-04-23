@@ -152,6 +152,10 @@ internal class FfmpegBuildContext(
         "--enable-openssl",
     ) + httpTlsProtocolFlags
 
+    private val linuxRuntimeSearchPathFlags: List<String> = listOf(
+        "--extra-ldflags=-Wl,-rpath,'${'$'}ORIGIN'",
+    )
+
     private val secureTransportHttpTlsFlags: List<String> = listOf(
         "--enable-securetransport",
     ) + httpTlsProtocolFlags
@@ -181,7 +185,7 @@ internal class FfmpegBuildContext(
         extraFlags = listOf(
             "--arch=x86_64",
             "--target-os=linux",
-        ) + opensslHttpTlsFlags,
+        ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags,
         libExtension = "so",
     )
 

@@ -105,12 +105,23 @@ val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 Notes:
 
 - `FFmpegKit.initialize(context)` must be called before `execute`.
-- The Android runtime is loaded from `nativeLibraryDir`.
-- `LD_LIBRARY_PATH` is set internally by the library. Consumers do not need to set it manually.
+- If `libffmpegkitjni.so` is present in `nativeLibraryDir`, Android loads it with `System.loadLibrary("ffmpegkitjni")`.
 
 ## Desktop JVM usage
 
-Desktop does not require explicit initialization.
+Desktop must explicitly choose a runtime library directory strategy before first use.
+
+Use a custom runtime directory:
+
+```kotlin
+FFmpegKit.setRuntimeLibraryDirectory("D:/mediamp-runtime/ffmpeg")
+```
+
+Or use the default temporary extraction directory:
+
+```kotlin
+FFmpegKit.useDefaultRuntimeLibraryDirectory()
+```
 
 ```kotlin
 val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
@@ -118,11 +129,13 @@ val result = FFmpegKit().execute(listOf("-hide_banner", "-version"))
 
 Runtime behavior:
 
-- The library extracts FFmpeg binaries from the runtime JAR on first use.
-- On macOS and Linux it sets `DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH` for the child process.
-- On Windows it prepends the extraction directory to `PATH`.
+- Desktop callers must invoke exactly one of `FFmpegKit.setRuntimeLibraryDirectory(path)` or `FFmpegKit.useDefaultRuntimeLibraryDirectory()` before first use.
+- The library extracts FFmpeg binaries from the runtime JAR on first use when the chosen runtime directory does not already contain the wrapper library.
+- Desktop JVM loads the JNI wrapper first and relies on platform-native dependency resolution from the extracted runtime directory.
+- On Windows it temporarily adds the extraction directory to the DLL search path while loading the JNI wrapper.
+- On macOS runtime libraries are rewritten to `@loader_path/...` so loading the JNI wrapper resolves the bundled FFmpeg dylibs.
+- On Linux desktop builds embed `RUNPATH=$ORIGIN` so loading the JNI wrapper resolves the bundled FFmpeg shared libraries.
 - Desktop runtimes built from this repository include FFmpeg `http` / `https` / `tls` protocol support.
-- When the packaged runtime contains `etc/ssl/cert.pem`, the library exports it as `SSL_CERT_FILE` before the first FFmpeg call.
 
 If you see an error like `ffmpeg-natives.txt not found on classpath`, the platform runtime JAR is missing from the runtime classpath.
 

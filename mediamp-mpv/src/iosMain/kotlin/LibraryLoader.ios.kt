@@ -9,6 +9,12 @@
 package org.openani.mediamp.mpv
 
 internal actual object LibraryLoader {
+    actual fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean) {
+    }
+
+    actual fun useDefaultRuntimeLibraryDirectory() {
+    }
+
     actual fun loadLibraries(context: Any?) {
         // iOS uses Kotlin/Native linkage and does not need JVM-style runtime extraction/loading.
     }

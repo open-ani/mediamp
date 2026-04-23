@@ -263,6 +263,7 @@ abstract class FfmpegAssembleTask : DefaultTask() {
         val installDirFile = installDir.get().asFile
         val buildDirFile = buildDirPath.get().asFile
 
+        outputDirFile.deleteRecursively()
         outputDirFile.mkdirs()
         val libDir = installDirFile.resolve("lib")
         val binDir = installDirFile.resolve("bin")

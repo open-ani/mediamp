@@ -24,6 +24,22 @@ public expect class FFmpegKit() {
          * Pass `null` to clear the handler.
          */
         public fun setLogHandler(handler: FFmpegLogHandler?)
+
+        /**
+         * Configure the desktop JVM runtime directory used to resolve FFmpeg native libraries.
+         *
+         * Desktop callers must invoke either this function or [useDefaultRuntimeLibraryDirectory] before first use.
+         * Non-desktop platforms ignore this setting.
+         */
+        public fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean = true)
+
+        /**
+         * Configure desktop JVM FFmpeg runtime loading to use a temporary extraction directory.
+         *
+         * Desktop callers must invoke either this function or [setRuntimeLibraryDirectory] before first use.
+         * Non-desktop platforms ignore this setting.
+         */
+        public fun useDefaultRuntimeLibraryDirectory()
     }
 
     /**
