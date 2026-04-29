@@ -70,6 +70,7 @@ import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent
 import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.contracts.ExperimentalContracts
@@ -134,8 +135,16 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     public open class VlcjData(
         override val mediaData: MediaData,
-        internal val setPlay: () -> Unit,
-    ) : Data(mediaData)
+        private val setPlay: () -> Unit,
+    ) : Data(mediaData) {
+        private val playRequested = AtomicBoolean(false)
+
+        internal fun play() {
+            if (playRequested.compareAndSet(false, true)) {
+                setPlay()
+            }
+        }
+    }
 
     private val screenshots = VlcScreenshots(player)
     private val playbackSpeed = VlcPlaybackSpeed(player)
@@ -240,11 +249,9 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 }
 
                 override fun stopped(mediaPlayer: MediaPlayer?) {
-                    if (playbackState.value <= PlaybackState.FINISHED) {
-                        return
-                    }
-                    playbackStateMapper.reset()
-                    playbackState.value = PlaybackState.FINISHED
+                    // VLC emits this asynchronously for controls().stop(), including stops we issue while replacing media.
+                    // stopPlaybackImpl already moves the public state to FINISHED synchronously, and natural EOF is handled
+                    // by finished(). Letting a late stopped event mutate state can mark the newly-started media as FINISHED.
                 }
 
                 override fun error(mediaPlayer: MediaPlayer) {
@@ -390,12 +397,10 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     data,
                     {
                         val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
-                        player.controls().stop()
-                        player.media().play(
-                            new,
-                            *data.options.toTypedArray(),
-                        )
                         lastMedia = new
+                        player.submit {
+                            player.media().play(new, *data.options.toTypedArray())
+                        }
                     },
                 ) {
                     override fun release() {
@@ -421,7 +426,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     override fun resumeImpl() {
         when (val state = playbackState.value) {
             PlaybackState.READY -> {
-                openResource.value?.setPlay?.let { it() }
+                openResource.value?.play()
 
                 //        player.media().options().add(*arrayOf(":avcodec-hw=none")) // dxva2
                 //        player.controls().play()
@@ -484,6 +489,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     override fun stopPlaybackImpl() {
         playbackStateMapper.reset()
         playbackState.value = PlaybackState.FINISHED
+        currentPositionMillis.value = 0L
         currentPositionMillis.value = 0L
         lastMedia?.onClose() // Stop blocking thread before closing VLC. Otherwise vlc stop() may hang forever
         try {
