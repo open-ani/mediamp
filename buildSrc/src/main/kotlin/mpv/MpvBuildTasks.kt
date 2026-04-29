@@ -8,6 +8,8 @@ import nativebuild.pathForShell
 import nativebuild.resolveNdkDir
 import nativebuild.resolveMsys2Dir
 import org.gradle.api.Task
+import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
 
@@ -15,9 +17,33 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
     val project = context.project
     val sourceTemplateDir = project.layout.buildDirectory.dir("mpv-source-template")
 
+    val applyPatchesTask = project.tasks.register<Exec>("applyMpvPatches") {
+        group = "mpv"
+        description = "Apply patches to the mpv submodule source tree"
+        enabled = context.mpvPatch.exists()
+
+        commandLine("git", "apply", context.mpvPatch.absolutePath)
+        workingDir = context.mpvSrcDir
+    }
+
+    val revertPatchesTask = project.tasks.register<Exec>("revertMpvPatches") {
+        group = "mpv"
+        description = "Revert patches from the mpv submodule source tree"
+        enabled = context.mpvPatch.exists()
+
+        commandLine("git", "apply", "--reverse", context.mpvPatch.absolutePath)
+        workingDir = context.mpvSrcDir
+    }
+
     val sourceTemplateTask = project.tasks.register<PrepareSourceTreeTask>("prepareMpvSourceTemplate") {
         group = "mpv"
         description = "Create a stable mpv source snapshot for this build"
+        dependsOn(applyPatchesTask)
+        finalizedBy(revertPatchesTask)
+        if (context.mpvPatch.exists()) {
+            inputs.file(context.mpvPatch)
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+        }
         sourceDir.set(context.mpvSrcDir)
         outputDir.set(sourceTemplateDir)
         markerFileRelativePath.set("meson.build")
@@ -31,7 +57,9 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
             if (context.isBuildVariantEnabled("windows")) {
                 previousTargetTask = registerMpvTasks(context, context.windowsTarget(), sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping mpv Windows targets: mediamp.mpv.buildvariant does not include 'windows'.")
+                project.logger.lifecycle(
+                    "Skipping mpv Windows targets: ${context.buildProperties.buildVariantPropertyName} does not include 'windows'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -40,7 +68,9 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
             if (context.isBuildVariantEnabled("linux")) {
                 previousTargetTask = registerMpvTasks(context, context.linuxX64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping mpv Linux targets: mediamp.mpv.buildvariant does not include 'linux'.")
+                project.logger.lifecycle(
+                    "Skipping mpv Linux targets: ${context.buildProperties.buildVariantPropertyName} does not include 'linux'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -53,7 +83,9 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
                     Arch.UNKNOWN -> error("Failed to configure mpv tasks, unknown macOS host architecture.")
                 }
             } else {
-                project.logger.lifecycle("Skipping mpv macos targets: mediamp.mpv.buildvariant does not include 'macos'.")
+                project.logger.lifecycle(
+                    "Skipping mpv macos targets: ${context.buildProperties.buildVariantPropertyName} does not include 'macos'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -75,7 +107,9 @@ private fun registerAndroidTargetsIfAvailable(
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
     if (!context.isBuildVariantEnabled("android")) {
-        context.project.logger.lifecycle("Skipping mpv Android targets: mediamp.mpv.buildvariant does not include 'android'.")
+        context.project.logger.lifecycle(
+            "Skipping mpv Android targets: ${context.buildProperties.buildVariantPropertyName} does not include 'android'.",
+        )
         return previousTargetTask
     }
 
@@ -110,7 +144,7 @@ private fun registerMpvTasks(
     if (!context.ffmpegProject.tasks.names.contains(ffmpegAssembleTaskName)) {
         project.logger.lifecycle(
             "Skipping mpv ${target.name}: mediamp-ffmpeg task '$ffmpegAssembleTaskName' is unavailable. " +
-                "Enable the matching mediamp.ffmpeg.buildvariant family '${target.family}'.",
+                "Enable the matching ${context.ffmpegBuildProperties.buildVariantPropertyName} family '${target.family}'.",
         )
         return previousTargetTask
     }
@@ -236,7 +270,7 @@ private fun MpvBuildContext.jniCompilerArgs(target: MpvBuildTarget): List<String
 
 private fun MpvBuildContext.jniLinkerArgs(target: MpvBuildTarget): List<String> {
     return when {
-        target.name == "WindowsX64" -> emptyList()
+        target.name == "WindowsX64" -> listOf("-lopengl32", "-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid")
         target.androidAbi != null -> listOf("-landroid", "-llog")
         target.name.startsWith("Macos") -> appleArchArgs(target.name)
         target.name == "LinuxX64" -> listOf("-pthread", "-Wl,-rpath,\$ORIGIN")

@@ -1,8 +1,13 @@
 package mpv
 
 import nativebuild.copyTreePreservingLinks
+import nativebuild.deleteRecursivelyForce
+import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.parseWindowsImportedDllNames
+import nativebuild.recreateDirectory
+import nativebuild.resolveWindowsObjdump
 import nativebuild.shellQuote
 import nativebuild.shellScriptWithExports
 import org.gradle.api.DefaultTask
@@ -22,7 +27,6 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -90,8 +94,7 @@ abstract class MpvConfigureTask : DefaultTask() {
                 "Build the matching mediamp-ffmpeg target first."
         }
 
-        buildRoot.deleteRecursively()
-        buildRoot.mkdirs()
+        recreateDirectory(buildRoot)
         copyTreePreservingLinks(sourceTemplateDir.get().asFile, sourceDir)
         writeWrapFiles(sourceDir, wrapFiles.get())
 
@@ -200,7 +203,7 @@ abstract class MpvConfigureTask : DefaultTask() {
 
         val wrapdbDir = sourceDir.parentFile.resolve("wrapdb")
         if (!wrapdbDir.resolve(".git").isDirectory) {
-            wrapdbDir.deleteRecursively()
+            deleteRecursivelyForce(wrapdbDir)
             execOperations.exec {
                 commandLine(
                     shell.get(),
@@ -228,7 +231,7 @@ abstract class MpvConfigureTask : DefaultTask() {
             val packagefilesDir = wrapdbDir.resolve("subprojects/packagefiles/$dependencyName")
             if (packagefilesDir.isDirectory) {
                 val targetPackagefiles = sourceDir.resolve("subprojects/packagefiles/$dependencyName")
-                targetPackagefiles.deleteRecursively()
+                deleteRecursivelyForce(targetPackagefiles)
                 copyTreePreservingLinks(packagefilesDir, targetPackagefiles)
             }
         }
@@ -439,8 +442,7 @@ abstract class MpvAssembleTask : DefaultTask() {
         val ffmpegPrefix = ffmpegInstallDir.get().asFile
         val outputPrefix = outputDir.get().asFile
 
-        outputPrefix.deleteRecursively()
-        outputPrefix.mkdirs()
+        recreateDirectory(outputPrefix)
         copyTreePreservingLinks(installPrefix, outputPrefix)
 
         jniLibrary.orNull?.asFile?.takeIf(File::isFile)?.let { wrapper ->
@@ -491,32 +493,15 @@ private fun collectWindowsRuntimeDlls(
     outputBin: File,
 ) {
     val ucrt64Bin = msys2Dir.resolve("ucrt64/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir)
     val copied = mutableSetOf<String>()
 
-    fun shouldIgnore(dllName: String): Boolean = dllName.startsWith("api-ms-win-") ||
-        dllName.equals("KERNEL32.dll", ignoreCase = true) ||
-        dllName.equals("USER32.dll", ignoreCase = true) ||
-        dllName.equals("ADVAPI32.dll", ignoreCase = true) ||
-        dllName.equals("SHELL32.dll", ignoreCase = true) ||
-        dllName.equals("ole32.dll", ignoreCase = true) ||
-        dllName.equals("bcrypt.dll", ignoreCase = true) ||
-        dllName.equals("GDI32.dll", ignoreCase = true) ||
-        dllName.equals("WINMM.dll", ignoreCase = true) ||
-        dllName.equals("WS2_32.dll", ignoreCase = true)
+    fun shouldIgnore(dllName: String): Boolean = isWindowsSystemLibrary(dllName)
 
     fun collectDeps(dllFile: File) {
         if (!dllFile.isFile) return
 
-        val stdout = ByteArrayOutputStream()
-        execOperations.exec {
-            commandLine(msys2Dir.resolve("ucrt64/bin/objdump.exe").absolutePath, "-p", dllFile.absolutePath)
-            standardOutput = stdout
-            isIgnoreExitValue = true
-        }
-
-        stdout.toString(Charsets.UTF_8).lineSequence()
-            .filter { it.contains("DLL Name:") }
-            .map { it.substringAfter("DLL Name:").trim() }
+        parseWindowsImportedDllNames(execOperations, objdumpExecutable, dllFile).asSequence()
             .filterNot(::shouldIgnore)
             .forEach { dllName ->
                 val existing = outputBin.resolve(dllName)

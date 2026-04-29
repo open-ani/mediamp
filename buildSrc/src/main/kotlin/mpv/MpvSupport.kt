@@ -9,6 +9,9 @@ import nativebuild.AndroidAbi
 import nativebuild.DEFAULT_ANDROID_ABIS
 import nativebuild.DEFAULT_DESKTOP_RUNTIME_TARGETS
 import nativebuild.DesktopRuntimeTarget
+import nativebuild.FFMPEG_NATIVE_BUILD_PROPERTIES
+import nativebuild.MPV_NATIVE_BUILD_PROPERTIES
+import nativebuild.NativeBuildProperties
 import nativebuild.androidNdkHostTag
 import nativebuild.androidTargetName
 import nativebuild.includesBuildVariant
@@ -52,7 +55,11 @@ internal data class AndroidToolchain(
 
 internal class MpvBuildContext(
     val project: Project,
+    val mpvPatch: File,
 ) {
+    val buildProperties: NativeBuildProperties = MPV_NATIVE_BUILD_PROPERTIES
+    val ffmpegBuildProperties: NativeBuildProperties = FFMPEG_NATIVE_BUILD_PROPERTIES
+
     val mpvProjectDir: File = project.projectDir
     val mpvSrcDir: File = project.projectDir.resolve("mpv")
     val ffmpegProject: Project = project.rootProject.project(":mediamp-ffmpeg")
@@ -61,17 +68,13 @@ internal class MpvBuildContext(
     val hostArch: Arch = getArch()
 
     val enabledBuildVariantFamilies: Set<String> =
-        project.resolveEnabledBuildVariantFamilies("mediamp.mpv.buildvariant", ALL_BUILD_VARIANT_FAMILIES)
+        project.resolveEnabledBuildVariantFamilies(buildProperties, ALL_BUILD_VARIANT_FAMILIES)
 
     val mesonBuildType: String =
         project.getPropertyOrNull("mediamp.mpv.buildtype")?.trim()?.takeIf { it.isNotEmpty() } ?: "release"
 
     val androidAbis: List<AndroidAbi> =
-        project.resolveAndroidAbis(
-            propertyName = "mediamp.mpv.androidabis",
-            fallbackPropertyName = "mediamp.ffmpeg.androidabis",
-            availableAbis = DEFAULT_ANDROID_ABIS,
-        )
+        project.resolveAndroidAbis(buildProperties, availableAbis = DEFAULT_ANDROID_ABIS)
 
     val desktopRuntimeTargets: List<DesktopRuntimeTarget> = DEFAULT_DESKTOP_RUNTIME_TARGETS
 

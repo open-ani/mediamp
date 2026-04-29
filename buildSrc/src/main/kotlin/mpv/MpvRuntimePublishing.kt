@@ -5,9 +5,15 @@ import nativebuild.PublishedArtifact
 import nativebuild.addCompilePomDependency
 import nativebuild.artifactSuffix
 import nativebuild.createDependencyOnlyDesktopRuntimeElements
+import nativebuild.isSharedRuntimeLibrary
+import nativebuild.manifestRelativePath
+import nativebuild.orderLibrariesByPrefixes
+import nativebuild.orderWindowsDllsByDependencies
 import nativebuild.publicationSuffix
 import nativebuild.publishDesktopRuntimeAggregator
 import nativebuild.registerCompositeDesktopRuntimeElements
+import nativebuild.resolveMsys2Dir
+import nativebuild.resolveWindowsObjdump
 import nativebuild.wireDesktopRuntimeDependencyConstraints
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -15,6 +21,8 @@ import org.gradle.jvm.tasks.Jar
 import org.gradle.kotlin.dsl.create
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
+import org.gradle.kotlin.dsl.support.serviceOf
+import org.gradle.process.ExecOperations
 
 internal fun registerDesktopRuntimeJarTasks(
     context: MpvBuildContext,
@@ -59,7 +67,12 @@ internal fun registerDesktopRuntimeJarTasks(
                 }
 
                 doFirst {
-                    val runtimeFiles = runtimeManifestEntries(outputDir.get().asFile, target)
+                    val runtimeFiles = runtimeManifestEntries(
+                        outputDir = outputDir.get().asFile,
+                        target = target,
+                        execOperations = context.project.serviceOf<ExecOperations>(),
+                        msys2Dir = if (target.os == "windows") context.project.resolveMsys2Dir() else null,
+                    )
                     val manifestFile = temporaryDir.resolve("mpv-natives.txt")
                     manifestFile.parentFile.mkdirs()
                     manifestFile.writeText(runtimeFiles.joinToString("\n"))
@@ -153,21 +166,55 @@ internal fun configureRuntimePublishing(
 private fun runtimeManifestEntries(
     outputDir: java.io.File,
     target: DesktopRuntimeTarget,
-): List<String> = when (target.os) {
-    "windows" -> outputDir.resolve("bin").listFiles()
-        ?.filter { it.isFile && it.extension.equals("dll", ignoreCase = true) }
-        ?.map { it.name }
+    execOperations: ExecOperations,
+    msys2Dir: java.io.File?,
+): List<String> {
+    val runtimeRoot = when (target.os) {
+        "windows" -> outputDir.resolve("bin")
+        "linux", "macos" -> outputDir.resolve("lib")
+        else -> error("Unknown desktop runtime OS: ${target.os}")
+    }
+    val runtimeFiles = runtimeRoot.listFiles()
+        ?.filter { candidate -> candidate.isFile && isSharedRuntimeLibrary(candidate, target.os) }
         .orEmpty()
+    val wrapperFiles = runtimeFiles.filter { candidate -> candidate.name.equals(wrapperLibraryName(target.os), ignoreCase = true) }
+    val dependencyLibraries = runtimeFiles - wrapperFiles.toSet()
 
-    "linux" -> outputDir.resolve("lib").listFiles()
-        ?.filter { it.isFile && (it.name.endsWith(".so") || ".so." in it.name) }
-        ?.map { it.name }
-        .orEmpty()
+    val orderedShared = when (target.os) {
+        "windows" -> {
+            val msys2Root = msys2Dir ?: error("MSYS2 directory must be available when packaging Windows mpv runtimes.")
+            orderWindowsDllsByDependencies(
+                execOperations = execOperations,
+                objdumpExecutable = resolveWindowsObjdump(msys2Root),
+                dllFiles = dependencyLibraries,
+            )
+        }
 
-    "macos" -> outputDir.resolve("lib").listFiles()
-        ?.filter { it.isFile && it.name.endsWith(".dylib") }
-        ?.map { it.name }
-        .orEmpty()
+        else -> orderLibrariesByPrefixes(
+            files = dependencyLibraries,
+            orderedPrefixes = listOf(
+                "libavutil",
+                "libswresample",
+                "libswscale",
+                "libavcodec",
+                "libavformat",
+                "libavfilter",
+                "libavdevice",
+                "libass",
+                "libplacebo",
+                "libmpv",
+            ),
+            unmatchedFirst = true,
+        )
+    }
 
-    else -> error("Unknown desktop runtime OS: ${target.os}")
-}.sorted()
+    return (orderedShared + wrapperFiles.sortedBy { it.name.lowercase() })
+        .map { manifestRelativePath(runtimeRoot, it) }
+}
+
+private fun wrapperLibraryName(os: String): String =
+    when (os) {
+        "windows" -> "mediampv.dll"
+        "macos" -> "libmediampv.dylib"
+        else -> "libmediampv.so"
+    }
