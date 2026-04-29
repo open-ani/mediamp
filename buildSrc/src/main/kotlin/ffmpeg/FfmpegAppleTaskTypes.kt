@@ -191,7 +191,7 @@ private fun buildAppleFrameworkBinary(
         append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), windowsMsys = false)) })
         append(' ')
         append(staticLibraries)
-        append(" -lm -pthread -framework CoreFoundation -framework CoreVideo -framework CoreMedia")
+        append(" -lm -pthread -framework CoreFoundation -framework CoreVideo -framework CoreMedia -framework Security")
         if (extraLibs.isNotEmpty()) {
             append(' ')
             append(extraLibs)

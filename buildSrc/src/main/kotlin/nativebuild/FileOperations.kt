@@ -63,18 +63,34 @@ internal fun recreateDirectory(dir: File) {
 }
 
 internal fun deleteRecursivelyForce(target: File) {
-    if (!target.exists()) return
+    if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return
 
     target.walkBottomUp().forEach { entry ->
-        if (!entry.exists()) return@forEach
+        val entryPath = entry.toPath()
+        if (!Files.exists(entryPath, LinkOption.NOFOLLOW_LINKS)) return@forEach
 
-        entry.setWritable(true, false)
+        if (!Files.isSymbolicLink(entryPath)) {
+            entry.setWritable(true, false)
+        }
+
+        var lastFailure: Throwable? = null
         repeat(6) { attempt ->
-            if (entry.delete() || !entry.exists()) {
+            val deleted = runCatching {
+                Files.deleteIfExists(entryPath)
+            }.onFailure {
+                lastFailure = it
+            }.getOrDefault(false)
+
+            if (deleted || !Files.exists(entryPath, LinkOption.NOFOLLOW_LINKS)) {
                 return@forEach
             }
             if (attempt == 5) {
-                error("Failed to delete ${entry.absolutePath}")
+                error(
+                    buildString {
+                        append("Failed to delete ${entry.absolutePath}")
+                        lastFailure?.message?.let { append(": $it") }
+                    },
+                )
             }
             Thread.sleep(50L * (attempt + 1))
         }
