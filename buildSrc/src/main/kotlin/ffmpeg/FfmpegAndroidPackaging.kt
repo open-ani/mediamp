@@ -27,7 +27,9 @@ abstract class PrepareFfmpegAndroidJniLibsTask : DefaultTask() {
 
 internal fun registerAndroidJniPackaging(context: FfmpegBuildContext): TaskProvider<PrepareFfmpegAndroidJniLibsTask>? {
     if (!context.isBuildVariantEnabled("android")) {
-        context.project.logger.lifecycle("Skipping Android JNI packaging tasks: mediamp.ffmpeg.buildvariant does not include 'android'.")
+        context.project.logger.lifecycle(
+            "Skipping Android JNI packaging tasks: ${context.buildProperties.buildVariantPropertyName} does not include 'android'.",
+        )
         return null
     }
 

@@ -60,7 +60,9 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             if (context.isBuildVariantEnabled("windows")) {
                 previousTargetTask = registerFfmpegTasks(context, context.windowsTarget(), sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg windows targets: mediamp.ffmpeg.buildvariant does not include 'windows'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg windows targets: ${context.buildProperties.buildVariantPropertyName} does not include 'windows'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -69,7 +71,9 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             if (context.isBuildVariantEnabled("linux")) {
                 previousTargetTask = registerFfmpegTasks(context, context.linuxX64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg linux targets: mediamp.ffmpeg.buildvariant does not include 'linux'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg linux targets: ${context.buildProperties.buildVariantPropertyName} does not include 'linux'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -82,14 +86,18 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                     else -> throw GradleException("Failed to configure FFmpeg tasks, unknown macOS host.")
                 }
             } else {
-                project.logger.lifecycle("Skipping FFmpeg macos targets: mediamp.ffmpeg.buildvariant does not include 'macos'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg macos targets: ${context.buildProperties.buildVariantPropertyName} does not include 'macos'.",
+                )
             }
             if (context.isBuildVariantEnabled("ios")) {
                 previousTargetTask = registerFfmpegTasks(context, context.iosArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
                 previousTargetTask = registerFfmpegTasks(context, context.iosSimulatorArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
                 registerAppleXcframeworkTask(context)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg ios targets: mediamp.ffmpeg.buildvariant does not include 'ios'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg ios targets: ${context.buildProperties.buildVariantPropertyName} does not include 'ios'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -115,6 +123,12 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
         "--target-os=mingw32",
         "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
         "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
+        "--enable-openssl",
+        "--enable-protocol=udp",
+        "--enable-protocol=tcp",
+        "--enable-protocol=tls",
+        "--enable-protocol=http",
+        "--enable-protocol=https",
     ),
     env = mapOf("MSYSTEM" to "UCRT64"),
     shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
@@ -129,7 +143,9 @@ private fun registerAndroidTargetsIfAvailable(
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
     if (!context.isBuildVariantEnabled("android")) {
-        context.project.logger.lifecycle("Skipping FFmpeg android targets: mediamp.ffmpeg.buildvariant does not include 'android'.")
+        context.project.logger.lifecycle(
+            "Skipping FFmpeg android targets: ${context.buildProperties.buildVariantPropertyName} does not include 'android'.",
+        )
         return previousTargetTask
     }
 

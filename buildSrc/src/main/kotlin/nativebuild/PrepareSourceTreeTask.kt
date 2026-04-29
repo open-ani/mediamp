@@ -51,7 +51,7 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
             "${sourceDisplayName.get()} source tree is missing $marker at ${src.absolutePath}"
         }
 
-        dst.deleteRecursively()
+        recreateDirectory(dst)
         if (preserveSymbolicLinks.get()) {
             copyTreePreservingLinks(src, dst)
         } else {

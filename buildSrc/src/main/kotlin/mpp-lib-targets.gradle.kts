@@ -44,7 +44,7 @@ val androidLibraryExtension = extensions.findByType(KotlinMultiplatformExtension
 val composeExtension = extensions.findByType(ComposeExtension::class)
 val kotlinMultiplatformExtension = extensions.findByType<KotlinMultiplatformExtension>()
 
-kotlinMultiplatformExtension?.apply { 
+kotlinMultiplatformExtension?.apply {
     /**
      * 平台架构:
      * ```
@@ -99,7 +99,7 @@ kotlinMultiplatformExtension?.apply {
                     pickFirsts.add("META-INF/LICENSE-notice.md")
                 }
             }
-            
+
             compilerOptions {
                 jvmTarget = JvmTarget.JVM_11
             }

@@ -1,8 +1,12 @@
 package ffmpeg
 
 import nativebuild.copyTreeRecursively
+import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
 import nativebuild.pathForShell
+import nativebuild.parseWindowsImportedDllNames
+import nativebuild.recreateDirectory
+import nativebuild.resolveWindowsObjdump
 import nativebuild.restoreExecutablePermissions
 import nativebuild.shellQuote
 import nativebuild.toMsysPath
@@ -23,7 +27,6 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -72,8 +75,7 @@ abstract class FfmpegConfigureTask : DefaultTask() {
             "FFmpeg source tree is missing configure at ${templateSourceDir.absolutePath}"
         }
         logger.lifecycle("Configuring FFmpeg with buildDir=${buildDir.absolutePath} configure=${configureFile.absolutePath}")
-        buildDir.deleteRecursively()
-        buildDir.mkdirs()
+        recreateDirectory(buildDir)
         copySourceTree(templateSourceDir, sourceDir)
 
         require(configureFile.isFile) {
@@ -87,8 +89,10 @@ abstract class FfmpegConfigureTask : DefaultTask() {
                 "make",
                 "diffutils",
                 "pkg-config",
+                "mingw-w64-ucrt-x86_64-ca-certificates",
                 "mingw-w64-ucrt-x86_64-gcc",
                 "mingw-w64-ucrt-x86_64-nasm",
+                "mingw-w64-ucrt-x86_64-openssl",
             )
             logger.lifecycle("Ensuring MSYS2 UCRT64 packages: ${packages.joinToString()}")
             execOperations.exec {
@@ -259,6 +263,7 @@ abstract class FfmpegAssembleTask : DefaultTask() {
         val installDirFile = installDir.get().asFile
         val buildDirFile = buildDirPath.get().asFile
 
+        outputDirFile.deleteRecursively()
         outputDirFile.mkdirs()
         val libDir = installDirFile.resolve("lib")
         val binDir = installDirFile.resolve("bin")
@@ -293,6 +298,11 @@ abstract class FfmpegAssembleTask : DefaultTask() {
                 )
                 val msys2Root = msys2Dir.orNull?.asFile
                     ?: error("MSYS2 directory must be configured for Windows FFmpeg runtime assembly.")
+                copyWindowsTlsCertificates(
+                    logger = logger,
+                    msys2Dir = msys2Root,
+                    outputDir = outputDirFile,
+                )
                 collectWindowsRuntimeDlls(
                     execOperations = execOperations,
                     logger = logger,
@@ -349,6 +359,20 @@ abstract class FfmpegAssembleTask : DefaultTask() {
     }
 }
 
+private fun copyWindowsTlsCertificates(
+    logger: Logger,
+    msys2Dir: File,
+    outputDir: File,
+) {
+    val certFile = msys2Dir.resolve("ucrt64/etc/ssl/cert.pem")
+    if (!certFile.isFile) return
+
+    val targetFile = outputDir.resolve("etc/ssl/cert.pem")
+    targetFile.parentFile.mkdirs()
+    certFile.copyTo(targetFile, overwrite = true)
+    logger.lifecycle("Bundled Windows TLS CA bundle: ${targetFile.absolutePath}")
+}
+
 private fun buildJvmJniWrapper(
     execOperations: ExecOperations,
     logger: Logger,
@@ -394,7 +418,11 @@ private fun buildJvmJniWrapper(
     val jniWrapper = shellQuote(pathForShell(jniWrapperSource, windowsMsys))
     val outputPath = shellQuote(pathForShell(wrapperOut, windowsMsys))
     val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys))
-    val jniIncludes = jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
+    val jniIncludes = if (targetName.startsWith("Android")) {
+        ""
+    } else {
+        jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
+    }
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
         buildDir.resolve("source"),
@@ -526,28 +554,15 @@ private fun collectWindowsRuntimeDlls(
     outputDir: File,
 ) {
     val ucrt64Bin = msys2Dir.resolve("ucrt64/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir)
     val collectedDlls = mutableSetOf<String>()
 
     fun collectDeps(dllFile: File) {
         if (!dllFile.exists()) return
-        val stdout = ByteArrayOutputStream()
-        execOperations.exec {
-            commandLine(msys2Dir.resolve("ucrt64/bin/objdump.exe").absolutePath, "-p", dllFile.absolutePath)
-            standardOutput = stdout
-            isIgnoreExitValue = true
-        }
-        stdout.toString(Charsets.UTF_8).lineSequence()
-            .filter { it.contains("DLL Name:") }
-            .map { it.substringAfter("DLL Name:").trim() }
+        parseWindowsImportedDllNames(execOperations, objdumpExecutable, dllFile).asSequence()
             .filter { dllName ->
                 dllName !in collectedDlls &&
-                    !dllName.startsWith("api-ms-win-") &&
-                    !dllName.equals("KERNEL32.dll", ignoreCase = true) &&
-                    !dllName.equals("USER32.dll", ignoreCase = true) &&
-                    !dllName.equals("ADVAPI32.dll", ignoreCase = true) &&
-                    !dllName.equals("SHELL32.dll", ignoreCase = true) &&
-                    !dllName.equals("ole32.dll", ignoreCase = true) &&
-                    !dllName.equals("bcrypt.dll", ignoreCase = true) &&
+                    !isWindowsSystemLibrary(dllName) &&
                     ucrt64Bin.resolve(dllName).exists() &&
                     ffmpegLibNames.none { lib -> dllName.startsWith(lib) }
             }
