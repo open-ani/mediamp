@@ -52,10 +52,6 @@ kotlin {
             val ffmpegSrcDir = project.projectDir.resolve("ffmpeg")
             val stubHeadersDir = project.projectDir.resolve("src/nativeInterop/cinterop/stub-headers")
 
-            compilations.getByName("main").cinterops.create("mediampffmpegkit") {
-                defFile(project.file("src/nativeInterop/cinterop/mediamp_ffmpegkit.def"))
-                compilerOpts("-F$frameworkSearchPathValue")
-            }
             compilations.getByName("main").cinterops.create("libavffi") {
                 defFile(project.file("src/nativeInterop/cinterop/libav_ffi.def"))
                 compilerOpts("-I${ffmpegSrcDir.absolutePath}", "-I${stubHeadersDir.absolutePath}")
@@ -65,7 +61,7 @@ kotlin {
             }
 
             if (project.tasks.names.contains(frameworkTaskName)) {
-                project.tasks.named("cinteropMediampffmpegkit$capitalizedTargetName") {
+                project.tasks.named("cinteropLibavffi$capitalizedTargetName") {
                     dependsOn(frameworkTaskName)
                 }
                 project.tasks.matching { task ->

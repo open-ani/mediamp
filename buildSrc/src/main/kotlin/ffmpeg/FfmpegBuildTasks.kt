@@ -221,10 +221,6 @@ private fun registerFfmpegTasks(
         buildDirPath.set(buildDir)
         this.installDir.set(installDir)
         this.outputDir.set(project.layout.buildDirectory.dir("ffmpeg-output/${target.name}"))
-        if (target.name.startsWith("Android") || target.name == "LinuxX64" || target.name == "MacosArm64" || target.name == "MacosX64" || target.name == "WindowsX64") {
-            commandWrapperSource.set(context.commandWrapperSource)
-            jniWrapperSource.set(context.jniWrapperSource)
-        }
         if (msys2Dir != null) {
             this.msys2Dir.set(msys2Dir)
         }
@@ -243,8 +239,6 @@ private fun registerFfmpegTasks(
             ffmpegLibNames.set(context.ffmpegLibNames)
             buildDirPath.set(buildDir)
             this.installDir.set(installDir)
-            wrapperSource.set(context.commandWrapperSource)
-            publicHeaderSource.set(context.applePublicHeaderSource)
             outputDir.set(project.layout.buildDirectory.dir("apple-framework/${target.name}/${context.appleFrameworkName}.framework"))
         }
         return frameworkTask

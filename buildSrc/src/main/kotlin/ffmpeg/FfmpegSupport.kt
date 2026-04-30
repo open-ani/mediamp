@@ -53,9 +53,6 @@ internal class FfmpegBuildContext(
     val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 
     val appleFrameworkName: String = "MediampFFmpegKit"
-    val commandWrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
-    val applePublicHeaderSource: File = project.projectDir.resolve("src/appleMain/include/MediampFFmpegKit.h")
-    val jniWrapperSource: File = project.projectDir.resolve("src/jvmMain/c/ffmpegkit_jni.c")
 
     val enabledBuildVariantFamilies: Set<String> =
         project.resolveEnabledBuildVariantFamilies(buildProperties, ALL_BUILD_VARIANT_FAMILIES)

@@ -1,3 +1,0 @@
-language = Objective-C
-modules = MediampFFmpegKit
-package = org.openani.mediamp.ffmpeg.interop
