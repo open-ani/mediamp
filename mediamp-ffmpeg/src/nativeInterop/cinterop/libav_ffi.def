@@ -12,10 +12,31 @@ struct AVDictionary {
 
 typedef void (*simple_log_callback_t)(void*, int, const char*, void*);
 
-static inline simple_log_callback_t av_log_default_callback2() {
+static simple_log_callback_t av_log_default_callback2() {
     return (simple_log_callback_t)av_log_default_callback;
 }
 
-static inline void av_log_set_callback2(simple_log_callback_t callback) {
+static void av_log_set_callback2(simple_log_callback_t callback) {
     av_log_set_callback((void (*)(void*, int, const char*, va_list))callback);
+}
+
+// Helpers for opaque AVFormatContext fields in cinterop.
+static int mediamp_format_stream_count(AVFormatContext *ctx) {
+    return ctx->nb_streams;
+}
+
+static int mediamp_stream_codec_type(AVStream *stream) {
+    return stream->codecpar->codec_type;
+}
+
+static int mediamp_stream_codec_id(AVStream *stream) {
+    return stream->codecpar->codec_id;
+}
+
+static AVStream *mediamp_format_stream(AVFormatContext *ctx, int idx) {
+    return ctx->streams[idx];
+}
+
+static AVCodecParameters *mediamp_stream_codecpar(AVStream *stream) {
+    return stream->codecpar;
 }
