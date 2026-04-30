@@ -8,6 +8,6 @@
 
 package org.openani.mediamp.ffmpeg
 
-public expect class AVFrame : AutoCloseable {
+public expect class AVFrame() : AutoCloseable {
     public override fun close()
 }

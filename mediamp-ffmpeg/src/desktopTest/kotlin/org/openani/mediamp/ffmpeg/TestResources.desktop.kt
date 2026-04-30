@@ -11,3 +11,7 @@ package org.openani.mediamp.ffmpeg
 internal actual fun sampleMediaPath(): String =
     Thread.currentThread().contextClassLoader.getResource("sample.mp4")?.path
         ?: error("sample.mp4 not found in test resources")
+
+internal actual fun tempOutputPath(suffix: String): String =
+    System.getProperty("java.io.tmpdir").trimEnd('/', '\\')
+        .let { "$it/temp-test$suffix" }

@@ -8,9 +8,10 @@
 
 package org.openani.mediamp.ffmpeg
 
-public expect class DecoderContext() : AutoCloseable {
-    public fun open(codecId: Int)
-    public fun sendPacket(packet: AVPacket?): Int
-    public fun receiveFrame(frame: AVFrame): Int
+public expect class MediaOutput() : AutoCloseable {
+    public fun open(filename: String)
+    public fun copyStreamFrom(input: MediaInput, streamIndex: Int): Int
+    public fun writeHeader()
+    public fun writePacket(packet: AVPacket, outStreamIndex: Int)
     public override fun close()
 }

@@ -56,3 +56,12 @@ internal actual fun sampleMediaPath(): String {
     // If nothing found, return first candidate so the test fails with a clear path
     return candidates.firstOrNull() ?: "resources/sample.mp4"
 }
+
+@OptIn(ExperimentalForeignApi::class)
+internal actual fun tempOutputPath(suffix: String): String {
+    memScoped {
+        val buf = allocArray<ByteVar>(4096)
+        val cwd = getcwd(buf, 4096u)?.toKString() ?: "."
+        return "$cwd/temp-test$suffix"
+    }
+}

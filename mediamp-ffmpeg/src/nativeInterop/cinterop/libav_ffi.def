@@ -40,3 +40,58 @@ static AVStream *mediamp_format_stream(AVFormatContext *ctx, int idx) {
 static AVCodecParameters *mediamp_stream_codecpar(AVStream *stream) {
     return stream->codecpar;
 }
+
+// Helpers for output / remux operations.
+static AVFormatContext *mediamp_alloc_output_context(const char *filename) {
+    AVFormatContext *ctx = NULL;
+    avformat_alloc_output_context2(&ctx, NULL, NULL, filename);
+    return ctx;
+}
+
+static AVStream *mediamp_new_stream(AVFormatContext *ctx) {
+    return avformat_new_stream(ctx, NULL);
+}
+
+static int mediamp_copy_codec_params(AVStream *dst, AVStream *src) {
+    return avcodec_parameters_copy(dst->codecpar, src->codecpar);
+}
+
+static int mediamp_avio_open(AVFormatContext *ctx) {
+    return avio_open(&ctx->pb, ctx->url, AVIO_FLAG_WRITE);
+}
+
+static int mediamp_write_header(AVFormatContext *ctx) {
+    return avformat_write_header(ctx, NULL);
+}
+
+static int mediamp_interleaved_write_frame(AVFormatContext *ctx, AVPacket *pkt) {
+    return av_interleaved_write_frame(ctx, pkt);
+}
+
+static int mediamp_write_trailer(AVFormatContext *ctx) {
+    return av_write_trailer(ctx);
+}
+
+static void mediamp_close_output(AVFormatContext *ctx) {
+    if (!ctx) return;
+    if (ctx->pb && !(ctx->oformat->flags & AVFMT_NOFILE)) {
+        avio_closep(&ctx->pb);
+    }
+    avformat_free_context(ctx);
+}
+
+static void mediamp_packet_rescale_ts(AVPacket *pkt, AVRational tb_src, AVRational tb_dst) {
+    av_packet_rescale_ts(pkt, tb_src, tb_dst);
+}
+
+static void mediamp_packet_set_stream_index(AVPacket *pkt, int idx) {
+    pkt->stream_index = idx;
+}
+
+static int mediamp_packet_stream_index(AVPacket *pkt) {
+    return pkt->stream_index;
+}
+
+static AVRational mediamp_stream_time_base(AVStream *stream) {
+    return stream->time_base;
+}

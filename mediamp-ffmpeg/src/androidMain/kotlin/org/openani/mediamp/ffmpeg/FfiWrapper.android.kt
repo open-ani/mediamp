@@ -9,6 +9,7 @@
 package org.openani.mediamp.ffmpeg
 
 public actual class MediaInput : AutoCloseable {
+    internal var native: Any? = null
     public actual fun open(url: String): Unit = stub()
     public actual fun findStreamInfo(): Int = stub()
     public actual val streamCount: Int get() = stub()
@@ -28,9 +29,18 @@ public actual class DecoderContext : AutoCloseable {
 public actual class AVPacket : AutoCloseable {
     actual override fun close(): Unit = stub()
     public actual fun unref(): Unit = stub()
+    public actual fun streamIndex(): Int = stub()
 }
 
 public actual class AVFrame : AutoCloseable {
+    actual override fun close(): Unit = stub()
+}
+
+public actual class MediaOutput : AutoCloseable {
+    public actual fun open(filename: String): Unit = stub()
+    public actual fun copyStreamFrom(input: MediaInput, streamIndex: Int): Int = stub()
+    public actual fun writeHeader(): Unit = stub()
+    public actual fun writePacket(packet: AVPacket, outStreamIndex: Int): Unit = stub()
     actual override fun close(): Unit = stub()
 }
 

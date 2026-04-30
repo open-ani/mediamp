@@ -9,3 +9,5 @@
 package org.openani.mediamp.ffmpeg
 
 internal expect fun sampleMediaPath(): String
+
+internal expect fun tempOutputPath(suffix: String = ".mp4"): String

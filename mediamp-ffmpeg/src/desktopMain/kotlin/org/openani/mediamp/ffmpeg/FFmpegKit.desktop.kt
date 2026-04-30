@@ -7,8 +7,11 @@
  */
 
 package org.openani.mediamp.ffmpeg
+
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -17,14 +20,28 @@ import java.util.Locale
 /**
  * Desktop JVM implementation.
  *
- * The ffmpeg binary and shared libraries are expected on the classpath
- * (packaged in the `mediamp-ffmpeg-runtime-{os}-{arch}` JAR).
- * On first use they are extracted to a temporary directory.
+ * Recognized operations (remux, probe) are executed via the thin libav* wrapper
+ * to avoid global state pollution from repeated in-process main() calls.
+ * Unrecognized or complex operations fall back to spawning the extracted ffmpeg
+ * binary as a subprocess.
  */
 public actual class FFmpegKit actual constructor() {
+    public actual suspend fun execute(args: List<String>): FFmpegResult {
+        val parsed = ArgsParser.parse(args)
+        if (parsed is MediaOperation.Remux || parsed is MediaOperation.Probe) {
+            return try {
+                MediaTranscoder().execute(parsed)
+            } catch (e: Throwable) {
+                FFmpegResult(exitCode = 1)
+            }
+        }
+        val runtimeDir = ensureExtracted()
+        return executeSubprocess(runtimeDir, args)
+    }
+
     public actual companion object {
         public actual fun setLogHandler(handler: FFmpegLogHandler?) {
-            JvmFFmpegProcess.setLogHandler(handler)
+            configuredLogHandler = handler
         }
 
         private val OS_NAME: String = System.getProperty("os.name").lowercase(Locale.ROOT)
@@ -33,11 +50,8 @@ public actual class FFmpegKit actual constructor() {
         @Volatile
         private var extractedDir: File? = null
 
-        /**
-         * Extract all native binaries from the classpath to a temp directory.
-         * The runtime JAR contains files like `libffmpegkitjni.dylib`, `libavcodec.62.dylib`, etc.
-         * at the root level.
-         */
+        private var configuredLogHandler: FFmpegLogHandler? = null
+
         private fun extractNativeBinaries(): File {
             val dir = Files.createTempDirectory("mediamp-ffmpeg").toFile()
             dir.deleteOnExit()
@@ -66,11 +80,6 @@ public actual class FFmpegKit actual constructor() {
         }
     }
 
-    public actual suspend fun execute(args: List<String>): FFmpegResult {
-        val runtimeDir = ensureExtracted()
-        return JvmFFmpegProcess.execute(runtimeDir, args)
-    }
-
     private suspend fun ensureExtracted(): File {
         extractedDir?.let { return it }
         extractionMutex.withLock {
@@ -81,4 +90,27 @@ public actual class FFmpegKit actual constructor() {
         }
     }
 
+    private suspend fun executeSubprocess(runtimeDir: File, args: List<String>): FFmpegResult =
+        withContext(Dispatchers.IO) {
+            val binaryName = if (OS_NAME.contains("win")) "ffmpeg.exe" else "ffmpeg"
+            val binary = runtimeDir.resolve(binaryName)
+            if (!binary.exists()) {
+                // Fall back to legacy JNI wrapper if binary not packaged
+                return@withContext JvmFFmpegProcess.execute(runtimeDir, args)
+            }
+
+            val process = ProcessBuilder(listOf(binary.absolutePath) + args)
+                .redirectErrorStream(true)
+                .start()
+
+            process.inputStream.bufferedReader().use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    configuredLogHandler?.onLog(FFmpegLogMessage(32, line!!))
+                }
+            }
+
+            val exitCode = process.waitFor()
+            FFmpegResult(exitCode = exitCode)
+        }
 }

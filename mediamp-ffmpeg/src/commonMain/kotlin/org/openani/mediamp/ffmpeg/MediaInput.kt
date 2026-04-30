@@ -8,7 +8,7 @@
 
 package org.openani.mediamp.ffmpeg
 
-public expect class MediaInput : AutoCloseable {
+public expect class MediaInput() : AutoCloseable {
     public fun open(url: String)
     public fun findStreamInfo(): Int
     public val streamCount: Int

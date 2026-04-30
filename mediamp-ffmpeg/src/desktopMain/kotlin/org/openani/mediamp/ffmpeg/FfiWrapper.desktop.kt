@@ -13,13 +13,16 @@ import org.bytedeco.ffmpeg.avformat.AVFormatContext
 import org.bytedeco.ffmpeg.avutil.AVDictionary
 import org.bytedeco.ffmpeg.avutil.AVFrame as NativeAVFrame
 import org.bytedeco.ffmpeg.avcodec.AVPacket as NativeAVPacket
+import org.bytedeco.ffmpeg.avcodec.AVCodecParameters
+import org.bytedeco.ffmpeg.avformat.AVIOContext
+import org.bytedeco.ffmpeg.avformat.AVOutputFormat
 import org.bytedeco.ffmpeg.global.avcodec.*
 import org.bytedeco.ffmpeg.global.avformat.*
 import org.bytedeco.ffmpeg.global.avutil.*
 import org.bytedeco.javacpp.PointerPointer
 
 public actual class MediaInput : AutoCloseable {
-    private var native: AVFormatContext? = null
+    internal var native: AVFormatContext? = null
 
     public actual fun open(url: String) {
         val ctx = avformat_alloc_context() ?: throw FFmpegException(-12)
@@ -100,6 +103,8 @@ public actual class AVPacket : AutoCloseable {
     public actual fun unref() {
         av_packet_unref(native)
     }
+
+    public actual fun streamIndex(): Int = native.stream_index()
 }
 
 public actual class AVFrame : AutoCloseable {
@@ -108,5 +113,55 @@ public actual class AVFrame : AutoCloseable {
 
     actual override fun close() {
         av_frame_free(native)
+    }
+}
+
+public actual class MediaOutput : AutoCloseable {
+    private var native: AVFormatContext? = null
+
+    public actual fun open(filename: String) {
+        val ctx = AVFormatContext()
+        avformat_alloc_output_context2(ctx, null as AVOutputFormat?, null, filename).checkError()
+        native = ctx
+    }
+
+    public actual fun copyStreamFrom(input: MediaInput, streamIndex: Int): Int {
+        val outCtx = native ?: error("MediaOutput not opened")
+        val inCtx = input.native ?: error("MediaInput not opened")
+        val inStream = inCtx.streams(streamIndex)
+            ?: throw IndexOutOfBoundsException("Stream index $streamIndex out of bounds")
+        val outStream = avformat_new_stream(outCtx, null)
+            ?: throw FFmpegException(-12)
+        avcodec_parameters_copy(outStream.codecpar(), inStream.codecpar()).checkError()
+        return outCtx.nb_streams() - 1
+    }
+
+    public actual fun writeHeader() {
+        val ctx = native ?: error("MediaOutput not opened")
+        if (ctx.pb() == null && (ctx.oformat().flags() and AVFMT_NOFILE) == 0) {
+            val pb = AVIOContext()
+            avio_open(pb, ctx.url().string, AVIO_FLAG_WRITE).checkError()
+            ctx.pb(pb)
+        }
+        avformat_write_header(ctx, null as AVDictionary?).checkError()
+    }
+
+    public actual fun writePacket(packet: AVPacket, outStreamIndex: Int) {
+        val ctx = native ?: error("MediaOutput not opened")
+        packet.native.stream_index(outStreamIndex)
+        av_interleaved_write_frame(ctx, packet.native).checkError()
+    }
+
+    actual override fun close() {
+        native?.let { ctx ->
+            if (ctx.pb() != null) {
+                av_write_trailer(ctx)
+            }
+            if (ctx.pb() != null && (ctx.oformat().flags() and AVFMT_NOFILE) == 0) {
+                avio_close(ctx.pb()).checkError()
+            }
+            avformat_free_context(ctx)
+            native = null
+        }
     }
 }

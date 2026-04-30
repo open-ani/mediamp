@@ -35,14 +35,24 @@ import org.openani.mediamp.ffmpeg.ffi.avcodec_send_packet
 import org.openani.mediamp.ffmpeg.ffi.avformat_close_input
 import org.openani.mediamp.ffmpeg.ffi.avformat_find_stream_info
 import org.openani.mediamp.ffmpeg.ffi.avformat_open_input
+import org.openani.mediamp.ffmpeg.ffi.mediamp_alloc_output_context
+import org.openani.mediamp.ffmpeg.ffi.mediamp_avio_open
+import org.openani.mediamp.ffmpeg.ffi.mediamp_close_output
+import org.openani.mediamp.ffmpeg.ffi.mediamp_copy_codec_params
 import org.openani.mediamp.ffmpeg.ffi.mediamp_format_stream
 import org.openani.mediamp.ffmpeg.ffi.mediamp_format_stream_count
+import org.openani.mediamp.ffmpeg.ffi.mediamp_interleaved_write_frame
+import org.openani.mediamp.ffmpeg.ffi.mediamp_new_stream
+import org.openani.mediamp.ffmpeg.ffi.mediamp_packet_set_stream_index
+import org.openani.mediamp.ffmpeg.ffi.mediamp_packet_stream_index
 import org.openani.mediamp.ffmpeg.ffi.mediamp_stream_codec_id
 import org.openani.mediamp.ffmpeg.ffi.mediamp_stream_codec_type
+import org.openani.mediamp.ffmpeg.ffi.mediamp_write_header
+import org.openani.mediamp.ffmpeg.ffi.mediamp_write_trailer
 
 @OptIn(ExperimentalForeignApi::class)
 public actual class MediaInput : AutoCloseable {
-    private var native: CPointer<AVFormatContext>? = null
+    internal var native: CPointer<AVFormatContext>? = null
 
     public actual fun open(url: String) {
         memScoped {
@@ -130,6 +140,8 @@ public actual class AVPacket : AutoCloseable {
     public actual fun unref() {
         av_packet_unref(native)
     }
+
+    public actual fun streamIndex(): Int = mediamp_packet_stream_index(native)
 }
 
 @OptIn(ExperimentalForeignApi::class)
@@ -139,5 +151,48 @@ public actual class AVFrame : AutoCloseable {
 
     actual override fun close() {
         av_frame_free(cValuesOf(native))
+    }
+}
+
+@OptIn(ExperimentalForeignApi::class)
+public actual class MediaOutput : AutoCloseable {
+    private var native: CPointer<AVFormatContext>? = null
+
+    public actual fun open(filename: String) {
+        native = mediamp_alloc_output_context(filename)
+            ?: throw FFmpegException(-12)
+    }
+
+    public actual fun copyStreamFrom(input: MediaInput, streamIndex: Int): Int {
+        val outCtx = native ?: error("MediaOutput not opened")
+        val inCtx = input.native ?: error("MediaInput not opened")
+        val inStream = mediamp_format_stream(inCtx, streamIndex)
+            ?: throw IndexOutOfBoundsException("Stream index $streamIndex out of bounds")
+        val outStream = mediamp_new_stream(outCtx)
+            ?: throw FFmpegException(-12)
+        mediamp_copy_codec_params(outStream, inStream).checkError()
+        return mediamp_format_stream_count(outCtx) - 1
+    }
+
+    public actual fun writeHeader() {
+        val ctx = native ?: error("MediaOutput not opened")
+        val ret = mediamp_avio_open(ctx)
+        if (ret < 0) throw FFmpegException(ret)
+        mediamp_write_header(ctx).checkError()
+    }
+
+    public actual fun writePacket(packet: AVPacket, outStreamIndex: Int) {
+        val ctx = native ?: error("MediaOutput not opened")
+        mediamp_packet_set_stream_index(packet.native, outStreamIndex)
+        val ret = mediamp_interleaved_write_frame(ctx, packet.native)
+        if (ret < 0) throw FFmpegException(ret)
+    }
+
+    actual override fun close() {
+        native?.let {
+            mediamp_write_trailer(it)
+            mediamp_close_output(it)
+            native = null
+        }
     }
 }

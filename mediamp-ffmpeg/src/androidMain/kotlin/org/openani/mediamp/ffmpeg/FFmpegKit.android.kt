@@ -16,16 +16,21 @@ import java.util.zip.ZipFile
 /**
  * Android implementation.
  *
- * The ffmpeg binary is bundled in the APK's native libs directory
- * (`lib/{abi}/libffmpeg.so` — renamed with `lib` prefix and `.so` suffix
- * so the Android packaging pipeline includes it).
- *
- * Shared libraries (libavcodec.so, etc.) are also in the native libs
- * directory and are automatically available via the system linker.
+ * Recognized operations (remux, probe) are executed via the thin libav* wrapper
+ * to avoid global state pollution from repeated in-process main() calls.
+ * Unrecognized or complex operations fall back to the legacy JNI wrapper.
  */
 public actual class FFmpegKit actual constructor() {
 
     public actual suspend fun execute(args: List<String>): FFmpegResult {
+        val parsed = ArgsParser.parse(args)
+        if (parsed is MediaOperation.Remux || parsed is MediaOperation.Probe) {
+            return try {
+                MediaTranscoder().execute(parsed)
+            } catch (e: Throwable) {
+                FFmpegResult(exitCode = 1)
+            }
+        }
         val runtime = resolveRuntime()
         return JvmFFmpegProcess.execute(runtime.runtimeDir, args, runtime.appContext)
     }

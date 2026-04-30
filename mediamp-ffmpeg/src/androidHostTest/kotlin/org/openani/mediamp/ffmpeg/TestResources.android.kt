@@ -9,3 +9,5 @@
 package org.openani.mediamp.ffmpeg
 
 internal actual fun sampleMediaPath(): String = ""
+
+internal actual fun tempOutputPath(suffix: String): String = "/data/local/tmp/temp-test$suffix"
