@@ -32,6 +32,9 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        desktopMain.dependencies {
+            implementation(libs.ffmpeg.platform)
+        }
     }
 }
 
@@ -46,9 +49,16 @@ kotlin {
             val frameworkSearchPath = project.layout.buildDirectory.dir("apple-framework/$capitalizedTargetName")
             val frameworkSearchPathValue = frameworkSearchPath.get().asFile.absolutePath
 
+            val ffmpegSrcDir = project.projectDir.resolve("ffmpeg")
+            val stubHeadersDir = project.projectDir.resolve("src/nativeInterop/cinterop/stub-headers")
+
             compilations.getByName("main").cinterops.create("mediampffmpegkit") {
                 defFile(project.file("src/nativeInterop/cinterop/mediamp_ffmpegkit.def"))
                 compilerOpts("-F$frameworkSearchPathValue")
+            }
+            compilations.getByName("main").cinterops.create("libavffi") {
+                defFile(project.file("src/nativeInterop/cinterop/libav_ffi.def"))
+                compilerOpts("-I${ffmpegSrcDir.absolutePath}", "-I${stubHeadersDir.absolutePath}")
             }
             binaries.configureEach {
                 linkerOpts("-F$frameworkSearchPathValue", "-framework", "MediampFFmpegKit")
@@ -66,4 +76,15 @@ kotlin {
                 }
             }
         }
+}
+
+// Copy Apple framework into test bundle so dynamic linker can find it at runtime.
+val copyiOSFrameworkForTests = tasks.register<Copy>("copyiOSFrameworkForTests") {
+    dependsOn("ffmpegAppleFrameworkIosSimulatorArm64")
+    from(project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/MediampFFmpegKit.framework"))
+    into(project.layout.buildDirectory.dir("bin/iosSimulatorArm64/debugTest/Frameworks/MediampFFmpegKit.framework"))
+}
+
+tasks.named("linkDebugTestIosSimulatorArm64") {
+    dependsOn(copyiOSFrameworkForTests)
 }

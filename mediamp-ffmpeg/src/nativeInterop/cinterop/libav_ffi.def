@@ -1,0 +1,21 @@
+headers = libavformat/avformat.h libavcodec/avcodec.h libavutil/avutil.h libavutil/imgutils.h libavutil/opt.h libswscale/swscale.h libswresample/swresample.h
+headerFilter = libavformat/** libavcodec/** libavutil/** libswscale/** libswresample/**
+package = org.openani.mediamp.ffmpeg.ffi
+
+---
+
+// AVDictionary internals are opaque by default; expose them for Kotlin wrapper iteration.
+struct AVDictionary {
+    int count;
+    AVDictionaryEntry *elems;
+};
+
+typedef void (*simple_log_callback_t)(void*, int, const char*, void*);
+
+static inline simple_log_callback_t av_log_default_callback2() {
+    return (simple_log_callback_t)av_log_default_callback;
+}
+
+static inline void av_log_set_callback2(simple_log_callback_t callback) {
+    av_log_set_callback((void (*)(void*, int, const char*, va_list))callback);
+}
