@@ -32,6 +32,9 @@ public actual class OutputContainer : AutoCloseable {
         val outStream = avformat_new_stream(outCtx, null)
             ?: throw FFmpegException(-12)
         avcodec_parameters_copy(outStream.codecpar(), stream.native.codecpar()).checkError()
+        // Reset codec_tag so the output muxer derives the correct one for its format
+        // (e.g. MPEG-TS may have stream_type as tag 27, but MP4 expects 'avc1').
+        outStream.codecpar().codec_tag(0)
         outStream.time_base(stream.native.time_base())
         return Stream(outStream)
     }

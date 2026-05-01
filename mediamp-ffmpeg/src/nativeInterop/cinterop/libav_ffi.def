@@ -53,7 +53,14 @@ static AVStream *mediamp_new_stream(AVFormatContext *ctx) {
 }
 
 static int mediamp_copy_codec_params(AVStream *dst, AVStream *src) {
-    return avcodec_parameters_copy(dst->codecpar, src->codecpar);
+    int ret = avcodec_parameters_copy(dst->codecpar, src->codecpar);
+    if (ret >= 0) {
+        // Reset codec_tag so the output muxer derives the correct one
+        // (e.g. MPEG-TS stores stream_type=0x1B as tag 27, which is
+        // invalid for MP4/movenc; it expects 'avc1').
+        dst->codecpar->codec_tag = 0;
+    }
+    return ret;
 }
 
 static int mediamp_avio_open(AVFormatContext *ctx) {
