@@ -23,19 +23,6 @@ kotlin {
     explicitApi()
     androidLibrary {
         namespace = "org.openani.mediamp.ffmpeg"
-        packaging {
-            jniLibs {
-                pickFirsts += listOf(
-                    "lib/*/libavutil.so",
-                    "lib/*/libavcodec.so",
-                    "lib/*/libavformat.so",
-                    "lib/*/libavfilter.so",
-                    "lib/*/libavdevice.so",
-                    "lib/*/libswscale.so",
-                    "lib/*/libswresample.so",
-                )
-            }
-        }
     }
     sourceSets {
         commonMain.dependencies {
@@ -49,9 +36,30 @@ kotlin {
             implementation(libs.ffmpeg.platform)
         }
         androidMain.dependencies {
+            // Pure Java API — native .so files are provided via jniLibs below.
+            implementation(libs.ffmpeg)
+        }
+        androidHostTest.dependencies {
+            // JavaCPP platform libs needed to load native code in host JVM tests
             implementation(libs.ffmpeg.platform)
         }
     }
+}
+
+// Custom configuration to resolve JavaCPP JNI bridge .so files per ABI.
+// We use the base artifact (libs.ffmpeg) for compilation, but still need
+// libjni*.so at runtime.  This configuration fetches the classifier jars
+// without adding them as transitive dependencies of the published aar.
+val javacppNative by configurations.creating {
+    isTransitive = false
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+dependencies {
+    val ffmpegVersion = libs.versions.ffmpeg.get()
+    javacppNative("org.bytedeco:ffmpeg:$ffmpegVersion:android-arm64")
+    javacppNative("org.bytedeco:ffmpeg:$ffmpegVersion:android-x86_64")
 }
 
 configureMediampFfmpegModule()
