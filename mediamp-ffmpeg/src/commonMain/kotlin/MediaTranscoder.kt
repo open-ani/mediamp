@@ -51,6 +51,7 @@ public class MediaTranscoder {
                             when {
                                 ret == 0 -> { /* success, continue below */ }
                                 ret == AVERROR_EOF -> break
+                                ret == AVERROR_EAGAIN -> continue
                                 ret < 0 -> throw FFmpegException(
                                     ret,
                                     "input.readPacket failed (ret=$ret, stream=${input.streams.map { it.index to it.codecType }})"

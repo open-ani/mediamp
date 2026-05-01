@@ -8,5 +8,6 @@
 
 package org.openani.mediamp.ffmpeg
 
-public const val AVERROR_EOF: Int = -541478725
-internal expect val AVERROR_EAGAIN: Int
+import org.bytedeco.ffmpeg.global.avutil.*
+
+internal actual val AVERROR_EAGAIN: Int = AVERROR_EAGAIN()

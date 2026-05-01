@@ -8,5 +8,7 @@
 
 package org.openani.mediamp.ffmpeg
 
-public const val AVERROR_EOF: Int = -541478725
-internal expect val AVERROR_EAGAIN: Int
+import org.openani.mediamp.ffmpeg.ffi.mediamp_averrno_eagain
+
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+internal actual val AVERROR_EAGAIN: Int = mediamp_averrno_eagain()

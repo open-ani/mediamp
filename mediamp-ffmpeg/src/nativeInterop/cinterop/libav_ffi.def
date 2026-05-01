@@ -134,3 +134,8 @@ static int mediamp_bsf_receive_packet(AVBSFContext *ctx, AVPacket *pkt) {
 static void mediamp_bsf_free(AVBSFContext *ctx) {
     av_bsf_free(&ctx);
 }
+
+// Cross-platform AVERROR(EAGAIN) value
+static int mediamp_averrno_eagain() {
+    return AVERROR(EAGAIN);
+}
