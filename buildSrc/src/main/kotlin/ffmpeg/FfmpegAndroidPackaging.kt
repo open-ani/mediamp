@@ -95,6 +95,11 @@ internal fun registerAndroidJniPackaging(context: FfmpegBuildContext): TaskProvi
         val outputDir = context.project.layout.buildDirectory.dir("ffmpeg-output/$targetName")
         val jniLibsDir = context.project.layout.buildDirectory.dir("generated/ffmpeg-jniLibs/${abi.abi}")
 
+        // Resolve JavaCPP output dir at configuration time so the doLast closure
+        // does not capture the ExtractJavaCppJniTask object (not serializable
+        // with Gradle configuration cache).
+        val javaCppOutputDir = extractJavaCppTask.flatMap { it.outputDir }.get().asFile
+
         val copyTask = context.project.tasks.register("copyFfmpegJniLibs${abi.abi.replace("-", "")}") {
             group = "ffmpeg"
             description = "Copy FFmpeg native libs for Android ${abi.abi}"
@@ -103,6 +108,7 @@ internal fun registerAndroidJniPackaging(context: FfmpegBuildContext): TaskProvi
             }
             dependsOn(extractJavaCppTask)
             inputs.dir(outputDir)
+            inputs.dir(javaCppOutputDir)
             outputs.dir(jniLibsDir)
 
             doLast {
@@ -116,8 +122,7 @@ internal fun registerAndroidJniPackaging(context: FfmpegBuildContext): TaskProvi
                 }
 
                 // 2. Copy JavaCPP JNI bridge .so files extracted earlier.
-                val javaCppAbiDir = extractJavaCppTask.get().outputDir.get().asFile
-                    .resolve("lib/${abi.abi}")
+                val javaCppAbiDir = javaCppOutputDir.resolve("lib/${abi.abi}")
                 if (javaCppAbiDir.isDirectory) {
                     javaCppAbiDir.listFiles()
                         ?.filter { it.name.startsWith("libjni") && it.extension == "so" }
