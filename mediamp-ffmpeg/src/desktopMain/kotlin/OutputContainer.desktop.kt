@@ -67,10 +67,18 @@ public actual class OutputContainer : AutoCloseable {
     actual override fun close() {
         native?.let { ctx ->
             if (headerWritten) {
-                av_write_trailer(ctx)
+                val ret = av_write_trailer(ctx)
+                if (ret < 0) throw FFmpegException(
+                    ret,
+                    "av_write_trailer failed (ret=$ret)"
+                )
             }
             if (ctx.pb() != null && (ctx.oformat().flags() and AVFMT_NOFILE) == 0) {
-                avio_close(ctx.pb()).checkError()
+                val ret = avio_close(ctx.pb())
+                if (ret < 0) throw FFmpegException(
+                    ret,
+                    "avio_close failed (ret=$ret, pb-error=${ctx.pb().let { it?.error() ?: "null" }}"
+                )
             }
             avformat_free_context(ctx)
             native = null

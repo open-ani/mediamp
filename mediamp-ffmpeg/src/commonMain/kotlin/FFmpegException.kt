@@ -8,4 +8,7 @@
 
 package org.openani.mediamp.ffmpeg
 
-public class FFmpegException(public val code: Int) : RuntimeException("FFmpeg error $code")
+public class FFmpegException(
+    public val code: Int,
+    message: String? = null,
+) : RuntimeException(message ?: "FFmpeg error $code")
