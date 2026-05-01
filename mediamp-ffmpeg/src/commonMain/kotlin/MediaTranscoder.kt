@@ -48,7 +48,15 @@ public class MediaTranscoder {
                     AVPacket().use { filteredPacket ->
                         while (true) {
                             val ret = input.readPacket(packet)
-                            if (ret < 0) break
+                            when {
+                                ret == 0 -> { /* success, continue below */ }
+                                ret == AVERROR_EOF -> break
+                                ret < 0 -> throw FFmpegException(
+                                    ret,
+                                    "input.readPacket failed (ret=$ret, stream=${input.streams.map { it.index to it.codecType }})"
+                                )
+                                else -> break
+                            }
                             val inStream = input.streams[packet.streamIndex()]
                             val outStream = streamMap[inStream.index]
                             avPacketRescaleTs(packet, inStream.timeBase, outStream.timeBase)

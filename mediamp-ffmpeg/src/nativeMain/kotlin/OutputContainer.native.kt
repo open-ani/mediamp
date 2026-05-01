@@ -44,7 +44,7 @@ public actual class OutputContainer : AutoCloseable {
                 oformat = null,
                 format_name = formatName,
                 filename = filename,
-            ).checkError()
+            ).checkError("avformat_alloc_output_context2: filename=$filename")
             native = NativeAVFormatContext(ptr.value!!)
         }
     }
@@ -62,13 +62,13 @@ public actual class OutputContainer : AutoCloseable {
     public actual fun writeHeader(options: MuxerOptions?) {
         val ctx = native ?: error("OutputContainer not opened")
         val ret = mediamp_avio_open(ctx.ptr)
-        if (ret < 0) throw FFmpegException(ret)
+        if (ret < 0) throw FFmpegException(ret, "mediamp_avio_open failed (ret=$ret)")
         memScoped {
             val dictVar = alloc<CPointerVar<AVDictionary>>()
             options?.forEach { (k, v) ->
-                av_dict_set(dictVar.ptr, k, v, 0).checkError()
+                av_dict_set(dictVar.ptr, k, v, 0).checkError("av_dict_set: $k=$v")
             }
-            avformat_write_header(ctx.ptr, dictVar.ptr).checkError()
+            avformat_write_header(ctx.ptr, dictVar.ptr).checkError("avformat_write_header")
             dictVar.value?.let { av_dict_free(cValuesOf(it)) }
         }
         headerWritten = true
@@ -77,7 +77,7 @@ public actual class OutputContainer : AutoCloseable {
     public actual fun mux(packet: AVPacket, stream: Stream) {
         val ctx = native ?: error("OutputContainer not opened")
         mediamp_packet_set_stream_index(packet.native.ptr, stream.index)
-        av_interleaved_write_frame(ctx.ptr, packet.native.ptr).checkError()
+        av_interleaved_write_frame(ctx.ptr, packet.native.ptr).checkError("av_interleaved_write_frame: stream=${stream.index}")
     }
 
     actual override fun close() {

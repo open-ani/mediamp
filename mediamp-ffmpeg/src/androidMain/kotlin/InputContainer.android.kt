@@ -26,14 +26,14 @@ public actual class InputContainer : AutoCloseable {
             }
             d
         }
-        avformat_open_input(ctx, url, null, dict).checkError()
+        avformat_open_input(ctx, url, null, dict).checkError("avformat_open_input: url=$url")
         dict?.let { av_dict_free(it) }
         native = ctx
     }
 
     public actual fun findStreamInfo(): Int {
         val ctx = native ?: error("InputContainer not opened")
-        return avformat_find_stream_info(ctx, null as PointerPointer<*>?).checkError()
+        return avformat_find_stream_info(ctx, null as PointerPointer<*>?).checkError("avformat_find_stream_info")
     }
 
     public actual val streams: List<Stream>

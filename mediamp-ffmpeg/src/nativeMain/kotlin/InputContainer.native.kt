@@ -38,7 +38,7 @@ public actual class InputContainer : AutoCloseable {
             options.forEach { (k, v) ->
                 av_dict_set(dictVar.ptr, k, v, 0).checkError()
             }
-            avformat_open_input(ptr.ptr, url, null, dictVar.ptr).checkError()
+            avformat_open_input(ptr.ptr, url, null, dictVar.ptr).checkError("avformat_open_input: url=$url")
             dictVar.value?.let { av_dict_free(cValuesOf(it)) }
             native = NativeAVFormatContext(ptr.value!!)
         }
@@ -46,7 +46,7 @@ public actual class InputContainer : AutoCloseable {
 
     public actual fun findStreamInfo(): Int {
         val ctx = native ?: error("InputContainer not opened")
-        return avformat_find_stream_info(ctx.ptr, null).checkError()
+        return avformat_find_stream_info(ctx.ptr, null).checkError("avformat_find_stream_info")
     }
 
     public actual val streams: List<Stream>

@@ -8,7 +8,10 @@
 
 package org.openani.mediamp.ffmpeg
 
-public inline fun Int.checkError(): Int {
-    if (this < 0) throw FFmpegException(this)
+public inline fun Int.checkError(context: String = ""): Int {
+    if (this < 0) {
+        val msg = if (context.isEmpty()) "FFmpeg error $this" else "FFmpeg error $this ($context)"
+        throw FFmpegException(this, msg)
+    }
     return this
 }
