@@ -23,7 +23,7 @@ public class MediaTranscoder {
                 op.allowedExtensions?.let { put("allowed_extensions", it) }
                 op.protocolWhitelist?.let { put("protocol_whitelist", it) }
             }
-            input.open(op.input, inputOptions)
+            input.open(op.input, inputOptions, op.ignoreDts)
             input.findStreamInfo()
 
             OutputContainer().use { output ->

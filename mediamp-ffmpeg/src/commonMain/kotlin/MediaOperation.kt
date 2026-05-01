@@ -16,6 +16,7 @@ public sealed class MediaOperation {
         public val movflags: List<String> = emptyList(),
         public val allowedExtensions: String? = null,
         public val protocolWhitelist: String? = null,
+        public val ignoreDts: Boolean = false,
     ) : MediaOperation()
 
     public data class Transcode(

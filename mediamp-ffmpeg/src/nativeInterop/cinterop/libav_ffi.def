@@ -139,3 +139,12 @@ static void mediamp_bsf_free(AVBSFContext *ctx) {
 static int mediamp_averrno_eagain() {
     return AVERROR(EAGAIN);
 }
+
+// Set AVFormatContext flags (e.g. AVFMT_FLAG_IGNDTS)
+static void mediamp_set_fmt_flags(AVFormatContext *ctx, int flags) {
+    ctx->flags |= flags;
+}
+
+static int mediamp_avfmt_flag_igndts() {
+    return AVFMT_FLAG_IGNDTS;
+}

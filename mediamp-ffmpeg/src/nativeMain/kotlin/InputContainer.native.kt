@@ -22,8 +22,10 @@ import org.openani.mediamp.ffmpeg.ffi.avformat_close_input
 import org.openani.mediamp.ffmpeg.ffi.avformat_find_stream_info
 import org.openani.mediamp.ffmpeg.ffi.avformat_open_input
 import org.openani.mediamp.ffmpeg.ffi.av_read_frame
+import org.openani.mediamp.ffmpeg.ffi.mediamp_avfmt_flag_igndts
 import org.openani.mediamp.ffmpeg.ffi.mediamp_format_stream
 import org.openani.mediamp.ffmpeg.ffi.mediamp_format_stream_count
+import org.openani.mediamp.ffmpeg.ffi.mediamp_set_fmt_flags
 import org.openani.mediamp.ffmpeg.internal.NativeAVFormatContext
 import org.openani.mediamp.ffmpeg.internal.NativeAVStream
 
@@ -31,7 +33,7 @@ import org.openani.mediamp.ffmpeg.internal.NativeAVStream
 public actual class InputContainer : AutoCloseable {
     internal var native: NativeAVFormatContext? = null
 
-    public actual fun open(url: String, options: Map<String, String>) {
+    public actual fun open(url: String, options: Map<String, String>, ignoreDts: Boolean) {
         memScoped {
             val ptr = alloc<CPointerVar<AVFormatContext>>()
             val dictVar = alloc<CPointerVar<AVDictionary>>()
@@ -40,7 +42,11 @@ public actual class InputContainer : AutoCloseable {
             }
             avformat_open_input(ptr.ptr, url, null, dictVar.ptr).checkError("avformat_open_input: url=$url")
             dictVar.value?.let { av_dict_free(cValuesOf(it)) }
-            native = NativeAVFormatContext(ptr.value!!)
+            val ctx = ptr.value!!
+            if (ignoreDts) {
+                mediamp_set_fmt_flags(ctx, mediamp_avfmt_flag_igndts())
+            }
+            native = NativeAVFormatContext(ctx)
         }
     }
 

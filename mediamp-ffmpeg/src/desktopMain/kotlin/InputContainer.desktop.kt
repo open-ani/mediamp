@@ -17,8 +17,13 @@ import org.bytedeco.javacpp.PointerPointer
 public actual class InputContainer : AutoCloseable {
     internal var native: AVFormatContext? = null
 
-    public actual fun open(url: String, options: Map<String, String>) {
+    public actual fun open(url: String, options: Map<String, String>, ignoreDts: Boolean) {
         val ctx = avformat_alloc_context() ?: throw FFmpegException(-12)
+        if (ignoreDts) {
+            // AVFMT_FLAG_IGNDTS = 0x0008 — ignore DTS values and derive them from PTS.
+            // Hard-coded because JavaCPP does not expose this constant.
+            ctx.flags(ctx.flags() or 0x0008)
+        }
         val dict: AVDictionary? = options.takeIf { it.isNotEmpty() }?.let { opts ->
             val d = AVDictionary()
             opts.forEach { (k, v) ->

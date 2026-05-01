@@ -21,8 +21,11 @@ public expect class InputContainer() : AutoCloseable {
      * @param url The input file path or URL.
      * @param options A map of format-private options passed to `avformat_open_input`.
      *                Common keys include `allowed_extensions` and `protocol_whitelist`.
+     * @param ignoreDts If true, sets `AVFMT_FLAG_IGNDTS` on the input context.
+     *                  This ignores input DTS and derives it from PTS,
+     *                  which is often required when remuxing HLS/MPEG-TS to MP4.
      */
-    public fun open(url: String, options: Map<String, String> = emptyMap())
+    public fun open(url: String, options: Map<String, String> = emptyMap(), ignoreDts: Boolean = false)
 
     /**
      * Read stream information (codecs, durations, etc.).
