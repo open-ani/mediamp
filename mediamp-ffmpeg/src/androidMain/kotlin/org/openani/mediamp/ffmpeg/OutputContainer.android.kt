@@ -19,6 +19,7 @@ import org.bytedeco.ffmpeg.global.avutil.*
 
 public actual class OutputContainer : AutoCloseable {
     internal var native: AVFormatContext? = null
+    private var headerWritten: Boolean = false
 
     public actual fun open(filename: String, formatName: String?) {
         val ctx = AVFormatContext()
@@ -51,6 +52,7 @@ public actual class OutputContainer : AutoCloseable {
         }
         avformat_write_header(ctx, dict).checkError()
         dict?.let { av_dict_free(it) }
+        headerWritten = true
     }
 
     public actual fun mux(packet: AVPacket, stream: Stream) {
@@ -61,7 +63,7 @@ public actual class OutputContainer : AutoCloseable {
 
     actual override fun close() {
         native?.let { ctx ->
-            if (ctx.pb() != null) {
+            if (headerWritten) {
                 av_write_trailer(ctx)
             }
             if (ctx.pb() != null && (ctx.oformat().flags() and AVFMT_NOFILE) == 0) {
@@ -69,6 +71,7 @@ public actual class OutputContainer : AutoCloseable {
             }
             avformat_free_context(ctx)
             native = null
+            headerWritten = false
         }
     }
 }

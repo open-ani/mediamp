@@ -34,6 +34,7 @@ import org.openani.mediamp.ffmpeg.internal.NativeAVStream
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 public actual class OutputContainer : AutoCloseable {
     internal var native: NativeAVFormatContext? = null
+    private var headerWritten: Boolean = false
 
     public actual fun open(filename: String, formatName: String?) {
         memScoped {
@@ -70,6 +71,7 @@ public actual class OutputContainer : AutoCloseable {
             avformat_write_header(ctx.ptr, dictVar.ptr).checkError()
             dictVar.value?.let { av_dict_free(cValuesOf(it)) }
         }
+        headerWritten = true
     }
 
     public actual fun mux(packet: AVPacket, stream: Stream) {
@@ -80,9 +82,12 @@ public actual class OutputContainer : AutoCloseable {
 
     actual override fun close() {
         native?.let {
-            av_write_trailer(it.ptr)
+            if (headerWritten) {
+                av_write_trailer(it.ptr)
+            }
             mediamp_close_output(it.ptr)
             native = null
+            headerWritten = false
         }
     }
 }
