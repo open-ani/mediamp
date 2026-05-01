@@ -38,24 +38,23 @@ class WrapperSmokeTest {
     }
 
     @Test
-    fun mediaInput_openAndFindStreamInfo() {
+    fun inputContainer_openAndFindStreamInfo() {
         val path = sampleMediaPath()
         if (path.isEmpty()) {
-            // Android stub — skip file I/O test
             return
         }
-        MediaInput().use { input ->
+        InputContainer().use { input ->
             input.open(path)
             input.findStreamInfo()
-            assertTrue(input.streamCount > 0, "Expected at least one stream")
+            assertTrue(input.streams.isNotEmpty(), "Expected at least one stream")
         }
     }
 
     @Test
-    fun mediaInput_readPacket() {
+    fun inputContainer_readPacket() {
         val path = sampleMediaPath()
         if (path.isEmpty()) return
-        MediaInput().use { input ->
+        InputContainer().use { input ->
             input.open(path)
             input.findStreamInfo()
             AVPacket().use { packet ->
@@ -75,16 +74,15 @@ class WrapperSmokeTest {
     fun decoderContext_lifecycle() {
         val path = sampleMediaPath()
         if (path.isEmpty()) return
-        MediaInput().use { input ->
+        InputContainer().use { input ->
             input.open(path)
             input.findStreamInfo()
-            val streamCount = input.streamCount
+            val streams = input.streams
             var opened = false
-            for (i in 0 until streamCount) {
-                val codecId = input.codecId(i)
-                if (codecId == 0) continue
+            for (stream in streams) {
+                if (stream.codecId == 0) continue
                 DecoderContext().use { decoder ->
-                    decoder.open(codecId)
+                    decoder.open(stream.codecId)
                     opened = true
                 }
                 break
@@ -97,16 +95,15 @@ class WrapperSmokeTest {
     fun decoderContext_decodeFirstFrame() {
         val path = sampleMediaPath()
         if (path.isEmpty()) return
-        MediaInput().use { input ->
+        InputContainer().use { input ->
             input.open(path)
             input.findStreamInfo()
-            val streamCount = input.streamCount
+            val streams = input.streams
             var decoded = false
-            for (i in 0 until streamCount) {
-                val codecId = input.codecId(i)
-                if (codecId == 0) continue
+            for (stream in streams) {
+                if (stream.codecId == 0) continue
                 DecoderContext().use { decoder ->
-                    decoder.open(codecId)
+                    decoder.open(stream.codecId)
                     AVPacket().use { packet ->
                         AVFrame().use { frame ->
                             var sent = false

@@ -35,6 +35,9 @@ kotlin {
         desktopMain.dependencies {
             implementation(libs.ffmpeg.platform)
         }
+        androidMain.dependencies {
+            implementation(libs.ffmpeg.platform)
+        }
     }
 }
 

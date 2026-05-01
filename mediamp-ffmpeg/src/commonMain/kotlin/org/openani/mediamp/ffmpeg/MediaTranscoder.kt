@@ -18,43 +18,29 @@ public class MediaTranscoder {
     }
 
     private fun executeRemux(op: MediaOperation.Remux): FFmpegResult {
-        val input = MediaInput()
-        try {
+        InputContainer().use { input ->
             input.open(op.input)
             input.findStreamInfo()
 
-            val output = MediaOutput()
-            try {
+            OutputContainer().use { output ->
                 output.open(op.output)
 
-                val streamCount = input.streamCount
-                val streamMap = IntArray(streamCount) { -1 }
-                for (i in 0 until streamCount) {
-                    streamMap[i] = output.copyStreamFrom(input, i)
-                }
+                val streamMap = input.streams.map { output.addStream(it) }
 
                 output.writeHeader()
 
-                val packet = AVPacket()
-                try {
+                AVPacket().use { packet ->
                     while (true) {
                         val ret = input.readPacket(packet)
                         if (ret < 0) break
-                        val inStreamIndex = packet.streamIndex()
-                        val outStreamIndex = streamMap[inStreamIndex]
-                        if (outStreamIndex >= 0) {
-                            output.writePacket(packet, outStreamIndex)
-                        }
+                        val inStream = input.streams[packet.streamIndex()]
+                        val outStream = streamMap[inStream.index]
+                        avPacketRescaleTs(packet, inStream.timeBase, outStream.timeBase)
+                        output.mux(packet, outStream)
                         packet.unref()
                     }
-                } finally {
-                    packet.close()
                 }
-            } finally {
-                output.close()
             }
-        } finally {
-            input.close()
         }
         return FFmpegResult(exitCode = 0)
     }
@@ -64,12 +50,9 @@ public class MediaTranscoder {
     }
 
     private fun executeProbe(op: MediaOperation.Probe): FFmpegResult {
-        val input = MediaInput()
-        try {
+        InputContainer().use { input ->
             input.open(op.input)
             input.findStreamInfo()
-        } finally {
-            input.close()
         }
         return FFmpegResult(exitCode = 0)
     }

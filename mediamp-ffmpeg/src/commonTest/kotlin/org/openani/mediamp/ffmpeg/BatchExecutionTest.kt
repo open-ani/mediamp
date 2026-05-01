@@ -24,10 +24,10 @@ class BatchExecutionTest {
             assertTrue(result.isSuccess, "Batch remux $index should succeed")
 
             // Verify output is valid
-            MediaInput().use { media ->
+            InputContainer().use { media ->
                 media.open(output)
                 media.findStreamInfo()
-                assertTrue(media.streamCount > 0, "Batch output $index should have streams")
+                assertTrue(media.streams.isNotEmpty(), "Batch output $index should have streams")
             }
         }
     }

@@ -23,10 +23,10 @@ class RemuxTest {
         assertTrue(result.isSuccess, "Remux should succeed")
 
         // Verify output is a valid media file
-        MediaInput().use { media ->
+        InputContainer().use { media ->
             media.open(output)
             media.findStreamInfo()
-            assertTrue(media.streamCount > 0, "Remuxed file should have streams")
+            assertTrue(media.streams.isNotEmpty(), "Remuxed file should have streams")
         }
     }
 
@@ -41,10 +41,10 @@ class RemuxTest {
         val result = FFmpegKit().execute(args)
         assertTrue(result.isSuccess, "FFmpegKit remux should succeed")
 
-        MediaInput().use { media ->
+        InputContainer().use { media ->
             media.open(output)
             media.findStreamInfo()
-            assertTrue(media.streamCount > 0, "FFmpegKit remux output should have streams")
+            assertTrue(media.streams.isNotEmpty(), "FFmpegKit remux output should have streams")
         }
     }
 }
