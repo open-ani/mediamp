@@ -36,7 +36,9 @@ kotlin {
             implementation(libs.ffmpeg.platform)
         }
         androidMain.dependencies {
-            implementation(libs.ffmpeg.platform)
+            // Use the base artifact (Java API only) on Android; native .so files are provided
+            // by prepareFfmpegAndroidJniLibs from the self-built FFmpeg output.
+            implementation(libs.ffmpeg)
         }
     }
 }
