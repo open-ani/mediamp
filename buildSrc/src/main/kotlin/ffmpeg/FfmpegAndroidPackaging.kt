@@ -3,22 +3,27 @@ package ffmpeg
 import com.android.build.api.variant.KotlinMultiplatformAndroidComponentsExtension
 import org.gradle.api.DefaultTask
 import org.gradle.api.Task
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.FileSystemOperations
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
+import javax.inject.Inject
 
-abstract class PrepareFfmpegAndroidJniLibsTask : DefaultTask() {
+abstract class PrepareFfmpegAndroidJniLibsTask @Inject constructor(
+    private val fs: FileSystemOperations,
+) : DefaultTask() {
     @get:InputDirectory
-    abstract val inputDir: org.gradle.api.file.DirectoryProperty
+    abstract val inputDir: DirectoryProperty
 
     @get:OutputDirectory
-    abstract val outputDir: org.gradle.api.file.DirectoryProperty
+    abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun run() {
-        project.copy {
+        fs.copy {
             from(inputDir)
             into(outputDir)
         }
