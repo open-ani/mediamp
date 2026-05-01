@@ -14,7 +14,10 @@ import kotlinx.cinterop.cValuesOf
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import org.openani.mediamp.ffmpeg.ffi.AVDictionary
 import org.openani.mediamp.ffmpeg.ffi.AVFormatContext
+import org.openani.mediamp.ffmpeg.ffi.av_dict_free
+import org.openani.mediamp.ffmpeg.ffi.av_dict_set
 import org.openani.mediamp.ffmpeg.ffi.avformat_close_input
 import org.openani.mediamp.ffmpeg.ffi.avformat_find_stream_info
 import org.openani.mediamp.ffmpeg.ffi.avformat_open_input
@@ -28,10 +31,15 @@ import org.openani.mediamp.ffmpeg.internal.NativeAVStream
 public actual class InputContainer : AutoCloseable {
     internal var native: NativeAVFormatContext? = null
 
-    public actual fun open(url: String) {
+    public actual fun open(url: String, options: Map<String, String>) {
         memScoped {
             val ptr = alloc<CPointerVar<AVFormatContext>>()
-            avformat_open_input(ptr.ptr, url, null, null).checkError()
+            val dictVar = alloc<CPointerVar<AVDictionary>>()
+            options.forEach { (k, v) ->
+                av_dict_set(dictVar.ptr, k, v, 0).checkError()
+            }
+            avformat_open_input(ptr.ptr, url, null, dictVar.ptr).checkError()
+            dictVar.value?.let { av_dict_free(cValuesOf(it)) }
             native = NativeAVFormatContext(ptr.value!!)
         }
     }

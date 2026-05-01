@@ -51,17 +51,34 @@ Platform runtime behavior:
 
 ## API
 
-Main entry point:
+`mediamp-ffmpeg` provides two interfaces. See [API.md](API.md) for the full reference.
+
+### 1. Kotlin API (Recommended)
+
+Type-safe operations via `MediaTranscoder`:
+
+```kotlin
+import org.openani.mediamp.ffmpeg.MediaTranscoder
+import org.openani.mediamp.ffmpeg.MediaOperation
+
+val result = MediaTranscoder().execute(
+    MediaOperation.Remux(
+        input = "input.ts",
+        output = "output.mp4",
+        bitstreamFilters = mapOf(1 to "aac_adtstoasc"),
+        movflags = listOf("faststart"),
+    )
+)
+```
+
+### 2. CLI Bridge (Fallback)
+
+For advanced features not yet wrapped, use raw CLI arguments:
 
 ```kotlin
 import org.openani.mediamp.ffmpeg.FFmpegKit
 
 val kit = FFmpegKit()
-```
-
-Run a command and wait for completion:
-
-```kotlin
 val result = kit.execute(
     listOf("-hide_banner", "-version"),
 )
@@ -77,11 +94,6 @@ FFmpegKit.setLogHandler { message ->
     println("ffmpeg[level=${message.level}] ${message.line}")
 }
 ```
-
-`FFmpegResult` contains:
-
-- `exitCode`
-- `isSuccess`
 
 ## Android usage
 
@@ -195,4 +207,4 @@ dependencies {
 - Apple runtime is published as an XCFramework zip, but external automatic consumption is not finalized yet; consumers still need their own unzip and cinterop wiring.
 - Consumer-side Apple wiring is documented in [ios-embed-framework.md](ios-embed-framework.md), but it is still a manual integration flow.
 - Desktop runtime resolution may need an explicit platform runtime dependency in non-standard Gradle setups.
-- This wrapper currently exposes the FFmpeg CLI model, not a typed transcoding API.
+- A typed Kotlin API (`MediaTranscoder`) is available for remux and probe. Transcode, filters, and other advanced features still require the CLI bridge.

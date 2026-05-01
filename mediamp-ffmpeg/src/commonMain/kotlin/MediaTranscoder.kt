@@ -19,7 +19,11 @@ public class MediaTranscoder {
 
     private fun executeRemux(op: MediaOperation.Remux): FFmpegResult {
         InputContainer().use { input ->
-            input.open(op.input)
+            val inputOptions = buildMap {
+                op.allowedExtensions?.let { put("allowed_extensions", it) }
+                op.protocolWhitelist?.let { put("protocol_whitelist", it) }
+            }
+            input.open(op.input, inputOptions)
             input.findStreamInfo()
 
             OutputContainer().use { output ->

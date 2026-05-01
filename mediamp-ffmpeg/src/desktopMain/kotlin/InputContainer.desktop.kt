@@ -9,15 +9,25 @@
 package org.openani.mediamp.ffmpeg
 
 import org.bytedeco.ffmpeg.avformat.AVFormatContext
+import org.bytedeco.ffmpeg.avutil.AVDictionary
 import org.bytedeco.ffmpeg.global.avformat.*
+import org.bytedeco.ffmpeg.global.avutil.*
 import org.bytedeco.javacpp.PointerPointer
 
 public actual class InputContainer : AutoCloseable {
     internal var native: AVFormatContext? = null
 
-    public actual fun open(url: String) {
+    public actual fun open(url: String, options: Map<String, String>) {
         val ctx = avformat_alloc_context() ?: throw FFmpegException(-12)
-        avformat_open_input(ctx, url, null, null).checkError()
+        val dict: AVDictionary? = options.takeIf { it.isNotEmpty() }?.let { opts ->
+            val d = AVDictionary()
+            opts.forEach { (k, v) ->
+                av_dict_set(d, k, v, 0).checkError()
+            }
+            d
+        }
+        avformat_open_input(ctx, url, null, dict).checkError()
+        dict?.let { av_dict_free(it) }
         native = ctx
     }
 

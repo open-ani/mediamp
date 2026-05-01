@@ -17,8 +17,12 @@ package org.openani.mediamp.ffmpeg
 public expect class InputContainer() : AutoCloseable {
     /**
      * Open an input file or URL.
+     *
+     * @param url The input file path or URL.
+     * @param options A map of format-private options passed to `avformat_open_input`.
+     *                Common keys include `allowed_extensions` and `protocol_whitelist`.
      */
-    public fun open(url: String)
+    public fun open(url: String, options: Map<String, String> = emptyMap())
 
     /**
      * Read stream information (codecs, durations, etc.).

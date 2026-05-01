@@ -14,6 +14,8 @@ public sealed class MediaOperation {
         public val output: String,
         public val bitstreamFilters: Map<Int, String> = emptyMap(),
         public val movflags: List<String> = emptyList(),
+        public val allowedExtensions: String? = null,
+        public val protocolWhitelist: String? = null,
     ) : MediaOperation()
 
     public data class Transcode(

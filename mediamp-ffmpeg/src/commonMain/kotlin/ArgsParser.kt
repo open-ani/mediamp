@@ -18,6 +18,8 @@ public object ArgsParser {
         var audioCodec: String? = null
         val bitstreamFilters = mutableMapOf<Int, String>()
         val movflags = mutableListOf<String>()
+        var allowedExtensions: String? = null
+        var protocolWhitelist: String? = null
 
         while (iter.hasNext()) {
             when (val arg = iter.next()) {
@@ -66,6 +68,14 @@ public object ArgsParser {
                     }
                 }
 
+                "-allowed_extensions" -> {
+                    if (iter.hasNext()) allowedExtensions = iter.next()
+                }
+
+                "-protocol_whitelist" -> {
+                    if (iter.hasNext()) protocolWhitelist = iter.next()
+                }
+
                 else -> {
                     if (!arg.startsWith("-") && input != null && output == null) {
                         output = arg
@@ -83,6 +93,8 @@ public object ArgsParser {
                 output = outFile,
                 bitstreamFilters = bitstreamFilters,
                 movflags = movflags,
+                allowedExtensions = allowedExtensions,
+                protocolWhitelist = protocolWhitelist,
             )
         } else {
             MediaOperation.Transcode(inFile, outFile, videoCodec, audioCodec)
