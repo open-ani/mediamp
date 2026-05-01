@@ -35,8 +35,10 @@ public expect class OutputContainer() : AutoCloseable {
      * Write the file header.
      *
      * Must be called before any [mux] operations.
+     *
+     * @param options Optional muxer options (e.g. `MuxerOptions().apply { movflags("faststart") }`).
      */
-    public fun writeHeader()
+    public fun writeHeader(options: MuxerOptions? = null)
 
     /**
      * Mux a packet into the output stream.

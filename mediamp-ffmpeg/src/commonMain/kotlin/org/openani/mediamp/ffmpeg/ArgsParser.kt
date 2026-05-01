@@ -16,6 +16,8 @@ public object ArgsParser {
         var copyCodec = false
         var videoCodec: String? = null
         var audioCodec: String? = null
+        val bitstreamFilters = mutableMapOf<Int, String>()
+        val movflags = mutableListOf<String>()
 
         while (iter.hasNext()) {
             when (val arg = iter.next()) {
@@ -37,6 +39,33 @@ public object ArgsParser {
                     }
                 }
 
+                "-bsf:a" -> {
+                    if (iter.hasNext()) {
+                        bitstreamFilters[1] = iter.next() // default audio stream index
+                    }
+                }
+
+                "-bsf:v" -> {
+                    if (iter.hasNext()) {
+                        bitstreamFilters[0] = iter.next() // default video stream index
+                    }
+                }
+
+                "-bsf" -> {
+                    if (iter.hasNext()) {
+                        val value = iter.next()
+                        // Apply to all streams (simplified)
+                        bitstreamFilters[-1] = value
+                    }
+                }
+
+                "-movflags" -> {
+                    if (iter.hasNext()) {
+                        val value = iter.next()
+                        movflags.addAll(value.removePrefix("+").split("+"))
+                    }
+                }
+
                 else -> {
                     if (!arg.startsWith("-") && input != null && output == null) {
                         output = arg
@@ -49,7 +78,12 @@ public object ArgsParser {
         val outFile = output ?: return MediaOperation.Probe(inFile)
 
         return if (copyCodec && videoCodec == null && audioCodec == null) {
-            MediaOperation.Remux(inFile, outFile)
+            MediaOperation.Remux(
+                input = inFile,
+                output = outFile,
+                bitstreamFilters = bitstreamFilters,
+                movflags = movflags,
+            )
         } else {
             MediaOperation.Transcode(inFile, outFile, videoCodec, audioCodec)
         }

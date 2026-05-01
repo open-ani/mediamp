@@ -12,6 +12,8 @@ public sealed class MediaOperation {
     public data class Remux(
         public val input: String,
         public val output: String,
+        public val bitstreamFilters: Map<Int, String> = emptyMap(),
+        public val movflags: List<String> = emptyList(),
     ) : MediaOperation()
 
     public data class Transcode(

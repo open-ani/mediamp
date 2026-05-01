@@ -35,14 +35,22 @@ public actual class OutputContainer : AutoCloseable {
         return Stream(outStream)
     }
 
-    public actual fun writeHeader() {
+    public actual fun writeHeader(options: MuxerOptions?) {
         val ctx = native ?: error("OutputContainer not opened")
         if (ctx.pb() == null && (ctx.oformat().flags() and AVFMT_NOFILE) == 0) {
             val pb = AVIOContext()
             avio_open(pb, ctx.url().string, AVIO_FLAG_WRITE).checkError()
             ctx.pb(pb)
         }
-        avformat_write_header(ctx, null as AVDictionary?).checkError()
+        val dict: AVDictionary? = options?.let { opts ->
+            val d = AVDictionary()
+            opts.forEach { (k, v) ->
+                av_dict_set(d, k, v, 0).checkError()
+            }
+            d
+        }
+        avformat_write_header(ctx, dict).checkError()
+        dict?.let { av_dict_free(it) }
     }
 
     public actual fun mux(packet: AVPacket, stream: Stream) {

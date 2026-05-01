@@ -10,11 +10,15 @@ package org.openani.mediamp.ffmpeg
 
 import kotlinx.cinterop.CPointerVar
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.cValuesOf
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import org.openani.mediamp.ffmpeg.ffi.AVDictionary
 import org.openani.mediamp.ffmpeg.ffi.AVFormatContext
+import org.openani.mediamp.ffmpeg.ffi.av_dict_free
+import org.openani.mediamp.ffmpeg.ffi.av_dict_set
 import org.openani.mediamp.ffmpeg.ffi.avformat_alloc_output_context2
 import org.openani.mediamp.ffmpeg.ffi.avformat_write_header
 import org.openani.mediamp.ffmpeg.ffi.av_interleaved_write_frame
@@ -54,11 +58,18 @@ public actual class OutputContainer : AutoCloseable {
         return Stream(NativeAVStream(outStream))
     }
 
-    public actual fun writeHeader() {
+    public actual fun writeHeader(options: MuxerOptions?) {
         val ctx = native ?: error("OutputContainer not opened")
         val ret = mediamp_avio_open(ctx.ptr)
         if (ret < 0) throw FFmpegException(ret)
-        avformat_write_header(ctx.ptr, null).checkError()
+        memScoped {
+            val dictVar = alloc<CPointerVar<AVDictionary>>()
+            options?.forEach { (k, v) ->
+                av_dict_set(dictVar.ptr, k, v, 0).checkError()
+            }
+            avformat_write_header(ctx.ptr, dictVar.ptr).checkError()
+            dictVar.value?.let { av_dict_free(cValuesOf(it)) }
+        }
     }
 
     public actual fun mux(packet: AVPacket, stream: Stream) {
