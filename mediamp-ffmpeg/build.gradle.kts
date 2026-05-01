@@ -23,6 +23,19 @@ kotlin {
     explicitApi()
     androidLibrary {
         namespace = "org.openani.mediamp.ffmpeg"
+        packaging {
+            jniLibs {
+                pickFirsts += listOf(
+                    "lib/*/libavutil.so",
+                    "lib/*/libavcodec.so",
+                    "lib/*/libavformat.so",
+                    "lib/*/libavfilter.so",
+                    "lib/*/libavdevice.so",
+                    "lib/*/libswscale.so",
+                    "lib/*/libswresample.so",
+                )
+            }
+        }
     }
     sourceSets {
         commonMain.dependencies {
@@ -36,9 +49,7 @@ kotlin {
             implementation(libs.ffmpeg.platform)
         }
         androidMain.dependencies {
-            // Use the base artifact (Java API only) on Android; native .so files are provided
-            // by prepareFfmpegAndroidJniLibs from the self-built FFmpeg output.
-            implementation(libs.ffmpeg)
+            implementation(libs.ffmpeg.platform)
         }
     }
 }
