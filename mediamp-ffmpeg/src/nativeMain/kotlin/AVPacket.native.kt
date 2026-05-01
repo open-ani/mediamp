@@ -17,6 +17,10 @@ import org.openani.mediamp.ffmpeg.internal.NativeAVPacket
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 public actual class AVPacket : AutoCloseable {
+    public actual companion object {
+        public actual val NOPTS: Long = Long.MIN_VALUE
+    }
+
     internal val native: NativeAVPacket = NativeAVPacket(av_packet_alloc()
         ?: throw FFmpegException(-12))
 
@@ -29,4 +33,12 @@ public actual class AVPacket : AutoCloseable {
     }
 
     public actual fun streamIndex(): Int = native.ptr.pointed.stream_index
+
+    public actual var pts: Long
+        get() = native.ptr.pointed.pts
+        set(value) { native.ptr.pointed.pts = value }
+
+    public actual var dts: Long
+        get() = native.ptr.pointed.dts
+        set(value) { native.ptr.pointed.dts = value }
 }

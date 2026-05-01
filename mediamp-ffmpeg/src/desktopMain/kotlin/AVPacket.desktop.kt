@@ -12,6 +12,10 @@ import org.bytedeco.ffmpeg.avcodec.AVPacket as NativeAVPacket
 import org.bytedeco.ffmpeg.global.avcodec.*
 
 public actual class AVPacket : AutoCloseable {
+    public actual companion object {
+        public actual val NOPTS: Long = Long.MIN_VALUE
+    }
+
     internal val native: NativeAVPacket = av_packet_alloc()
         ?: throw FFmpegException(-12)
 
@@ -24,4 +28,12 @@ public actual class AVPacket : AutoCloseable {
     }
 
     public actual fun streamIndex(): Int = native.stream_index()
+
+    public actual var pts: Long
+        get() = native.pts()
+        set(value) { native.pts(value) }
+
+    public actual var dts: Long
+        get() = native.dts()
+        set(value) { native.dts(value) }
 }

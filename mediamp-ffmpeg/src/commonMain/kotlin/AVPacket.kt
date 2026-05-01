@@ -12,4 +12,13 @@ public expect class AVPacket() : AutoCloseable {
     public override fun close()
     public fun unref()
     public fun streamIndex(): Int
+
+    /** Presentation timestamp in [Stream.timeBase] units. [NOPTS] if not set. */
+    public var pts: Long
+    /** Decompression timestamp in [Stream.timeBase] units. [NOPTS] if not set. */
+    public var dts: Long
+
+    public companion object {
+        public val NOPTS: Long
+    }
 }

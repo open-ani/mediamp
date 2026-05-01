@@ -46,6 +46,10 @@ public class MediaTranscoder {
 
                 AVPacket().use { packet ->
                     AVPacket().use { filteredPacket ->
+                        // Track per-output-stream DTS offsets to handle HLS segment discontinuities.
+                        val dtsOffsets = mutableMapOf<Int, Long>()   // outStream.index -> offset
+                        val lastDts = mutableMapOf<Int, Long>()      // outStream.index -> last dts
+
                         while (true) {
                             val ret = input.readPacket(packet)
                             when {
@@ -61,6 +65,28 @@ public class MediaTranscoder {
                             val inStream = input.streams[packet.streamIndex()]
                             val outStream = streamMap[inStream.index]
                             avPacketRescaleTs(packet, inStream.timeBase, outStream.timeBase)
+
+                            // Fix non-monotonic DTS caused by HLS segment discontinuities.
+                            val pts = packet.pts
+                            val dts = packet.dts
+                            if (dts != AVPacket.NOPTS) {
+                                val offset = dtsOffsets[outStream.index] ?: 0L
+                                val adjustedDts = dts + offset
+                                val prevDts = lastDts[outStream.index] ?: Long.MIN_VALUE
+                                if (adjustedDts <= prevDts) {
+                                    // Discontinuity: bump offset so this packet is strictly after the last one.
+                                    val bump = prevDts - adjustedDts + 1
+                                    val newOffset = offset + bump
+                                    dtsOffsets[outStream.index] = newOffset
+                                    packet.dts = dts + newOffset
+                                    if (pts != AVPacket.NOPTS) packet.pts = pts + newOffset
+                                    lastDts[outStream.index] = packet.dts
+                                } else {
+                                    packet.dts = adjustedDts
+                                    if (pts != AVPacket.NOPTS) packet.pts = pts + offset
+                                    lastDts[outStream.index] = adjustedDts
+                                }
+                            }
 
                             val bsf = bsfMap[outStream.index]
                             if (bsf != null) {
