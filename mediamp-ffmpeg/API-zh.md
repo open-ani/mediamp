@@ -62,14 +62,15 @@ MediaOperation.Remux(
 )
 ```
 
-| 参数 | 类型 | 默认值 | 说明 |
-|-----------|------|---------|-------------|
-| `input` | `String` | — | 输入文件路径或 URL。 |
-| `output` | `String` | — | 输出文件路径。 |
-| `bitstreamFilters` | `Map<Int, String>` | `emptyMap()` | 流索引 → BSF 名称。等价于 `-bsf:<stream> <name>`。 |
-| `movflags` | `List<String>` | `emptyList()` | Muxer 标志。等价于 `-movflags +flag1+flag2`。 |
-| `allowedExtensions` | `String?` | `null` | 播放列表输入允许的文件扩展名。等价于 `-allowed_extensions`。 |
-| `protocolWhitelist` | `String?` | `null` | 白名单协议。等价于 `-protocol_whitelist`。 |
+| 参数                  | 类型                 | 默认值           | 说明                                                                        |
+|---------------------|--------------------|---------------|---------------------------------------------------------------------------|
+| `input`             | `String`           | —             | 输入文件路径或 URL。                                                              |
+| `output`            | `String`           | —             | 输出文件路径。                                                                   |
+| `bitstreamFilters`  | `Map<Int, String>` | `emptyMap()`  | 流索引 → BSF 名称。等价于 `-bsf:<stream> <name>`。                                  |
+| `movflags`          | `List<String>`     | `emptyList()` | Muxer 标志。等价于 `-movflags +flag1+flag2`。                                    |
+| `allowedExtensions` | `String?`          | `null`        | 播放列表输入允许的文件扩展名。等价于 `-allowed_extensions`。                                 |
+| `protocolWhitelist` | `String?`          | `null`        | 白名单协议。等价于 `-protocol_whitelist`。                                          |
+| `ignoreDts`         | `Boolean`          | `false`       | 忽略输入 DTS 并从 PTS 推导。设置 `AVFMT_FLAG_IGNDTS`。适用于 HLS/MPEG-TS 源存在 DTS 不连续的情况。 |
 
 **`Remux` 自动完成的工作：**
 
@@ -208,6 +209,7 @@ MediaTranscoder().execute(
         movflags = listOf("faststart"),
         allowedExtensions = "ALL",
         protocolWhitelist = "file,crypto,data",
+        ignoreDts = true, // HLS 源通常需要此项
     )
 )
 ```

@@ -62,14 +62,15 @@ MediaOperation.Remux(
 )
 ```
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `input` | `String` | — | Input file path or URL. |
-| `output` | `String` | — | Output file path. |
-| `bitstreamFilters` | `Map<Int, String>` | `emptyMap()` | Stream index → BSF name. Equivalent to `-bsf:<stream> <name>`. |
-| `movflags` | `List<String>` | `emptyList()` | Muxer flags. Equivalent to `-movflags +flag1+flag2`. |
-| `allowedExtensions` | `String?` | `null` | Allowed file extensions for playlist inputs. Equivalent to `-allowed_extensions`. |
-| `protocolWhitelist` | `String?` | `null` | Whitelisted protocols. Equivalent to `-protocol_whitelist`. |
+| Parameter           | Type               | Default       | Description                                                                                                            |
+|---------------------|--------------------|---------------|------------------------------------------------------------------------------------------------------------------------|
+| `input`             | `String`           | —             | Input file path or URL.                                                                                                |
+| `output`            | `String`           | —             | Output file path.                                                                                                      |
+| `bitstreamFilters`  | `Map<Int, String>` | `emptyMap()`  | Stream index → BSF name. Equivalent to `-bsf:<stream> <name>`.                                                         |
+| `movflags`          | `List<String>`     | `emptyList()` | Muxer flags. Equivalent to `-movflags +flag1+flag2`.                                                                   |
+| `allowedExtensions` | `String?`          | `null`        | Allowed file extensions for playlist inputs. Equivalent to `-allowed_extensions`.                                      |
+| `protocolWhitelist` | `String?`          | `null`        | Whitelisted protocols. Equivalent to `-protocol_whitelist`.                                                            |
+| `ignoreDts`         | `Boolean`          | `false`       | Ignore input DTS and derive from PTS. Sets `AVFMT_FLAG_IGNDTS`. Useful for HLS/MPEG-TS sources with discontinuous DTS. |
 
 **What `Remux` does automatically:**
 
@@ -208,6 +209,7 @@ MediaTranscoder().execute(
         movflags = listOf("faststart"),
         allowedExtensions = "ALL",
         protocolWhitelist = "file,crypto,data",
+        ignoreDts = true, // HLS sources often need this
     )
 )
 ```
