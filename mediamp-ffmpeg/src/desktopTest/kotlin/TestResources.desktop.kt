@@ -8,10 +8,13 @@
 
 package org.openani.mediamp.ffmpeg
 
-internal actual fun sampleMediaPath(): String =
-    Thread.currentThread().contextClassLoader.getResource("sample.mp4")?.path
+import java.io.File
+
+internal actual fun sampleMediaPath(): String {
+    val url = Thread.currentThread().contextClassLoader.getResource("sample.mp4")
         ?: error("sample.mp4 not found in test resources")
+    return File(url.toURI()).absolutePath
+}
 
 internal actual fun tempOutputPath(suffix: String): String =
-    System.getProperty("java.io.tmpdir").trimEnd('/', '\\')
-        .let { "$it/temp-test$suffix" }
+    File(System.getProperty("java.io.tmpdir"), "temp-test$suffix").absolutePath
