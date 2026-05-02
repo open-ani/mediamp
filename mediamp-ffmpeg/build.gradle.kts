@@ -99,12 +99,15 @@ kotlin {
 }
 
 // Copy Apple framework into test bundle so dynamic linker can find it at runtime.
-val copyiOSFrameworkForTests = tasks.register<Copy>("copyiOSFrameworkForTests") {
-    dependsOn("ffmpegAppleFrameworkIosSimulatorArm64")
-    from(project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/MediampFFmpegKit.framework"))
-    into(project.layout.buildDirectory.dir("bin/iosSimulatorArm64/debugTest/Frameworks/MediampFFmpegKit.framework"))
-}
+// Only register on macOS hosts where the iOS framework task exists.
+if (project.tasks.names.contains("ffmpegAppleFrameworkIosSimulatorArm64")) {
+    val copyiOSFrameworkForTests = tasks.register<Copy>("copyiOSFrameworkForTests") {
+        dependsOn("ffmpegAppleFrameworkIosSimulatorArm64")
+        from(project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/MediampFFmpegKit.framework"))
+        into(project.layout.buildDirectory.dir("bin/iosSimulatorArm64/debugTest/Frameworks/MediampFFmpegKit.framework"))
+    }
 
-tasks.named("linkDebugTestIosSimulatorArm64") {
-    dependsOn(copyiOSFrameworkForTests)
+    tasks.named("linkDebugTestIosSimulatorArm64") {
+        dependsOn(copyiOSFrameworkForTests)
+    }
 }
