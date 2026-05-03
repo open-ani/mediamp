@@ -33,6 +33,7 @@ kotlin {
             compileOnly(libs.androidx.annotation)
         }
         commonTest.dependencies {
+            implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
         androidMain.dependencies {

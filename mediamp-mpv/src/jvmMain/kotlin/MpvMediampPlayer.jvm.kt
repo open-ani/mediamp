@@ -28,7 +28,7 @@ actual class MpvMediampPlayer (
     parentCoroutineContext: CoroutineContext,
 ) : AbstractMediampPlayer<MpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
     class MPVPlayerData(mediaData: MediaData) : Data(mediaData)
-    
+
     private val handle = MPVHandle(context)
     
     private val eventListener = object : EventListener {
@@ -235,9 +235,5 @@ actual class MpvMediampPlayer (
         
     }
     
-    companion object {
-        init {
-            LibraryLoader.loadLibraries()
-        }
-    }
+    companion object
 }

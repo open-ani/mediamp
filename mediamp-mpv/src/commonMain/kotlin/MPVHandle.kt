@@ -13,7 +13,7 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
 
-    constructor(context: Any) : this(nMake(context)) {
+    constructor(context: Any) : this(createHandle(context)) {
         if (ptr == 0L) throw IllegalStateException("Failed to create native mpv handle")
     }
 
@@ -85,6 +85,13 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
 
     override fun close() {
         nFinalize(ptr)
+    }
+
+    private companion object {
+        private fun createHandle(context: Any): Long {
+            LibraryLoader.loadLibraries(context)
+            return nMake(context)
+        }
     }
 
     /*companion object {

@@ -10,11 +10,14 @@ package ffmpeg
 
 import Arch
 import Os
+import nativebuild.PrepareSourceTreeTask
+import nativebuild.resolveNdkDir
+import nativebuild.resolveMsys2Dir
+import nativebuild.toMsysPath
 import org.gradle.api.GradleException
 import org.gradle.api.Task
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskProvider
-import org.gradle.api.tasks.Sync
 import org.gradle.kotlin.dsl.register
 import java.io.File
 
@@ -40,13 +43,16 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
         workingDir = context.ffmpegSrcDir
     }
 
-    val sourceTemplateTask = project.tasks.register<PrepareFfmpegSourceTask>("prepareFfmpegSourceTemplate") {
+    val sourceTemplateTask = project.tasks.register<PrepareSourceTreeTask>("prepareFfmpegSourceTemplate") {
         group = "ffmpeg"
         description = "Create a stable FFmpeg source snapshot for this build"
         dependsOn(applyPatchesTask)
         finalizedBy(revertPatchesTask)
         sourceDir.set(context.ffmpegSrcDir)
         outputDir.set(sourceTemplateDir)
+        markerFileRelativePath.set("configure")
+        sourceDisplayName.set("FFmpeg")
+        preserveExecutablePermissions.set(true)
     }
     var previousTargetTask: TaskProvider<out Task>? = null
     when (context.hostOs) {
@@ -54,7 +60,9 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             if (context.isBuildVariantEnabled("windows")) {
                 previousTargetTask = registerFfmpegTasks(context, context.windowsTarget(), sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg windows targets: mediamp.ffmpeg.buildvariant does not include 'windows'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg windows targets: ${context.buildProperties.buildVariantPropertyName} does not include 'windows'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -63,7 +71,9 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             if (context.isBuildVariantEnabled("linux")) {
                 previousTargetTask = registerFfmpegTasks(context, context.linuxX64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg linux targets: mediamp.ffmpeg.buildvariant does not include 'linux'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg linux targets: ${context.buildProperties.buildVariantPropertyName} does not include 'linux'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -76,13 +86,18 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
                     else -> throw GradleException("Failed to configure FFmpeg tasks, unknown macOS host.")
                 }
             } else {
-                project.logger.lifecycle("Skipping FFmpeg macos targets: mediamp.ffmpeg.buildvariant does not include 'macos'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg macos targets: ${context.buildProperties.buildVariantPropertyName} does not include 'macos'.",
+                )
             }
             if (context.isBuildVariantEnabled("ios")) {
                 previousTargetTask = registerFfmpegTasks(context, context.iosArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
                 previousTargetTask = registerFfmpegTasks(context, context.iosSimulatorArm64Target, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
+                registerAppleXcframeworkTask(context)
             } else {
-                project.logger.lifecycle("Skipping FFmpeg ios targets: mediamp.ffmpeg.buildvariant does not include 'ios'.")
+                project.logger.lifecycle(
+                    "Skipping FFmpeg ios targets: ${context.buildProperties.buildVariantPropertyName} does not include 'ios'.",
+                )
             }
             previousTargetTask = registerAndroidTargetsIfAvailable(context, sourceTemplateTask, sourceTemplateDir, previousTargetTask)
         }
@@ -93,7 +108,11 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     project.tasks.register("ffmpegBuildAll") {
         group = "ffmpeg"
         description = "Build FFmpeg for all targets available on the current host OS"
-        dependsOn(project.tasks.matching { it.name.startsWith("ffmpegAssemble") })
+        dependsOn(project.tasks.matching {
+            it.name.startsWith("ffmpegAssemble") ||
+                it.name.startsWith("ffmpegAppleFramework") ||
+                it.name == "ffmpegCreateAppleXcframework"
+        })
     }
 }
 
@@ -104,6 +123,12 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
         "--target-os=mingw32",
         "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
         "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
+        "--enable-openssl",
+        "--enable-protocol=udp",
+        "--enable-protocol=tcp",
+        "--enable-protocol=tls",
+        "--enable-protocol=http",
+        "--enable-protocol=https",
     ),
     env = mapOf("MSYSTEM" to "UCRT64"),
     shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
@@ -113,16 +138,18 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
 
 private fun registerAndroidTargetsIfAvailable(
     context: FfmpegBuildContext,
-    sourceTemplateTask: TaskProvider<PrepareFfmpegSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     templateSnapshotDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task>? {
     if (!context.isBuildVariantEnabled("android")) {
-        context.project.logger.lifecycle("Skipping FFmpeg android targets: mediamp.ffmpeg.buildvariant does not include 'android'.")
+        context.project.logger.lifecycle(
+            "Skipping FFmpeg android targets: ${context.buildProperties.buildVariantPropertyName} does not include 'android'.",
+        )
         return previousTargetTask
     }
 
-    val ndkAvailable = runCatching { context.resolveNdkDir() }.isSuccess
+    val ndkAvailable = runCatching { context.project.resolveNdkDir() }.isSuccess
     if (!ndkAvailable) {
         context.project.logger.warn("Android NDK not found – skipping Android FFmpeg targets. Set ndk.dir or ANDROID_NDK_HOME to enable.")
         return previousTargetTask
@@ -138,7 +165,7 @@ private fun registerAndroidTargetsIfAvailable(
 private fun registerFfmpegTasks(
     context: FfmpegBuildContext,
     target: FfmpegBuildTarget,
-    sourceTemplateTask: TaskProvider<PrepareFfmpegSourceTask>,
+    sourceTemplateTask: TaskProvider<PrepareSourceTreeTask>,
     templateSnapshotDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
     previousTargetTask: TaskProvider<out Task>?,
 ): TaskProvider<out Task> {
@@ -147,7 +174,7 @@ private fun registerFfmpegTasks(
     val installDir = project.layout.buildDirectory.dir("ffmpeg/${target.name}/install")
     val configStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.config_stamp")
     val buildStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.build_stamp")
-    val msys2Dir = if (context.hostOs == Os.Windows) context.resolveMsys2Dir() else null
+    val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
 
     val configureTask = project.tasks.register<FfmpegConfigureTask>("ffmpegConfigure${target.name}") {
         group = "ffmpeg"
@@ -174,11 +201,13 @@ private fun registerFfmpegTasks(
         shell.set(target.shell)
         envVars.set(target.env)
         makeJobs.set(context.makeJobs)
+        hostOsName.set(context.hostOs.name)
         buildDirPath.set(buildDir)
+        installDirPath.set(installDir.map { it.asFile.absolutePath })
         this.buildStamp.set(buildStamp)
     }
 
-    project.tasks.register<FfmpegAssembleTask>("ffmpegAssemble${target.name}") {
+    val assembleTask = project.tasks.register<FfmpegAssembleTask>("ffmpegAssemble${target.name}") {
         group = "ffmpeg"
         description = "Assemble FFmpeg outputs for ${target.name}"
         dependsOn(buildTask)
@@ -192,9 +221,6 @@ private fun registerFfmpegTasks(
         buildDirPath.set(buildDir)
         this.installDir.set(installDir)
         this.outputDir.set(project.layout.buildDirectory.dir("ffmpeg-output/${target.name}"))
-        if (target.name == "IosArm64" || target.name == "IosSimulatorArm64") {
-            commandWrapperSource.set(context.commandWrapperSource)
-        }
         if (target.name.startsWith("Android") || target.name == "LinuxX64" || target.name == "MacosArm64" || target.name == "MacosX64" || target.name == "WindowsX64") {
             commandWrapperSource.set(context.commandWrapperSource)
             jniWrapperSource.set(context.jniWrapperSource)
@@ -203,23 +229,51 @@ private fun registerFfmpegTasks(
             this.msys2Dir.set(msys2Dir)
         }
     }
-    return project.tasks.named("ffmpegAssemble${target.name}")
+
+    if (target.name == "IosArm64" || target.name == "IosSimulatorArm64") {
+        val frameworkTask = project.tasks.register<FfmpegAppleFrameworkTask>("ffmpegAppleFramework${target.name}") {
+            group = "ffmpeg"
+            description = "Build Apple framework for ${target.name}"
+            dependsOn(assembleTask)
+            if (previousTargetTask != null) {
+                mustRunAfter(previousTargetTask)
+            }
+            targetName.set(target.name)
+            frameworkName.set(context.appleFrameworkName)
+            ffmpegLibNames.set(context.ffmpegLibNames)
+            buildDirPath.set(buildDir)
+            this.installDir.set(installDir)
+            wrapperSource.set(context.commandWrapperSource)
+            publicHeaderSource.set(context.applePublicHeaderSource)
+            outputDir.set(project.layout.buildDirectory.dir("apple-framework/${target.name}/${context.appleFrameworkName}.framework"))
+        }
+        return frameworkTask
+    }
+
+    return assembleTask
 }
 
-internal fun restoreExecutablePermissions(sourceDir: File, targetDir: File) {
-    sourceDir.walkTopDown()
-        .filter { src ->
-            src.isFile && (
-                src.canExecute() ||
-                    src.name == "configure" ||
-                    src.extension == "sh"
-                )
-        }
-        .forEach { src ->
-            val relative = src.relativeTo(sourceDir)
-            val target = targetDir.resolve(relative.path)
-            if (target.exists()) {
-                target.setExecutable(true)
-            }
-        }
+private fun registerAppleXcframeworkTask(context: FfmpegBuildContext) {
+    val project = context.project
+    if (project.tasks.names.contains("ffmpegAppleFrameworkIosArm64").not() ||
+        project.tasks.names.contains("ffmpegAppleFrameworkIosSimulatorArm64").not()
+    ) {
+        return
+    }
+
+    project.tasks.register<FfmpegAppleXcframeworkTask>("ffmpegCreateAppleXcframework") {
+        group = "ffmpeg"
+        description = "Create Apple XCFramework for FFmpeg runtime"
+        dependsOn("ffmpegAppleFrameworkIosArm64", "ffmpegAppleFrameworkIosSimulatorArm64")
+        frameworkName.set(context.appleFrameworkName)
+        iosDeviceFramework.set(
+            project.layout.buildDirectory.dir("apple-framework/IosArm64/${context.appleFrameworkName}.framework"),
+        )
+        iosSimulatorFramework.set(
+            project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/${context.appleFrameworkName}.framework"),
+        )
+        outputDir.set(
+            project.layout.buildDirectory.dir("apple-xcframework/${context.appleFrameworkName}.xcframework"),
+        )
+    }
 }

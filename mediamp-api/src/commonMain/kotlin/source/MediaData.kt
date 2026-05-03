@@ -65,6 +65,9 @@ public interface SeekableInputMediaData : MediaData {
      *
      * The returned [SeekableInput] must be closed before a new [createInput] can be made.
      * Otherwise, it is undefined behavior.
+     *
+     * Implementations should observe [coroutineContext] while opening the input and close any
+     * partially opened resource before rethrowing if the caller is cancelled.
      */
     public suspend fun createInput(coroutineContext: CoroutineContext = EmptyCoroutineContext): SeekableInput
 }

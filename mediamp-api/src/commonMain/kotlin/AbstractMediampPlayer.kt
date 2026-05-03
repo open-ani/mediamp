@@ -8,19 +8,22 @@
 
 package org.openani.mediamp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.source.MediaData
 import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Default abstract implementation of [MediampPlayer].
@@ -80,51 +83,76 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
         }
 
     private val setVideoSourceMutex = Mutex()
+    private val setMediaDataRequestMutex = Mutex()
     private val closed = MutableStateFlow(false)
+    private var activeSetMediaDataJob: kotlinx.coroutines.Job? = null
 
     final override suspend fun setMediaData(data: MediaData): Unit = withContext(defaultDispatcher) {
-        if (closed.value || playbackState.value == PlaybackState.DESTROYED) {
-            return@withContext
+        val callerJob = currentCoroutineContext().job
+        setMediaDataRequestMutex.withLock {
+            activeSetMediaDataJob
+                ?.takeIf { it !== callerJob }
+                ?.cancel(CancellationException("Superseded by a newer setMediaData call"))
+            activeSetMediaDataJob = callerJob
         }
-        setVideoSourceMutex.withLock {
-            val currentState = playbackState.value
-            if (closed.value || currentState == PlaybackState.DESTROYED) {
-                return@withLock
+
+        try {
+            if (closed.value || playbackState.value == PlaybackState.DESTROYED) {
+                return@withContext
             }
 
-            // playback has set media data, stop previous first.
-            if (currentState >= PlaybackState.READY) {
-                val previousResource = openResource.value
-                if (data == previousResource?.mediaData) {
+            setVideoSourceMutex.withLock {
+                currentCoroutineContext().ensureActive()
+
+                val currentState = playbackState.value
+                if (closed.value || currentState == PlaybackState.DESTROYED) {
                     return@withLock
                 }
-                // stop playback if running
-                if (currentState >= PlaybackState.PAUSED) {
-                    stopPlaybackImpl()
+
+                // playback has set media data, stop previous first.
+                if (currentState >= PlaybackState.READY) {
+                    val previousResource = openResource.value
+                    if (data == previousResource?.mediaData) {
+                        return@withLock
+                    }
+                    // stop playback if running
+                    if (currentState >= PlaybackState.PAUSED) {
+                        stopPlaybackImpl()
+                    }
+
+                    openResource.value = null
+                    previousResource?.release()
                 }
 
-                openResource.value = null
-                previousResource?.release()
-            }
+                val opened = try {
+                    setMediaDataImpl(data)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    playbackState.value = PlaybackState.ERROR
+                    throw e
+                }
 
-            val opened = try {
-                setMediaDataImpl(data)
-            } catch (e: CancellationException) {
-                playbackState.value = PlaybackState.ERROR
-                throw e
-            } catch (e: Exception) {
-                playbackState.value = PlaybackState.ERROR
-                throw e
-            }
+                val requestStillActive = setMediaDataRequestMutex.withLock {
+                    activeSetMediaDataJob === callerJob
+                }
 
-            // Player is closed before setMediaDataImpl is finished
-            if (closed.value) {
-                opened.release()
-                return@withLock
-            }
+                // Player is closed or this request is superseded before setMediaDataImpl is finished.
+                if (closed.value || !requestStillActive || !callerJob.isActive) {
+                    opened.release()
+                    currentCoroutineContext().ensureActive()
+                    return@withLock
+                }
 
-            openResource.value = opened
-            playbackState.value = PlaybackState.READY
+                openResource.value = opened
+                playbackState.value = PlaybackState.READY
+            }
+        } finally {
+            setMediaDataRequestMutex.withLock {
+                if (activeSetMediaDataJob === callerJob) {
+                    activeSetMediaDataJob = null
+                }
+            }
         }
     }
 
@@ -163,7 +191,7 @@ public abstract class AbstractMediampPlayer<D : AbstractMediampPlayer.Data>(
     protected abstract fun pauseImpl()
 
     final override fun stopPlayback() {
-        if (playbackState.value < PlaybackState.FINISHED) return
+        if (playbackState.value < PlaybackState.READY) return
 
         stopPlaybackImpl()
         releaseOpenedMediaData()
