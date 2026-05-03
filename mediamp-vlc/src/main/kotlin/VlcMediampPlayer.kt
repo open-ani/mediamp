@@ -80,7 +80,10 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
 @OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
-public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
+public class VlcMediampPlayer(
+    parentCoroutineContext: CoroutineContext,
+    config: VlcConfig = VlcConfig(),
+) :
     MediampPlayer,
     AbstractMediampPlayer<VlcjData>(Dispatchers.Default) {
 
@@ -100,14 +103,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 //    )
 
     public val player: EmbeddedMediaPlayer = createPlayerLock.withLock {
-        MediaPlayerFactory(
-            "-v",
-            "--file-caching=3000",               // 本地文件缓存时间 3 秒，提高本地文件播放流畅度
-            "--network-caching=10000",           // 网络流缓存时间 10 秒，提高播放流畅度
-            "--live-caching=5000",               // 实时流缓存时间 5 秒
-            "--prefetch-buffer-size=20000",      // 预读缓冲区大小 20MB (KiB)
-            "--prefetch-read-size=1048576",      // 预读读取大小 1MB (bytes)
-        )
+        MediaPlayerFactory(*config.toArgs().toTypedArray())
             .mediaPlayers()
             .newEmbeddedMediaPlayer()
     }
