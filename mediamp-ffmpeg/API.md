@@ -168,15 +168,15 @@ InputContainer().use { input ->
 |---------|-----------|------------|-------|
 | Remux (stream copy) | Yes | Yes | Full support including BSF and muxer options. |
 | Probe | Yes | Yes | `MediaOperation.Probe` reads stream info. |
-| Transcode | No | Yes | `MediaOperation.Transcode` is a stub. |
-| Bitstream filters | Yes | Yes | `aac_adtstoasc`, `h264_mp4toannexb`, etc. |
-| Muxer options (`movflags`) | Yes | Yes | Via `MuxerOptions`. |
-| Input options (`allowed_extensions`, `protocol_whitelist`) | Yes | Yes | Passed to `avformat_open_input` as `AVDictionary`. |
-| Filters (`-vf`, `-af`) | No | Yes | Filtergraphs not yet wrapped. |
-| Encoding parameters (`-crf`, `-b:v`, `-preset`) | No | Yes | Use CLI bridge. |
-| Multi-input / complex filter | No | Yes | Use CLI bridge. |
-| Subtitle burn-in / extraction | No | Yes | Use CLI bridge. |
-| Hardware acceleration | No | Yes | Use CLI bridge. |
+| Transcode | No | Yes (Android/Desktop only) | `MediaOperation.Transcode` is a stub. |
+| Bitstream filters | Yes | Yes (Android/Desktop only) | `aac_adtstoasc`, `h264_mp4toannexb`, etc. |
+| Muxer options (`movflags`) | Yes | Yes (Android/Desktop only) | Via `MuxerOptions`. |
+| Input options (`allowed_extensions`, `protocol_whitelist`) | Yes | Yes (Android/Desktop only) | Passed to `avformat_open_input` as `AVDictionary`. |
+| Filters (`-vf`, `-af`) | No | Yes (Android/Desktop only) | Filtergraphs not yet wrapped. |
+| Encoding parameters (`-crf`, `-b:v`, `-preset`) | No | Yes (Android/Desktop only) | Use CLI bridge. |
+| Multi-input / complex filter | No | Yes (Android/Desktop only) | Use CLI bridge. |
+| Subtitle burn-in / extraction | No | Yes (Android/Desktop only) | Use CLI bridge. |
+| Hardware acceleration | No | Yes (Android/Desktop only) | Use CLI bridge. |
 
 ---
 
@@ -220,4 +220,4 @@ MediaTranscoder().execute(
 
 - **Android**: JavaCPP-based JNI. `FFmpegKit.initialize(context)` is required.
 - **Desktop JVM**: JavaCPP-based JNI. Binaries are extracted automatically from the runtime JAR.
-- **iOS**: Kotlin/Native cinterop against a statically-linked FFmpeg framework. Build the framework first with `./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework`.
+- **iOS**: Kotlin/Native cinterop against a statically-linked FFmpeg framework. `FFmpegKit.execute(args)` only supports `Remux` and `Probe`; complex operations (transcode, filters, etc.) are not available on iOS because subprocess spawning is prohibited by the App Sandbox. Build the framework first with `./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework`.

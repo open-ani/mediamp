@@ -168,15 +168,15 @@ InputContainer().use { input ->
 |---------|-----------|------------|-------|
 | Remux（流复制） | 是 | 是 | 完整支持，包括 BSF 和 Muxer 选项。 |
 | Probe（探测） | 是 | 是 | `MediaOperation.Probe` 读取流信息。 |
-| Transcode（转码） | 否 | 是 | `MediaOperation.Transcode` 是存根。 |
-| 码流过滤器 | 是 | 是 | `aac_adtstoasc`、`h264_mp4toannexb` 等。 |
-| Muxer 选项（`movflags`） | 是 | 是 | 通过 `MuxerOptions`。 |
-| 输入选项（`allowed_extensions`、`protocol_whitelist`） | 是 | 是 | 作为 `AVDictionary` 传递给 `avformat_open_input`。 |
-| 滤镜（`-vf`、`-af`） | 否 | 是 | 尚未包装 Filtergraph。 |
-| 编码参数（`-crf`、`-b:v`、`-preset`） | 否 | 是 | 使用 CLI 桥接。 |
-| 多输入 / 复杂滤镜 | 否 | 是 | 使用 CLI 桥接。 |
-| 字幕烧录 / 提取 | 否 | 是 | 使用 CLI 桥接。 |
-| 硬件加速 | 否 | 是 | 使用 CLI 桥接。 |
+| Transcode（转码） | 否 | 是（仅 Android/Desktop） | `MediaOperation.Transcode` 是存根。 |
+| 码流过滤器 | 是 | 是（仅 Android/Desktop） | `aac_adtstoasc`、`h264_mp4toannexb` 等。 |
+| Muxer 选项（`movflags`） | 是 | 是（仅 Android/Desktop） | 通过 `MuxerOptions`。 |
+| 输入选项（`allowed_extensions`、`protocol_whitelist`） | 是 | 是（仅 Android/Desktop） | 作为 `AVDictionary` 传递给 `avformat_open_input`。 |
+| 滤镜（`-vf`、`-af`） | 否 | 是（仅 Android/Desktop） | 尚未包装 Filtergraph。 |
+| 编码参数（`-crf`、`-b:v`、`-preset`） | 否 | 是（仅 Android/Desktop） | 使用 CLI 桥接。 |
+| 多输入 / 复杂滤镜 | 否 | 是（仅 Android/Desktop） | 使用 CLI 桥接。 |
+| 字幕烧录 / 提取 | 否 | 是（仅 Android/Desktop） | 使用 CLI 桥接。 |
+| 硬件加速 | 否 | 是（仅 Android/Desktop） | 使用 CLI 桥接。 |
 
 ---
 
@@ -220,4 +220,4 @@ MediaTranscoder().execute(
 
 - **Android**：基于 JavaCPP 的 JNI。需要调用 `FFmpegKit.initialize(context)`。
 - **Desktop JVM**：基于 JavaCPP 的 JNI。二进制文件自动从运行时 JAR 中提取。
-- **iOS**：Kotlin/Native cinterop，链接静态 FFmpeg 框架。先使用 `./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework` 构建框架。
+- **iOS**：Kotlin/Native cinterop，链接静态 FFmpeg 框架。`FFmpegKit.execute(args)` 仅支持 `Remux` 和 `Probe`；转码、滤镜等复杂操作在 iOS 上不可用，因为 App Sandbox 禁止 spawn 子进程。先使用 `./gradlew :mediamp-ffmpeg:ffmpegCreateAppleXcframework` 构建框架。
