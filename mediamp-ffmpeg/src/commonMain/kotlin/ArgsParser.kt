@@ -77,7 +77,13 @@ public object ArgsParser {
                 }
 
                 else -> {
-                    if (!arg.startsWith("-") && input != null && output == null) {
+                    if (arg.startsWith("-")) {
+                        // Unknown option; we can't safely determine whether it consumes
+                        // an operand. Fall back to real ffmpeg execution so semantics
+                        // are preserved (e.g. -map 0 should not be misinterpreted).
+                        return null
+                    }
+                    if (input != null && output == null) {
                         output = arg
                     }
                 }

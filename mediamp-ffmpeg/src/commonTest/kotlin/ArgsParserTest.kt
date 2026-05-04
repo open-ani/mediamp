@@ -62,4 +62,18 @@ class ArgsParserTest {
         assertNotNull(op)
         assertTrue(op is MediaOperation.Transcode)
     }
+
+    @Test
+    fun parseUnknownOptionReturnsNull() {
+        // Unknown options should fall back to real ffmpeg execution,
+        // so their operands are not misinterpreted as output paths.
+        val args = listOf(
+            "-i", "input.mp4",
+            "-map", "0", // -map is unknown; "0" must not become the output
+            "-c", "copy",
+            "output.mp4",
+        )
+        val op = ArgsParser.parse(args)
+        assertEquals(null, op)
+    }
 }
