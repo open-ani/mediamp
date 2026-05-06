@@ -1,0 +1,150 @@
+headers = libavformat/avformat.h libavcodec/avcodec.h libavcodec/bsf.h libavutil/avutil.h libavutil/imgutils.h libavutil/opt.h libswscale/swscale.h libswresample/swresample.h
+headerFilter = libavformat/** libavcodec/** libavutil/** libswscale/** libswresample/**
+package = org.openani.mediamp.ffmpeg.ffi
+
+---
+
+// AVDictionary internals are opaque by default; expose them for Kotlin wrapper iteration.
+struct AVDictionary {
+    int count;
+    AVDictionaryEntry *elems;
+};
+
+typedef void (*simple_log_callback_t)(void*, int, const char*, void*);
+
+static simple_log_callback_t av_log_default_callback2() {
+    return (simple_log_callback_t)av_log_default_callback;
+}
+
+static void av_log_set_callback2(simple_log_callback_t callback) {
+    av_log_set_callback((void (*)(void*, int, const char*, va_list))callback);
+}
+
+// Helpers for opaque AVFormatContext fields in cinterop.
+static int mediamp_format_stream_count(AVFormatContext *ctx) {
+    return ctx->nb_streams;
+}
+
+static int mediamp_stream_codec_type(AVStream *stream) {
+    return stream->codecpar->codec_type;
+}
+
+static int mediamp_stream_codec_id(AVStream *stream) {
+    return stream->codecpar->codec_id;
+}
+
+static AVStream *mediamp_format_stream(AVFormatContext *ctx, int idx) {
+    return ctx->streams[idx];
+}
+
+static AVCodecParameters *mediamp_stream_codecpar(AVStream *stream) {
+    return stream->codecpar;
+}
+
+// Helpers for output / remux operations.
+static AVFormatContext *mediamp_alloc_output_context(const char *filename) {
+    AVFormatContext *ctx = NULL;
+    avformat_alloc_output_context2(&ctx, NULL, NULL, filename);
+    return ctx;
+}
+
+static AVStream *mediamp_new_stream(AVFormatContext *ctx) {
+    return avformat_new_stream(ctx, NULL);
+}
+
+static int mediamp_copy_codec_params(AVStream *dst, AVStream *src) {
+    int ret = avcodec_parameters_copy(dst->codecpar, src->codecpar);
+    if (ret >= 0) {
+        // Reset codec_tag so the output muxer derives the correct one
+        // (e.g. MPEG-TS stores stream_type=0x1B as tag 27, which is
+        // invalid for MP4/movenc; it expects 'avc1').
+        dst->codecpar->codec_tag = 0;
+    }
+    return ret;
+}
+
+static int mediamp_avio_open(AVFormatContext *ctx) {
+    return avio_open(&ctx->pb, ctx->url, AVIO_FLAG_WRITE);
+}
+
+static int mediamp_write_header(AVFormatContext *ctx) {
+    return avformat_write_header(ctx, NULL);
+}
+
+static int mediamp_interleaved_write_frame(AVFormatContext *ctx, AVPacket *pkt) {
+    return av_interleaved_write_frame(ctx, pkt);
+}
+
+static int mediamp_write_trailer(AVFormatContext *ctx) {
+    return av_write_trailer(ctx);
+}
+
+static void mediamp_close_output(AVFormatContext *ctx) {
+    if (!ctx) return;
+    if (ctx->pb && !(ctx->oformat->flags & AVFMT_NOFILE)) {
+        avio_closep(&ctx->pb);
+    }
+    avformat_free_context(ctx);
+}
+
+static void mediamp_packet_rescale_ts(AVPacket *pkt, AVRational tb_src, AVRational tb_dst) {
+    av_packet_rescale_ts(pkt, tb_src, tb_dst);
+}
+
+static void mediamp_packet_set_stream_index(AVPacket *pkt, int idx) {
+    pkt->stream_index = idx;
+}
+
+static int mediamp_packet_stream_index(AVPacket *pkt) {
+    return pkt->stream_index;
+}
+
+static AVRational mediamp_stream_time_base(AVStream *stream) {
+    return stream->time_base;
+}
+
+// Bitstream filter helpers
+static AVBSFContext *mediamp_bsf_init(const char *name, AVCodecParameters *par) {
+    const AVBitStreamFilter *filter = av_bsf_get_by_name(name);
+    if (!filter) return NULL;
+    AVBSFContext *ctx = NULL;
+    int ret = av_bsf_alloc(filter, &ctx);
+    if (ret < 0) return NULL;
+    ret = avcodec_parameters_copy(ctx->par_in, par);
+    if (ret < 0) {
+        av_bsf_free(&ctx);
+        return NULL;
+    }
+    ret = av_bsf_init(ctx);
+    if (ret < 0) {
+        av_bsf_free(&ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+static int mediamp_bsf_send_packet(AVBSFContext *ctx, AVPacket *pkt) {
+    return av_bsf_send_packet(ctx, pkt);
+}
+
+static int mediamp_bsf_receive_packet(AVBSFContext *ctx, AVPacket *pkt) {
+    return av_bsf_receive_packet(ctx, pkt);
+}
+
+static void mediamp_bsf_free(AVBSFContext *ctx) {
+    av_bsf_free(&ctx);
+}
+
+// Cross-platform AVERROR(EAGAIN) value
+static int mediamp_averrno_eagain() {
+    return AVERROR(EAGAIN);
+}
+
+// Set AVFormatContext flags (e.g. AVFMT_FLAG_IGNDTS)
+static void mediamp_set_fmt_flags(AVFormatContext *ctx, int flags) {
+    ctx->flags |= flags;
+}
+
+static int mediamp_avfmt_flag_igndts() {
+    return AVFMT_FLAG_IGNDTS;
+}
