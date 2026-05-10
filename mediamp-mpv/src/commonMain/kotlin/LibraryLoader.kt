@@ -10,4 +10,6 @@ package org.openani.mediamp.mpv
 
 internal expect object LibraryLoader {
     fun loadLibraries(context: Any? = null)
+    fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean)
+    fun useDefaultRuntimeLibraryDirectory()
 }

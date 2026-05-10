@@ -9,33 +9,57 @@
 package org.openani.mediamp.ffmpeg
 
 import android.content.Context
-import android.os.Build
 import java.io.File
-import java.util.zip.ZipFile
+import org.openani.mediamp.nativeloader.NativeClasspathRuntime
+import org.openani.mediamp.nativeloader.NativeRuntimeLoader
+import kotlin.error
 
 /**
  * Android implementation.
  *
- * The ffmpeg binary is bundled in the APK's native libs directory
- * (`lib/{abi}/libffmpeg.so` — renamed with `lib` prefix and `.so` suffix
- * so the Android packaging pipeline includes it).
- *
- * Shared libraries (libavcodec.so, etc.) are also in the native libs
- * directory and are automatically available via the system linker.
+ * The preferred path is to load the JNI wrapper from the app's
+ * `nativeLibraryDir` via `System.loadLibrary`, which lets Android's
+ * linker resolve its FFmpeg dependencies in the standard way.
  */
 public actual class FFmpegKit actual constructor() {
 
     public actual suspend fun execute(args: List<String>): FFmpegResult {
-        val runtime = resolveRuntime()
-        return JvmFFmpegProcess.execute(runtime.runtimeDir, args, runtime.appContext)
+        val ctx = resolveRuntimeContext()
+        JvmFFmpegProcess.initializeAndroidContext(ctx)
+
+        return JvmFFmpegProcess.execute(args)
     }
 
     public actual companion object {
+        private const val WRAPPER_NAME: String = "ffmpegkitjni"
+        private val CLASSPATH_RUNTIME: NativeClasspathRuntime =
+            NativeClasspathRuntime(
+                libraryName = WRAPPER_NAME,
+                manifestResourceName = "ffmpeg-natives.txt",
+                resourceClassLoader = JvmFFmpegProcess::class.java.classLoader ?: ClassLoader.getSystemClassLoader(),
+            )
+
         @Volatile
         private var appContext: Context? = null
 
         public actual fun setLogHandler(handler: FFmpegLogHandler?) {
             JvmFFmpegProcess.setLogHandler(handler)
+        }
+
+        public actual fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean) {
+            error("Set custom runtime library directory is not allowed on Android.")
+        }
+
+        public actual fun useDefaultRuntimeLibraryDirectory() {
+            NativeRuntimeLoader.setRuntimeDirectory(
+                runtime = CLASSPATH_RUNTIME,
+                path = File(
+                    appContext?.applicationInfo?.nativeLibraryDir
+                        ?: error("FFmpegKit.initialize(context) must be called before use."),
+                ),
+                doExtract = false,
+                validate = false,
+            )
         }
 
         /**
@@ -45,89 +69,10 @@ public actual class FFmpegKit actual constructor() {
         @JvmStatic
         public fun initialize(context: Context) {
             appContext = context.applicationContext
+            useDefaultRuntimeLibraryDirectory()
         }
 
-        private data class AndroidRuntime(
-            val runtimeDir: File,
-            val appContext: Context,
-        )
-
-        private fun resolveRuntime(): AndroidRuntime {
-            val ctx = appContext
-                ?: error("FFmpegKit.initialize(context) must be called before use.")
-            val runtimeDir = resolveRuntimeDirectory(ctx)
-            return AndroidRuntime(
-                runtimeDir = runtimeDir,
-                appContext = ctx,
-            )
-        }
-
-        private fun resolveRuntimeDirectory(context: Context): File {
-            val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
-            if (nativeLibDir.resolve("libffmpegkitjni.so").exists()) {
-                return nativeLibDir
-            }
-            return extractRuntimeFromInstalledApks(context)
-        }
-
-        @Synchronized
-        private fun extractRuntimeFromInstalledApks(context: Context): File {
-            val appInfo = context.applicationInfo
-            val apkFiles = buildList {
-                add(appInfo.sourceDir)
-                appInfo.splitSourceDirs?.let(::addAll)
-            }.map(::File)
-                .filter(File::exists)
-
-            val abi = Build.SUPPORTED_ABIS.firstNotNullOfOrNull { candidate ->
-                if (apkFiles.any { apkContainsRuntimeForAbi(it, candidate) }) candidate else null
-            } ?: error(
-                "libffmpeg.so not found in ${appInfo.nativeLibraryDir}. " +
-                    "No packaged FFmpeg runtime was found in ${apkFiles.joinToString { it.absolutePath }}. " +
-                    "Ensure mediamp-ffmpeg is included as a dependency.",
-            )
-
-            val runtimeDir = context.codeCacheDir
-                .resolve("mediamp-ffmpeg")
-                .resolve(abi)
-                .apply { mkdirs() }
-
-            val wrapper = runtimeDir.resolve("libffmpegkitjni.so")
-            if (wrapper.exists()) {
-                return runtimeDir
-            }
-
-            val prefix = "lib/$abi/"
-            var extractedAny = false
-            apkFiles.forEach { apk ->
-                ZipFile(apk).use { zip ->
-                    zip.entries().asSequence()
-                        .filter { !it.isDirectory && it.name.startsWith(prefix) && it.name.endsWith(".so") }
-                        .forEach { entry ->
-                            extractedAny = true
-                            val fileName = entry.name.substringAfterLast('/')
-                            val output = runtimeDir.resolve(fileName)
-                            zip.getInputStream(entry).use { input ->
-                                output.outputStream().use { outputStream ->
-                                    input.copyTo(outputStream)
-                                }
-                            }
-                            output.setReadable(true, false)
-                            output.setExecutable(true, false)
-                        }
-                }
-            }
-
-            require(extractedAny && wrapper.exists()) {
-                "libffmpegkitjni.so not found in ${appInfo.nativeLibraryDir}. " +
-                    "Failed to extract FFmpeg runtime for ABI $abi from ${apkFiles.joinToString { it.absolutePath }}."
-            }
-            return runtimeDir
-        }
-
-        private fun apkContainsRuntimeForAbi(apk: File, abi: String): Boolean =
-            ZipFile(apk).use { zip ->
-                zip.getEntry("lib/$abi/libffmpegkitjni.so") != null
-            }
+        private fun resolveRuntimeContext(): Context =
+            appContext ?: error("FFmpegKit.initialize(context) must be called before use.")
     }
 }

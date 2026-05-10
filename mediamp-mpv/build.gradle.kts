@@ -51,11 +51,8 @@ kotlin {
                 implementation(projects.mediampInternalUtils)
             }
         }
-        getByName("jvmMain").dependencies { 
-            
-        }
-        desktopMain.dependencies {
-            api(libs.jna.platform)
+        getByName("jvmMain").dependencies {
+            implementation(projects.mediampNativeLoader)
         }
     }
 }

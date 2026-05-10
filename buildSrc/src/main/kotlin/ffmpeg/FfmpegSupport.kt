@@ -299,6 +299,7 @@ internal class FfmpegBuildContext(
                 "--sysroot=${sysroot.absolutePath.msysIfWin()}",
                 "--extra-cflags=-fPIC",
                 "--enable-pic",
+                "--enable-jni",
             ) + abiSpecificFlags,
         )
     }

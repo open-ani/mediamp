@@ -7,78 +7,67 @@
  */
 
 package org.openani.mediamp.ffmpeg
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.util.Locale
+import org.openani.mediamp.nativeloader.NativeClasspathRuntime
+import org.openani.mediamp.nativeloader.NativeRuntimeLoader
 
 /**
  * Desktop JVM implementation.
  *
- * The ffmpeg binary and shared libraries are expected on the classpath
+ * The FFmpeg JNI wrapper and shared libraries are expected on the classpath
  * (packaged in the `mediamp-ffmpeg-runtime-{os}-{arch}` JAR).
- * On first use they are extracted to a temporary directory.
+ * Callers must explicitly choose either a custom runtime directory or the
+ * default temporary extraction directory before first use.
  */
 public actual class FFmpegKit actual constructor() {
     public actual companion object {
+        private const val WRAPPER_NAME: String = "ffmpegkitjni"
+        private val CLASSPATH_RUNTIME: NativeClasspathRuntime =
+            NativeClasspathRuntime(
+                libraryName = WRAPPER_NAME,
+                manifestResourceName = "ffmpeg-natives.txt",
+                resourceClassLoader = JvmFFmpegProcess::class.java.classLoader ?: ClassLoader.getSystemClassLoader(),
+            )
+
+        @Volatile
+        private var defaultRuntimeDirectory: File? = null
+
         public actual fun setLogHandler(handler: FFmpegLogHandler?) {
             JvmFFmpegProcess.setLogHandler(handler)
         }
 
-        private val OS_NAME: String = System.getProperty("os.name").lowercase(Locale.ROOT)
-        private val extractionMutex: Mutex = Mutex()
-
-        @Volatile
-        private var extractedDir: File? = null
-
-        /**
-         * Extract all native binaries from the classpath to a temp directory.
-         * The runtime JAR contains files like `libffmpegkitjni.dylib`, `libavcodec.62.dylib`, etc.
-         * at the root level.
-         */
-        private fun extractNativeBinaries(): File {
-            val dir = Files.createTempDirectory("mediamp-ffmpeg").toFile()
-            dir.deleteOnExit()
-
-            val classLoader = FFmpegKit::class.java.classLoader
-            val manifest = classLoader.getResourceAsStream("ffmpeg-natives.txt")
-                ?.bufferedReader()?.readLines()
-                ?: error(
-                    "ffmpeg-natives.txt not found on classpath. " +
-                        "Make sure mediamp-ffmpeg-runtime-{os}-{arch} is on the classpath.",
-                )
-
-            for (fileName in manifest) {
-                if (fileName.isBlank()) continue
-                val resource = classLoader.getResourceAsStream(fileName) ?: continue
-                val target = dir.resolve(fileName).toPath()
-                resource.use { input ->
-                    Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
-                }
-                if (!OS_NAME.contains("win")) {
-                    target.toFile().setExecutable(true)
-                }
-            }
-
-            return dir
+        public actual fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean) {
+            require(path.isNotBlank()) { "FFmpeg runtime directory must not be blank." }
+            NativeRuntimeLoader.setRuntimeDirectory(
+                runtime = CLASSPATH_RUNTIME,
+                path = File(path),
+                doExtract = extractRuntimeLibrary,
+                validate = true,
+            )
         }
+
+        public actual fun useDefaultRuntimeLibraryDirectory() {
+            NativeRuntimeLoader.setRuntimeDirectory(
+                runtime = CLASSPATH_RUNTIME,
+                path = defaultRuntimeDirectory(),
+                doExtract = true,
+                validate = true,
+            )
+        }
+
+        private fun defaultRuntimeDirectory(): File =
+            defaultRuntimeDirectory ?: synchronized(this) {
+                defaultRuntimeDirectory ?: Files.createTempDirectory("mediamp-ffmpeg").toFile().canonicalFile
+                    .also { runtimeDir ->
+                        runtimeDir.deleteOnExit()
+                        defaultRuntimeDirectory = runtimeDir
+                    }
+            }
     }
 
     public actual suspend fun execute(args: List<String>): FFmpegResult {
-        val runtimeDir = ensureExtracted()
-        return JvmFFmpegProcess.execute(runtimeDir, args)
+        return JvmFFmpegProcess.execute(args)
     }
-
-    private suspend fun ensureExtracted(): File {
-        extractedDir?.let { return it }
-        extractionMutex.withLock {
-            extractedDir?.let { return it }
-            val dir = extractNativeBinaries()
-            extractedDir = dir
-            return dir
-        }
-    }
-
 }

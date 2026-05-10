@@ -87,10 +87,18 @@ class MPVHandle private constructor(internal val ptr: Long) : AutoCloseable {
         nFinalize(ptr)
     }
 
-    private companion object {
+    public companion object {
         private fun createHandle(context: Any): Long {
             LibraryLoader.loadLibraries(context)
             return nMake(context)
+        }
+
+        public fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean = true) {
+            LibraryLoader.setRuntimeLibraryDirectory(path, extractRuntimeLibrary)
+        }
+
+        public fun useDefaultRuntimeLibraryDirectory() {
+            LibraryLoader.useDefaultRuntimeLibraryDirectory()
         }
     }
 

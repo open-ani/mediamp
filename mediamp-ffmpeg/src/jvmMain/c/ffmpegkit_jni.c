@@ -4,18 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include "libavutil/log.h"
+#if defined(__ANDROID__)
+#include "libavcodec/jni.h"
+#endif
 #if defined(_WIN32)
 #define strdup _strdup
-#else
-#include <dlfcn.h>
 #endif
 
 int ffmpegkit_execute(int argc, char **argv);
 typedef void (*ffmpegkit_log_callback_fn)(int level, const char *message);
 void ffmpegkit_set_log_callback(ffmpegkit_log_callback_fn callback);
-
-typedef int (*ffmpeg_av_jni_set_java_vm_fn)(void *vm, void *log_ctx);
-typedef int (*ffmpeg_av_jni_set_android_app_ctx_fn)(void *app_ctx, void *log_ctx);
 
 static JavaVM *g_java_vm = NULL;
 static jobject g_log_dispatch_class = NULL;
@@ -97,18 +95,14 @@ static void ffmpegkit_jvm_log_callback(int level, const char *message) {
 }
 
 static void configure_android_jni_context(JNIEnv *env) {
-#if defined(__ANDROID__)
-    ffmpeg_av_jni_set_java_vm_fn set_java_vm = (ffmpeg_av_jni_set_java_vm_fn)dlsym(RTLD_DEFAULT, "av_jni_set_java_vm");
-    if (set_java_vm != NULL && g_java_vm != NULL) {
-        set_java_vm(g_java_vm, NULL);
-    }
-    ffmpeg_av_jni_set_android_app_ctx_fn set_android_app_ctx =
-        (ffmpeg_av_jni_set_android_app_ctx_fn)dlsym(RTLD_DEFAULT, "av_jni_set_android_app_ctx");
-    if (set_android_app_ctx != NULL && g_android_app_context != NULL) {
-        set_android_app_ctx(g_android_app_context, NULL);
-    }
-#else
     (void)env;
+#if defined(__ANDROID__)
+    if (g_java_vm != NULL) {
+        av_jni_set_java_vm(g_java_vm, NULL);
+    }
+    if (g_android_app_context != NULL) {
+        av_jni_set_android_app_ctx(g_android_app_context, NULL);
+    }
 #endif
 }
 

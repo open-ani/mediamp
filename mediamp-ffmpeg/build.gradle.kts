@@ -28,6 +28,9 @@ kotlin {
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
         }
+        getByName("jvmMain").dependencies {
+            implementation(projects.mediampNativeLoader)
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)

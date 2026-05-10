@@ -113,6 +113,12 @@ public actual class FFmpegKit actual constructor() {
             configuredLogHandler = handler
         }
 
+        public actual fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean) {
+        }
+
+        public actual fun useDefaultRuntimeLibraryDirectory() {
+        }
+
         private fun withActiveLogCollector(collector: FFmpegLogLineCollector, block: () -> Int): Int {
             logCollectorLock.lock()
             activeLogCollector = collector

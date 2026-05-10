@@ -11,7 +11,7 @@ package org.openani.mediamp.ffmpeg
 /**
  * Cross-platform entry point for executing the FFmpeg command-line tool.
  *
- * On JVM Desktop, the ffmpeg binary is extracted from the runtime JAR on first use.
+ * On JVM Desktop, the runtime is loaded from the configured directory or extracted from the runtime JAR.
  * On Android, the binary is bundled in the APK's native libs directory.
  * On iOS, the binary is bundled in the app's framework.
  */
@@ -24,6 +24,22 @@ public expect class FFmpegKit() {
          * Pass `null` to clear the handler.
          */
         public fun setLogHandler(handler: FFmpegLogHandler?)
+
+        /**
+         * Configure the desktop JVM runtime directory used to resolve FFmpeg native libraries.
+         *
+         * Desktop callers must invoke either this function or [useDefaultRuntimeLibraryDirectory] before first use.
+         * Non-desktop platforms ignore this setting.
+         */
+        public fun setRuntimeLibraryDirectory(path: String, extractRuntimeLibrary: Boolean = true)
+
+        /**
+         * Configure desktop JVM FFmpeg runtime loading to use a temporary extraction directory.
+         *
+         * Desktop callers must invoke either this function or [setRuntimeLibraryDirectory] before first use.
+         * Non-desktop platforms ignore this setting.
+         */
+        public fun useDefaultRuntimeLibraryDirectory()
     }
 
     /**
