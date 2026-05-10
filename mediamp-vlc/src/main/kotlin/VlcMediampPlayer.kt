@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
  *
@@ -16,13 +16,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -56,8 +54,8 @@ import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
-import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import org.openani.mediamp.vlc.internal.VlcPlaybackStateMapper
+import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
 import uk.co.caprica.vlcj.media.Media
@@ -70,8 +68,8 @@ import uk.co.caprica.vlcj.player.base.MediaPlayerEventAdapter
 import uk.co.caprica.vlcj.player.component.CallbackMediaPlayerComponent
 import uk.co.caprica.vlcj.player.embedded.EmbeddedMediaPlayer
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind
@@ -389,14 +387,14 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
         is SeekableInputMediaData -> {
             playbackStateMapper.reset()
-            val awaitContext = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
+            val awaitJob = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
             try {
-                val input = data.createInput(currentCoroutineContext())
+                val input = data.createInput(backgroundScope.coroutineContext + awaitJob)
 
                 object : VlcjData(
                     data,
                     {
-                        val new = SeekableInputCallbackMedia(input) { awaitContext.cancel() }
+                        val new = SeekableInputCallbackMedia(input) { awaitJob.cancel() }
                         lastMedia = new
                         player.submit {
                             player.media().play(new, *data.options.toTypedArray())
@@ -405,7 +403,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 ) {
                     override fun release() {
                         logger.trace { "VLC ReleaseResource: begin" }
-                        awaitContext.cancel()
+                        awaitJob.cancel()
                         logger.trace { "VLC ReleaseResource: close input" }
                         input.close()
                         logger.trace { "VLC ReleaseResource: close VideoData" }
@@ -417,7 +415,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     playbackState.value = PlaybackState.READY
                 }
             } catch (e: Throwable) {
-                awaitContext.cancel(CancellationException("Failed to create input", e))
+                awaitJob.cancel(CancellationException("Failed to create input", e))
                 throw e
             }
         }
@@ -694,6 +692,7 @@ internal class VlcBuffering(
                     currentState == PlaybackState.PAUSED_BUFFERING -> true
                     currentState == PlaybackState.PLAYING && lastState == PlaybackState.PLAYING ->
                         lastPosition == currentPosition
+
                     else -> false
                 },
             )
