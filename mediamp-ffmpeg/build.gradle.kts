@@ -32,34 +32,7 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
-        desktopMain.dependencies {
-            implementation(libs.ffmpeg.platform)
-        }
-        androidMain.dependencies {
-            // Pure Java API — native .so files are provided via jniLibs below.
-            implementation(libs.ffmpeg)
-        }
-        androidHostTest.dependencies {
-            // JavaCPP platform libs needed to load native code in host JVM tests
-            implementation(libs.ffmpeg.platform)
-        }
     }
-}
-
-// Custom configuration to resolve JavaCPP JNI bridge .so files per ABI.
-// We use the base artifact (libs.ffmpeg) for compilation, but still need
-// libjni*.so at runtime.  This configuration fetches the classifier jars
-// without adding them as transitive dependencies of the published aar.
-val javacppNative by configurations.creating {
-    isTransitive = false
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
-
-dependencies {
-    val ffmpegVersion = libs.versions.ffmpeg.get()
-    javacppNative("org.bytedeco:ffmpeg:$ffmpegVersion:android-arm64")
-    javacppNative("org.bytedeco:ffmpeg:$ffmpegVersion:android-x86_64")
 }
 
 configureMediampFfmpegModule()
@@ -73,19 +46,16 @@ kotlin {
             val frameworkSearchPath = project.layout.buildDirectory.dir("apple-framework/$capitalizedTargetName")
             val frameworkSearchPathValue = frameworkSearchPath.get().asFile.absolutePath
 
-            val ffmpegSrcDir = project.projectDir.resolve("ffmpeg")
-            val stubHeadersDir = project.projectDir.resolve("src/nativeInterop/cinterop/stub-headers")
-
-            compilations.getByName("main").cinterops.create("libavffi") {
-                defFile(project.file("src/nativeInterop/cinterop/libav_ffi.def"))
-                compilerOpts("-I${ffmpegSrcDir.absolutePath}", "-I${stubHeadersDir.absolutePath}")
+            compilations.getByName("main").cinterops.create("mediampffmpegkit") {
+                defFile(project.file("src/nativeInterop/cinterop/mediamp_ffmpegkit.def"))
+                compilerOpts("-F$frameworkSearchPathValue")
             }
             binaries.configureEach {
                 linkerOpts("-F$frameworkSearchPathValue", "-framework", "MediampFFmpegKit")
             }
 
             if (project.tasks.names.contains(frameworkTaskName)) {
-                project.tasks.named("cinteropLibavffi$capitalizedTargetName") {
+                project.tasks.named("cinteropMediampffmpegkit$capitalizedTargetName") {
                     dependsOn(frameworkTaskName)
                 }
                 project.tasks.matching { task ->
@@ -96,18 +66,4 @@ kotlin {
                 }
             }
         }
-}
-
-// Copy Apple framework into test bundle so dynamic linker can find it at runtime.
-// Only register on macOS hosts where the iOS framework task exists.
-if (project.tasks.names.contains("ffmpegAppleFrameworkIosSimulatorArm64")) {
-    val copyiOSFrameworkForTests = tasks.register<Copy>("copyiOSFrameworkForTests") {
-        dependsOn("ffmpegAppleFrameworkIosSimulatorArm64")
-        from(project.layout.buildDirectory.dir("apple-framework/IosSimulatorArm64/MediampFFmpegKit.framework"))
-        into(project.layout.buildDirectory.dir("bin/iosSimulatorArm64/debugTest/Frameworks/MediampFFmpegKit.framework"))
-    }
-
-    tasks.named("linkDebugTestIosSimulatorArm64") {
-        dependsOn(copyiOSFrameworkForTests)
-    }
 }

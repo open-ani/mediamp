@@ -215,6 +215,8 @@ private fun runtimeManifestEntries(
         .filter { candidate -> candidate.isFile && "include" !in candidate.relativeTo(outputDir).invariantPathSegments() }
         .toList()
     val sharedLibraries = allFiles.filter { candidate -> isSharedRuntimeLibrary(candidate, target.os) }
+    val wrapperFiles = sharedLibraries.filter { candidate -> candidate.name.equals(wrapperLibraryName(target.os), ignoreCase = true) }
+    val dependencyLibraries = sharedLibraries - wrapperFiles.toSet()
 
     val orderedShared = when (target.os) {
         "windows" -> {
@@ -222,12 +224,12 @@ private fun runtimeManifestEntries(
             orderWindowsDllsByDependencies(
                 execOperations = execOperations,
                 objdumpExecutable = resolveWindowsObjdump(msys2Root),
-                dllFiles = sharedLibraries,
+                dllFiles = dependencyLibraries,
             )
         }
 
         else -> orderLibrariesByPrefixes(
-            files = sharedLibraries,
+            files = dependencyLibraries,
             orderedPrefixes = listOf(
                 sharedLibraryFamilyName(target.os, "avutil"),
                 sharedLibraryFamilyName(target.os, "swresample"),
@@ -244,9 +246,16 @@ private fun runtimeManifestEntries(
     val orderedNonShared = (allFiles - sharedLibraries.toSet())
         .sortedBy { manifestRelativePath(outputDir, it) }
 
-    return (orderedShared + orderedNonShared)
+    return (orderedShared + wrapperFiles.sortedBy { it.name.lowercase() } + orderedNonShared)
         .map { manifestRelativePath(outputDir, it) }
 }
+
+private fun wrapperLibraryName(os: String): String =
+    when (os) {
+        "windows" -> "ffmpegkitjni.dll"
+        "macos" -> "libffmpegkitjni.dylib"
+        else -> "libffmpegkitjni.so"
+    }
 
 private fun sharedLibraryFamilyName(os: String, baseName: String): String =
     when (os) {

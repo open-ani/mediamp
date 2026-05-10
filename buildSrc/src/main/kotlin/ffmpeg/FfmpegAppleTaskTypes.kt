@@ -12,11 +12,13 @@ import nativebuild.pathForShell
 import nativebuild.shellQuote
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.logging.Logger
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
@@ -39,6 +41,12 @@ abstract class FfmpegAppleFrameworkTask : DefaultTask() {
     @get:InputDirectory
     abstract val installDir: DirectoryProperty
 
+    @get:InputFile
+    abstract val wrapperSource: RegularFileProperty
+
+    @get:InputFile
+    abstract val publicHeaderSource: RegularFileProperty
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -51,10 +59,16 @@ abstract class FfmpegAppleFrameworkTask : DefaultTask() {
         val frameworkNameValue = frameworkName.get()
         val buildDir = buildDirPath.get().asFile
         val installDirFile = installDir.get().asFile
+        val publicHeader = publicHeaderSource.get().asFile
+        val headerDir = frameworkDir.resolve("Headers")
+        val modulesDir = frameworkDir.resolve("Modules")
 
         frameworkDir.deleteRecursively()
-        frameworkDir.mkdirs()
+        headerDir.mkdirs()
+        modulesDir.mkdirs()
 
+        publicHeader.copyTo(headerDir.resolve(publicHeader.name), overwrite = true)
+        modulesDir.resolve("module.modulemap").writeText(buildAppleModuleMap(frameworkNameValue))
         frameworkDir.resolve("Info.plist").writeText(
             buildAppleFrameworkInfoPlist(
                 frameworkName = frameworkNameValue,
@@ -67,6 +81,7 @@ abstract class FfmpegAppleFrameworkTask : DefaultTask() {
             logger = logger,
             targetName = targetName.get(),
             frameworkName = frameworkNameValue,
+            wrapperSource = wrapperSource.get().asFile,
             buildDir = buildDir,
             installDir = installDirFile,
             frameworkBinary = frameworkDir.resolve(frameworkNameValue),
@@ -119,15 +134,29 @@ private fun buildAppleFrameworkBinary(
     logger: Logger,
     targetName: String,
     frameworkName: String,
+    wrapperSource: File,
     buildDir: File,
     installDir: File,
     frameworkBinary: File,
     ffmpegLibNames: List<String>,
 ) {
+    require(wrapperSource.isFile) {
+        "FFmpeg wrapper source not found at ${wrapperSource.absolutePath}"
+    }
+
     val config = readFfmpegConfig(buildDir.resolve("ffbuild/config.mak"))
+    val fftoolsDir = buildDir.resolve("fftools")
+    val fftoolsObjects = fftoolsDir.walkTopDown()
+        .filter { it.isFile && it.extension == "o" }
+        .map(File::getAbsolutePath)
+        .toList()
+    require(fftoolsObjects.isNotEmpty()) {
+        "No fftools object files found in $fftoolsDir while building $frameworkName."
+    }
 
     val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys = false))
     val outputPath = shellQuote(pathForShell(frameworkBinary, windowsMsys = false))
+    val wrapperPath = shellQuote(pathForShell(wrapperSource, windowsMsys = false))
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
         buildDir.resolve("source"),
@@ -139,7 +168,7 @@ private fun buildAppleFrameworkBinary(
         installDir.resolve("lib/lib$libName.a").also {
             require(it.isFile) { "Expected FFmpeg static library at ${it.absolutePath}" }
         }
-    }.joinToString(" ") { "-Wl,-force_load,${shellQuote(pathForShell(it, windowsMsys = false))}" }
+    }.joinToString(" ") { shellQuote(pathForShell(it, windowsMsys = false)) }
     val extraLibs = expandMakeVariables(config["EXTRALIBS"].orEmpty(), config).trim()
 
     val command = buildString {
@@ -157,6 +186,10 @@ private fun buildAppleFrameworkBinary(
         append(" -o ")
         append(outputPath)
         append(' ')
+        append(wrapperPath)
+        append(' ')
+        append(fftoolsObjects.joinToString(" ") { shellQuote(pathForShell(File(it), windowsMsys = false)) })
+        append(' ')
         append(staticLibraries)
         append(" -lm -pthread -framework CoreFoundation -framework CoreVideo -framework CoreMedia -framework Security")
         if (extraLibs.isNotEmpty()) {
@@ -171,6 +204,15 @@ private fun buildAppleFrameworkBinary(
 
     logger.info("Built Apple FFmpeg framework binary for $targetName: $frameworkBinary")
 }
+
+private fun buildAppleModuleMap(frameworkName: String): String = """
+framework module $frameworkName {
+    umbrella header "$frameworkName.h"
+
+    export *
+    module * { export * }
+}
+""".trimIndent() + "\n"
 
 private fun buildAppleFrameworkInfoPlist(
     frameworkName: String,
