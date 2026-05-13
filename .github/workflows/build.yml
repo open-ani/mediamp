@@ -55,6 +55,80 @@ jobs:
     - id: 'step-6'
       name: 'Build FFmpeg artifacts'
       run: './gradlew :mediamp-ffmpeg:ffmpegBuildAll "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.ffmpeg.buildvariant=windows"'
+  build_github-windows-11-arm64:
+    name: 'Build (Windows 11 AArch64 (GitHub))'
+    runs-on:
+    - 'windows-11-arm'
+    permissions:
+      actions: 'write'
+    steps:
+    - id: 'step-0'
+      uses: 'actions/checkout@v4'
+      with:
+        lfs: 'true'
+        submodules: 'recursive'
+    - id: 'step-1'
+      name: 'Setup JDK 17 for Windows ARM64'
+      uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+      with:
+        java-version: '17'
+        distribution: 'microsoft'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+    - id: 'step-2'
+      name: 'Setup JBR 21 for other OS'
+      uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+      with:
+        java-version: '21'
+        distribution: 'jetbrains'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+    - id: 'step-3'
+      run: 'echo "jvm.toolchain.version=21" >> local.properties'
+    - id: 'step-4'
+      name: 'Setup MSYS2 clangarm64'
+      uses: 'msys2/setup-msys2@v2'
+      with:
+        msystem: 'CLANGARM64'
+        update: 'true'
+        install: |-
+          mingw-w64-clang-aarch64-clang
+          mingw-w64-clang-aarch64-lld
+          mingw-w64-clang-aarch64-pkgconf
+          mingw-w64-clang-aarch64-nasm
+          mingw-w64-clang-aarch64-openssl
+          mingw-w64-clang-aarch64-ca-certificates
+    - id: 'step-5'
+      name: 'Configure MSYS2 root'
+      run: |-
+        $msys2Dir = '${{ steps.step-4.outputs.msys2-location }}'.Replace('\', '/')
+        "msys2.dir=$msys2Dir" >> local.properties
+    - id: 'step-6'
+      name: 'Setup Gradle'
+      uses: 'gradle/actions/setup-gradle@v3'
+      with:
+        cache-disabled: 'true'
+    - id: 'step-7'
+      name: 'Clean and download dependencies'
+      uses: 'nick-fields/retry@v2'
+      with:
+        timeout_minutes: '60'
+        max_attempts: '3'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-8'
+      name: 'Build FFmpeg artifacts'
+      run: './gradlew :mediamp-ffmpeg:ffmpegBuildAll "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-9'
+      name: 'Build FFmpeg runtime jar'
+      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-10'
+      name: 'Upload FFmpeg runtime jar'
+      uses: 'actions/upload-artifact@v4'
+      with:
+        name: 'mediamp-ffmpeg-runtime-windows-arm64'
+        path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar'
+        if-no-files-found: 'error'
+        overwrite: 'true'
   build_github-ubuntu-2404:
     name: 'Build (Ubuntu 24.04 x86_64)'
     runs-on:

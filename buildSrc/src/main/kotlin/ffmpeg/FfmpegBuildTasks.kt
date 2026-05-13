@@ -59,7 +59,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     when (context.hostOs) {
         Os.Windows -> {
             if (context.isBuildVariantEnabled("windows")) {
-                previousTargetTask = registerFfmpegTasks(context, context.windowsTarget(), sourceTemplateTask, sourceTemplateDir, previousTargetTask)
+                previousTargetTask = registerFfmpegTasks(context, context.hostWindowsTarget(), sourceTemplateTask, sourceTemplateDir, previousTargetTask)
             } else {
                 project.logger.lifecycle(
                     "Skipping FFmpeg windows targets: ${context.buildProperties.buildVariantPropertyName} does not include 'windows'.",
@@ -117,7 +117,12 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
     }
 }
 
-internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuildTarget(
+internal fun FfmpegBuildContext.hostWindowsTarget(): FfmpegBuildTarget = when (hostArch) {
+    Arch.AARCH64 -> windowsArm64Target()
+    else -> windowsX64Target()
+}
+
+private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget = FfmpegBuildTarget(
     name = "WindowsX64",
     extraFlags = listOf(
         "--arch=x86_64",
@@ -135,6 +140,45 @@ internal fun FfmpegBuildContext.windowsTarget(): FfmpegBuildTarget = FfmpegBuild
     shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
     libExtension = "dll",
     libPrefix = "",
+    msys2Packages = listOf(
+        "make",
+        "diffutils",
+        "pkg-config",
+        "mingw-w64-ucrt-x86_64-ca-certificates",
+        "mingw-w64-ucrt-x86_64-gcc",
+        "mingw-w64-ucrt-x86_64-nasm",
+        "mingw-w64-ucrt-x86_64-openssl",
+    ),
+)
+
+private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget = FfmpegBuildTarget(
+    name = "WindowsArm64",
+    extraFlags = listOf(
+        "--arch=aarch64",
+        "--target-os=mingw32",
+        "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
+        "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
+        "--enable-openssl",
+        "--enable-protocol=udp",
+        "--enable-protocol=tcp",
+        "--enable-protocol=tls",
+        "--enable-protocol=http",
+        "--enable-protocol=https",
+    ),
+    env = mapOf("MSYSTEM" to "CLANGARM64"),
+    shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
+    libExtension = "dll",
+    libPrefix = "",
+    msys2Packages = listOf(
+        "make",
+        "diffutils",
+        "pkg-config",
+        "mingw-w64-clang-aarch64-ca-certificates",
+        "mingw-w64-clang-aarch64-clang",
+        "mingw-w64-clang-aarch64-nasm",
+        "mingw-w64-clang-aarch64-openssl",
+        "mingw-w64-clang-aarch64-pkgconf",
+    ),
 )
 
 private fun registerAndroidTargetsIfAvailable(
@@ -192,6 +236,7 @@ private fun registerFfmpegTasks(
         if (msys2Dir != null) {
             this.msys2Dir.set(msys2Dir)
         }
+        msys2Packages.set(target.msys2Packages)
     }
 
     val buildTask = project.tasks.register<FfmpegBuildTask>("ffmpegBuild${target.name}") {
@@ -222,7 +267,7 @@ private fun registerFfmpegTasks(
         buildDirPath.set(buildDir)
         this.installDir.set(installDir)
         this.outputDir.set(project.layout.buildDirectory.dir("ffmpeg-output/${target.name}"))
-        if (target.name.startsWith("Android") || target.name == "LinuxX64" || target.name == "MacosArm64" || target.name == "MacosX64" || target.name == "WindowsX64") {
+        if (target.name.startsWith("Android") || target.name == "LinuxX64" || target.name == "MacosArm64" || target.name == "MacosX64" || target.name.startsWith("Windows")) {
             commandWrapperSource.set(context.commandWrapperSource)
             jniWrapperSource.set(context.jniWrapperSource)
         }

@@ -51,10 +51,11 @@ internal fun orderLibrariesByPrefixes(
     }
 }
 
-internal fun resolveWindowsObjdump(msys2Dir: File): File =
-    msys2Dir.resolve("ucrt64/bin/objdump.exe").also { objdump ->
+internal fun resolveWindowsObjdump(msys2Dir: File, binDirName: String = "ucrt64/bin"): File =
+    (msys2Dir.resolve("$binDirName/objdump.exe").takeIf(File::isFile)
+        ?: msys2Dir.resolve("$binDirName/llvm-objdump.exe")).also { objdump ->
         require(objdump.isFile) {
-            "GNU objdump was not found at ${objdump.absolutePath}. Ensure MSYS2 UCRT64 binutils is installed."
+            "GNU objdump was not found under ${msys2Dir.resolve(binDirName).absolutePath}."
         }
     }
 

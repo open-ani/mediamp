@@ -223,7 +223,10 @@ private fun runtimeManifestEntries(
             val msys2Root = msys2Dir ?: error("MSYS2 directory must be available when packaging Windows FFmpeg runtimes.")
             orderWindowsDllsByDependencies(
                 execOperations = execOperations,
-                objdumpExecutable = resolveWindowsObjdump(msys2Root),
+                objdumpExecutable = resolveWindowsObjdump(
+                    msys2Root,
+                    windowsMsysBinDir(target),
+                ),
                 dllFiles = dependencyLibraries,
             )
         }
@@ -249,6 +252,13 @@ private fun runtimeManifestEntries(
     return (orderedShared + wrapperFiles.sortedBy { it.name.lowercase() } + orderedNonShared)
         .map { manifestRelativePath(outputDir, it) }
 }
+
+private fun windowsMsysBinDir(target: DesktopRuntimeTarget): String =
+    when (target.targetName) {
+        "WindowsArm64" -> "clangarm64/bin"
+        "WindowsX64" -> "ucrt64/bin"
+        else -> error("Unknown Windows FFmpeg runtime target: ${target.targetName}")
+    }
 
 private fun wrapperLibraryName(os: String): String =
     when (os) {

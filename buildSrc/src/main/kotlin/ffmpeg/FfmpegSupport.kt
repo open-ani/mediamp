@@ -36,6 +36,7 @@ internal data class FfmpegBuildTarget(
     val shell: String = "bash",
     val libExtension: String,
     val libPrefix: String = "lib",
+    val msys2Packages: List<String> = emptyList(),
 )
 
 internal data class AppleRuntimeTarget(
