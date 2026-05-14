@@ -72,7 +72,7 @@ abstract class FfmpegConfigureTask : DefaultTask() {
         val sourceDir = buildDir.resolve("source")
         val configureFile = sourceDir.resolve("configure")
         require(templateSourceDir.resolve("configure").isFile) {
-            "FFmpeg source tree is missing configure at ${templateSourceDir.absolutePath}"
+            missingFfmpegSourceTreeMessage(templateSourceDir)
         }
         logger.lifecycle("Configuring FFmpeg with buildDir=${buildDir.absolutePath} configure=${configureFile.absolutePath}")
         recreateDirectory(buildDir)
@@ -136,7 +136,7 @@ abstract class FfmpegConfigureTask : DefaultTask() {
 
     private fun copySourceTree(src: File, dst: File) {
         require(src.resolve("configure").isFile) {
-            "FFmpeg source tree is missing configure at ${src.absolutePath}"
+            missingFfmpegSourceTreeMessage(src)
         }
         copyTreeRecursively(src, dst)
         restoreExecutablePermissions(src, dst)

@@ -5,6 +5,7 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -23,6 +24,10 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
 
     @get:Input
     abstract val sourceDisplayName: Property<String>
+
+    @get:Input
+    @get:Optional
+    abstract val missingSourceMessage: Property<String>
 
     @get:Input
     abstract val preserveSymbolicLinks: Property<Boolean>
@@ -48,7 +53,8 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
         val marker = markerFileRelativePath.get()
 
         require(src.resolve(marker).isFile) {
-            "${sourceDisplayName.get()} source tree is missing $marker at ${src.absolutePath}"
+            missingSourceMessage.orNull
+                ?: "${sourceDisplayName.get()} source tree is missing $marker at ${src.absolutePath}"
         }
 
         recreateDirectory(dst)

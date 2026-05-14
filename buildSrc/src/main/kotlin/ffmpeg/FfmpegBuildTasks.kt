@@ -52,6 +52,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
         outputDir.set(sourceTemplateDir)
         markerFileRelativePath.set("configure")
         sourceDisplayName.set("FFmpeg")
+        missingSourceMessage.set(missingFfmpegSourceTreeMessage(context.ffmpegSrcDir))
         preserveExecutablePermissions.set(true)
     }
     var previousTargetTask: TaskProvider<out Task>? = null

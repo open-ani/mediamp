@@ -44,6 +44,23 @@ internal data class AppleRuntimeTarget(
     val ffmpegTargetName: String,
 )
 
+internal fun missingFfmpegSourceTreeMessage(sourceDir: File): String = """
+    FFmpeg source tree is missing at ${sourceDir.absolutePath}.
+
+    The FFmpeg sources are a git submodule and have not been checked out.
+
+    If you already cloned this repository, run:
+      git submodule update --init --recursive mediamp-ffmpeg/ffmpeg
+
+    For a fresh checkout, clone with submodules:
+      git clone --recursive git@github.com:open-ani/mediamp.git
+
+    Or clone first and initialize submodules afterwards:
+      git clone git@github.com:open-ani/mediamp.git
+      cd mediamp
+      git submodule update --init --recursive
+""".trimIndent()
+
 internal class FfmpegBuildContext(
     val project: Project,
     val ffmpegPatch: File
