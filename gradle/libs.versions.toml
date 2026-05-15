@@ -6,6 +6,7 @@ kotlin = "2.3.10"
 kotlinx-coroutines = "1.10.2" # https://github.com/Kotlin/kotlinx.coroutines/releases
 kotlinx-atomicfu = "0.31.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
 kotlinx-io = "0.8.2" # https://github.com/Kotlin/kotlinx-io/releases
+kotlinx-browser = "0.3" # https://kotlinlang.org/docs/wasm-js-interop.html#web-related-browser-apis
 
 #
 jna = "5.13.0" # 不要轻易改这个版本, 它可能导致 VLC 兼容性问题
@@ -60,6 +61,7 @@ kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.re
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinx-browser" }
 atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "kotlinx-atomicfu" }
 
 # Used by `mpp-lib-targets`. Don't remove.

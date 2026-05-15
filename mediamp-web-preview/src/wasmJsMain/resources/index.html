@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaMP Web Preview</title>
+    <style>
+        html, body, #root {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #111318;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="mediamp-web-preview.js"></script>
+<script>
+    window.addEventListener("load", async () => {
+        const preview = await window["mediamp-web-preview"];
+        const root = document.getElementById("root");
+        if (preview && preview._initialize && root && !root.shadowRoot) {
+            preview._initialize();
+        }
+    });
+</script>
+</body>
+</html>

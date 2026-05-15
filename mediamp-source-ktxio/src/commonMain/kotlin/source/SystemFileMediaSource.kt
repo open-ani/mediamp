@@ -9,8 +9,6 @@
 package org.openani.mediamp.source
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.io.IOException
@@ -20,6 +18,7 @@ import kotlinx.io.files.SystemFileSystem
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.SystemFileSeekableInput
+import org.openani.mediamp.io.SystemFileIoDispatcher
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -49,7 +48,7 @@ internal class SystemFileMediaDataImpl(
     override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput {
         var input: SeekableInput? = null
         try {
-            return withContext(Dispatchers.IO) {
+            return withContext(SystemFileIoDispatcher) {
                 SystemFileSeekableInput(file, bufferSize).also {
                     input = it
                     coroutineContext.ensureActive()

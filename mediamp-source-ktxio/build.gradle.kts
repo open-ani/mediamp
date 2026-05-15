@@ -1,3 +1,5 @@
+@file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+
 /*
  * Copyright (C) 2024-2025 OpenAni and contributors.
  *
@@ -22,6 +24,9 @@ description = "MediaMP data source implementation for Kotlinx IO"
 
 kotlin {
     explicitApi()
+    wasmJs {
+        browser()
+    }
     androidLibrary {
         namespace = "org.openani.mediamp.source.ktxio"
     }
@@ -30,7 +35,6 @@ kotlin {
             api(projects.mediampApi)
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.io.core)
-            compileOnly(libs.androidx.annotation)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
