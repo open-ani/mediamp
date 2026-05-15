@@ -1,3 +1,5 @@
+@file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+
 /*
  * Copyright (C) 2024-2025 OpenAni and contributors.
  *
@@ -26,6 +28,9 @@ description = "Core API for MediaMP"
 
 kotlin {
     explicitApi()
+    wasmJs {
+        browser()
+    }
     androidLibrary {
         namespace = "org.openani.mediamp.api"
         /*publishLibraryVariants("release")*/
@@ -33,7 +38,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.io.core) // TODO: 2024/12/16 remove 
-            compileOnly(libs.androidx.annotation)
+            api(libs.androidx.annotation)
             api(libs.kotlinx.coroutines.core)
             api(compose.runtime)
         }
@@ -47,11 +52,16 @@ kotlin {
         desktopMain.dependencies {
         }
         iosMain.dependencies {
-            implementation(libs.androidx.annotation)
             implementation(projects.mediampInternalUtils)
         }
         androidMain.dependencies {
-            api(libs.androidx.annotation)
+        }
+        wasmJsMain.dependencies {
+            api(libs.kotlinx.browser)
+        }
+        wasmJsTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
         }
     }
 }

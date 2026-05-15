@@ -35,6 +35,7 @@ include(":mediamp-native-loader")
 include(":mediamp-all")
 
 include(":mediamp-test")
+include(":mediamp-web-preview")
 
 //include(":mediamp-preview")
 include(":mediamp-source-ktxio")

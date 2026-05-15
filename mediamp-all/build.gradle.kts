@@ -1,3 +1,5 @@
+@file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+
 /*
  * Copyright (C) 2024-2025 OpenAni and contributors.
  *
@@ -23,6 +25,9 @@ description = "MediaMP all-in-one bundle for Kotlin Multiplatform targeting Andr
 
 kotlin {
     explicitApi()
+    wasmJs {
+        browser()
+    }
     androidLibrary {
         namespace = "org.openani.mediamp.all"
     }
