@@ -17,6 +17,7 @@ Supported targets and backends:
 |  JVM on macOS  | x86_64, AArch64 | VLC            |
 |  JVM on Linux  | x86_64          | VLC            |
 |      iOS       | AArch64         | AVKit          |
+| Browser (wasm) | Any             | HTMLVideoElement |
 
 Platforms that are not listed above are not supported yet. Feel free to file an issue if you need
 them.
@@ -59,6 +60,7 @@ The `-all` bundle includes:
     - With `media3-exoplayer-hls` for streaming `.m3u8`
 - VLC backend for JVM
 - AVKit backend for iOS
+- Browser player for Compose Web / `wasmJs`
 
 > [!NOTE]
 > The VLC backend requires VLC to be installed on the user's OS.
