@@ -122,6 +122,94 @@ jobs:
         path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-x64.jar'
         if-no-files-found: 'error'
         overwrite: 'true'
+  release_github-windows-11-arm64:
+    name: 'Windows 11 AArch64 (GitHub)'
+    runs-on:
+    - 'windows-11-arm'
+    needs:
+    - 'create-release'
+    steps:
+    - id: 'step-0'
+      uses: 'actions/checkout@v4'
+      with:
+        lfs: 'true'
+        submodules: 'recursive'
+    - id: 'step-1'
+      name: 'Get Tag'
+      uses: 'dawidd6/action-get-tag@v1'
+    - id: 'step-2'
+      uses: 'bhowell2/github-substring-action@v1.0.0'
+      with:
+        value: '${{ steps.step-1.outputs.tag }}'
+        index_of_str: 'v'
+        default_return_value: '${{ steps.step-1.outputs.tag }}'
+    - id: 'step-3'
+      name: 'Setup JDK 17 for Windows ARM64'
+      uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+      with:
+        java-version: '17'
+        distribution: 'microsoft'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+    - id: 'step-4'
+      name: 'Setup JBR 21 for other OS'
+      uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+      with:
+        java-version: '21'
+        distribution: 'jetbrains'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+    - id: 'step-5'
+      run: 'echo "jvm.toolchain.version=21" >> local.properties'
+    - id: 'step-6'
+      name: 'Setup MSYS2 clangarm64'
+      uses: 'msys2/setup-msys2@v2'
+      with:
+        msystem: 'CLANGARM64'
+        update: 'true'
+        install: |-
+          mingw-w64-clang-aarch64-clang
+          mingw-w64-clang-aarch64-lld
+          mingw-w64-clang-aarch64-pkgconf
+          mingw-w64-clang-aarch64-nasm
+          mingw-w64-clang-aarch64-openssl
+          mingw-w64-clang-aarch64-ca-certificates
+    - id: 'step-7'
+      name: 'Configure MSYS2 root'
+      run: |-
+        $msys2Dir = '${{ steps.step-6.outputs.msys2-location }}'.Replace('\', '/')
+        "msys2.dir=$msys2Dir" >> local.properties
+    - id: 'step-8'
+      name: 'Setup Gradle'
+      uses: 'gradle/actions/setup-gradle@v3'
+      with:
+        cache-disabled: 'true'
+    - id: 'step-9'
+      name: 'Clean and download dependencies'
+      uses: 'nick-fields/retry@v2'
+      with:
+        timeout_minutes: '60'
+        max_attempts: '3'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-10'
+      name: 'Update Release Version Name'
+      env:
+        GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
+        CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
+        CI_TAG: '${{ steps.step-1.outputs.tag }}'
+      run: './gradlew updateReleaseVersionNameFromGit "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-11'
+      name: 'Build FFmpeg runtime jar'
+      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+    - id: 'step-12'
+      name: 'Upload FFmpeg runtime jar'
+      uses: 'actions/upload-artifact@v4'
+      with:
+        name: 'mediamp-ffmpeg-runtime-windows-arm64'
+        path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar'
+        if-no-files-found: 'error'
+        overwrite: 'true'
   release_github-ubuntu-2404:
     name: 'Ubuntu 24.04 x86_64'
     runs-on:
@@ -269,6 +357,7 @@ jobs:
     needs:
     - 'create-release'
     - 'release_github-windows-2022'
+    - 'release_github-windows-11-arm64'
     - 'release_github-ubuntu-2404'
     - 'release_github-macos-15-intel'
     if: '${{ github.repository == ''open-ani/mediamp'' }}'
@@ -375,16 +464,21 @@ jobs:
     - id: 'step-14'
       uses: 'actions/download-artifact@v4'
       with:
+        name: 'mediamp-ffmpeg-runtime-windows-arm64'
+        path: 'mediamp-ffmpeg/build/prebuilt-runtime-jars/windows-arm64'
+    - id: 'step-15'
+      uses: 'actions/download-artifact@v4'
+      with:
         name: 'mediamp-ffmpeg-runtime-linux-x64'
         path: 'mediamp-ffmpeg/build/prebuilt-runtime-jars/linux-x64'
-    - id: 'step-15'
+    - id: 'step-16'
       uses: 'actions/download-artifact@v4'
       with:
         name: 'mediamp-ffmpeg-runtime-macos-x64'
         path: 'mediamp-ffmpeg/build/prebuilt-runtime-jars/macos-x64'
-    - id: 'step-16'
-      run: 'ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true'
     - id: 'step-17'
+      run: 'ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true'
+    - id: 'step-18'
       name: 'Publish'
       env:
         ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
@@ -393,7 +487,7 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
       run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android"'
-    - id: 'step-18'
+    - id: 'step-19'
       name: 'Cleanup temp files'
       continue-on-error: true
       run: 'chmod +x ./ci-helper/cleanup-temp-files-macos.sh && ./ci-helper/cleanup-temp-files-macos.sh'

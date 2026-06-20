@@ -53,6 +53,7 @@ import io.github.typesafegithub.workflows.domain.JobOutputs
 import io.github.typesafegithub.workflows.domain.Mode
 import io.github.typesafegithub.workflows.domain.Permission
 import io.github.typesafegithub.workflows.domain.RunnerType
+import io.github.typesafegithub.workflows.domain.actions.CustomAction
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
 import io.github.typesafegithub.workflows.domain.triggers.Push
 import io.github.typesafegithub.workflows.dsl.JobBuilder
@@ -262,6 +263,14 @@ sealed class Runner(
         labels = setOf("windows-2022"),
     )
 
+    object GithubWindows11Arm64 : GithubHosted(
+        id = "github-windows-11-arm64",
+        displayName = "Windows 11 AArch64 (GitHub)",
+        os = OS.WINDOWS,
+        arch = Arch.AARCH64,
+        labels = setOf("windows-11-arm"),
+    )
+
     object GithubMacOS14 : GithubHosted(
         id = "github-macos-14",
         displayName = "macOS 14 AArch64 (GitHub)",
@@ -346,6 +355,20 @@ val buildMatrixInstances = listOf(
         buildAllAndroidAbis = false,
     ),
     MatrixInstance(
+        runner = Runner.GithubWindows11Arm64,
+        uploadApk = false,
+        composeResourceTriple = "windows-arm64",
+        gradleHeap = "4g",
+        uploadDesktopInstallers = true,
+        ffmpegBuildVariant = "windows",
+        extraGradleArgs = listOf(
+            "-P$ANI_ANDROID_ABIS=arm64-v8a",
+        ),
+        buildAllAndroidAbis = false,
+        // The Windows ARM64 job only builds and uploads the FFmpeg runtime artifact.
+        runTests = false,
+    ),
+    MatrixInstance(
         runner = Runner.GithubUbuntu2404,
         name = "Ubuntu 24.04 x86_64",
         uploadApk = false,
@@ -388,6 +411,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 
     with(WithMatrix(matrix)) {
         freeSpace()
+        installJdk17ForWindowsArm64()
         installJbr21()
         chmod777()
         installDependencies()
@@ -395,6 +419,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
 
         gradleCheck()
         buildFfmpegArtifacts()
+        uploadWindowsArm64Runtime()
         verifyAppleXcframeworkPublication()
         // uploadMediampBackendMpv()
 
@@ -535,6 +560,7 @@ workflow(
                 val gitTag = getGitTag()
 
                 freeSpace()
+                installJdk17ForWindowsArm64()
                 installJbr21()
                 chmod777()
                 installDependencies()
@@ -571,6 +597,15 @@ workflow(
             )
         }
     }
+    val winArm64 = addJob(buildMatrixInstances[Runner.GithubWindows11Arm64]) {
+        with(WithMatrix(it)) {
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("windows-arm64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar",
+            )
+        }
+    }
     val linux = addJob(buildMatrixInstances[Runner.GithubUbuntu2404]) {
         with(WithMatrix(it)) {
             uploadFfmpegRuntimeJar(
@@ -590,10 +625,10 @@ workflow(
         }
     }
 
-    addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, linux, macX8664)) { matrix ->
+    addJob(buildMatrixInstances[Runner.SelfHostedMacOS15], needs = listOf(win, winArm64, linux, macX8664)) { matrix ->
         with(WithMatrix(matrix)) {
             uploadFfmpegAppleXcframeworkZip()
-            listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
+            listOf("windows-x64", "windows-arm64", "linux-x64", "macos-x64").forEach { platformId ->
                 uses(
                     action = DownloadArtifact(
                         name = ArtifactNames.ffmpegRuntimeJar(platformId),
@@ -763,6 +798,19 @@ class WithMatrix(
         )
     }
 
+    fun JobBuilder<*>.installJdk17ForWindowsArm64() {
+        if (matrix.isWindowsAArch64) {
+            uses(
+                name = "Setup JDK 17 for Windows ARM64",
+                action = SetupJava_Untyped(
+                    distribution_Untyped = "microsoft",
+                    javaVersion_Untyped = "17",
+                ),
+                env = mapOf("GITHUB_TOKEN" to expr { secrets.GITHUB_TOKEN }),
+            )
+        }
+    }
+
     fun JobBuilder<*>.installGitLfs() {
         when (matrix.os) {
             OS.WINDOWS -> {
@@ -842,6 +890,37 @@ class WithMatrix(
     }
 
     fun JobBuilder<*>.installDependencies() {
+        if (matrix.isWindowsAArch64) {
+            val msys2 = uses(
+                name = "Setup MSYS2 clangarm64",
+                action = CustomAction(
+                    actionOwner = "msys2",
+                    actionName = "setup-msys2",
+                    actionVersion = "v2",
+                    inputs = mapOf(
+                        "msystem" to "CLANGARM64",
+                        "update" to "true",
+                        "install" to """
+                            mingw-w64-clang-aarch64-clang
+                            mingw-w64-clang-aarch64-lld
+                            mingw-w64-clang-aarch64-pkgconf
+                            mingw-w64-clang-aarch64-nasm
+                            mingw-w64-clang-aarch64-openssl
+                            mingw-w64-clang-aarch64-ca-certificates
+                        """.trimIndent(),
+                    ),
+                ),
+            )
+            run(
+                name = "Configure MSYS2 root",
+                command = shell(
+                    $$"""
+                    $msys2Dir = '$${expr { msys2.outputs["msys2-location"] }}'.Replace('\', '/')
+                    "msys2.dir=$msys2Dir" >> local.properties
+                    """.trimIndent(),
+                ),
+            )
+        }
         if (matrix.isMacOSX64) {
             run(
                 name = "Install dependencies for macOS",
@@ -874,6 +953,16 @@ class WithMatrix(
             runGradle(
                 name = "Build FFmpeg artifacts",
                 tasks = arrayOf(":mediamp-ffmpeg:ffmpegBuildAll"),
+            )
+        }
+    }
+
+    fun JobBuilder<*>.uploadWindowsArm64Runtime() {
+        if (matrix.isWindowsAArch64) {
+            uploadFfmpegRuntimeJar(
+                task = ":mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64",
+                artifactName = ArtifactNames.ffmpegRuntimeJar("windows-arm64"),
+                path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar",
             )
         }
     }
@@ -994,6 +1083,7 @@ val MatrixInstance.isUnix get() = (os == OS.UBUNTU) or (os == (OS.MACOS))
 
 val MatrixInstance.isMacOSAArch64 get() = (os == OS.MACOS) and (arch == Arch.AARCH64)
 val MatrixInstance.isMacOSX64 get() = (os == OS.MACOS) and (arch == Arch.X64)
+val MatrixInstance.isWindowsAArch64 get() = (os == OS.WINDOWS) and (arch == Arch.AARCH64)
 fun MatrixInstance.hasFfmpegBuildVariant(variant: String): Boolean {
     return ffmpegBuildVariant?.split(',')?.map { it.trim() }?.any { it == variant } == true
 }

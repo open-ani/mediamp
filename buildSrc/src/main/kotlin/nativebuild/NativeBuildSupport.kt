@@ -46,6 +46,7 @@ internal val DEFAULT_ANDROID_ABIS: List<AndroidAbi> = listOf(
 
 internal val DEFAULT_DESKTOP_RUNTIME_TARGETS: List<DesktopRuntimeTarget> = listOf(
     DesktopRuntimeTarget("windows", "x64", "WindowsX64"),
+    DesktopRuntimeTarget("windows", "arm64", "WindowsArm64"),
     DesktopRuntimeTarget("linux", "x64", "LinuxX64"),
     DesktopRuntimeTarget("macos", "arm64", "MacosArm64"),
     DesktopRuntimeTarget("macos", "x64", "MacosX64"),
