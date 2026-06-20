@@ -367,17 +367,19 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 data,
                 setPlay = {
                     val lowerHeaders = data.headers.mapKeys { it.key.lowercase() }
-                    player.media().play(
-                        data.uri,
-                        *buildList {
-                            add("http-user-agent=${lowerHeaders["user-agent"] ?: "Mozilla/5.0"}")
-                            val referer = lowerHeaders["referer"]
-                            if (referer != null) {
-                                add("http-referrer=${referer}")
-                            }
-                            addAll(data.options)
-                        }.toTypedArray(),
-                    )
+                    player.submit {
+                        player.media().play(
+                            data.uri,
+                            *buildList {
+                                add("http-user-agent=${lowerHeaders["user-agent"] ?: "Mozilla/5.0"}")
+                                val referer = lowerHeaders["referer"]
+                                if (referer != null) {
+                                    add("http-referrer=${referer}")
+                                }
+                                addAll(data.options)
+                            }.toTypedArray(),
+                        )
+                    }
                     lastMedia = null
                 },
             ).also {
@@ -424,7 +426,15 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     override fun resumeImpl() {
         when (val state = playbackState.value) {
             PlaybackState.READY -> {
-                openResource.value?.play()
+                val resource = openResource.value ?: return
+                playbackStateMapper.onPlayRequested(state)
+                try {
+                    resource.play()
+                } catch (e: Throwable) {
+                    playbackStateMapper.reset()
+                    playbackState.value = PlaybackState.ERROR
+                    throw e
+                }
 
                 //        player.media().options().add(*arrayOf(":avcodec-hw=none")) // dxva2
                 //        player.controls().play()
@@ -446,7 +456,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
             return
         }
         @Suppress("NAME_SHADOWING")
-        val positionMillis = positionMillis.coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
+        val positionMillis = coercePositionMillis(positionMillis)
         if (positionMillis == currentPositionMillis.value) {
             return
         }
@@ -467,8 +477,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         if (playbackState.value == PlaybackState.PAUSED) {
             // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
             // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
-            currentPositionMillis.value = (currentPositionMillis.value + deltaMillis)
-                .coerceIn(0, mediaProperties.value?.durationMillis ?: 0)
+            currentPositionMillis.value = coercePositionMillis(currentPositionMillis.value + deltaMillis)
         }
         player.submit {
             setTimeLock.withLock {
@@ -476,6 +485,15 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
             }
         }
         surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
+    }
+
+    private fun coercePositionMillis(positionMillis: Long): Long {
+        val durationMillis = mediaProperties.value?.durationMillis?.takeIf { it > 0 }
+        return if (durationMillis == null) {
+            positionMillis.coerceAtLeast(0)
+        } else {
+            positionMillis.coerceIn(0, durationMillis)
+        }
     }
 
     override fun pauseImpl() {

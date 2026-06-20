@@ -46,8 +46,11 @@ import org.openani.mediamp.source.UriMediaData
  *       |            |           |            |            |          |            |             |
  *       |            |           |            |            |----------+----------->|             |  resume
  *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |          |            |------------>|  (buffering) 
- *       |            |           |            |            |          |            |             |  seekTo/skip
+ *       |            |           |            |            |----------+------------------------->|  resume
+ *       |            |           |            |            |          |            |             |  (buffering)
+ *       |            |           |            |            |          |            |             |
+ *       |            |           |            |            |          |            |------------>|  seekTo/skip
+ *       |            |           |            |            |          |            |             |  (buffering)
  *       |            |           |            |            |          |            |             |  
  *       |            |           |            |            |          |            |<------------|  (buffer complete)
  *       |            |           |            |            |          |            |             |
