@@ -11,10 +11,18 @@ package org.openani.mediamp.vlc.internal
 import org.openani.mediamp.PlaybackState
 
 internal class VlcPlaybackStateMapper {
+    private var hasPlayRequested: Boolean = false
     private var hasPlaybackStarted: Boolean = false
 
     fun reset() {
+        hasPlayRequested = false
         hasPlaybackStarted = false
+    }
+
+    fun onPlayRequested(currentState: PlaybackState) {
+        if (currentState == PlaybackState.READY) {
+            hasPlayRequested = true
+        }
     }
 
     fun onPlaying(currentState: PlaybackState): PlaybackState? {
@@ -22,6 +30,7 @@ internal class VlcPlaybackStateMapper {
             return null
         }
 
+        hasPlayRequested = false
         hasPlaybackStarted = true
         return PlaybackState.PLAYING
     }
@@ -35,12 +44,14 @@ internal class VlcPlaybackStateMapper {
     }
 
     fun onBuffering(currentState: PlaybackState, bufferedPercentage: Float): PlaybackState? {
-        if (!hasPlaybackStarted) {
-            return null
-        }
-
         return if (bufferedPercentage < 100f) {
             when (currentState) {
+                PlaybackState.READY -> if (hasPlayRequested) {
+                    PlaybackState.PAUSED_BUFFERING
+                } else {
+                    null
+                }
+
                 PlaybackState.PLAYING,
                 PlaybackState.PAUSED_BUFFERING,
                 -> PlaybackState.PAUSED_BUFFERING
@@ -48,7 +59,7 @@ internal class VlcPlaybackStateMapper {
                 else -> null
             }
         } else {
-            if (currentState == PlaybackState.PAUSED_BUFFERING) {
+            if (currentState == PlaybackState.PAUSED_BUFFERING && hasPlaybackStarted) {
                 PlaybackState.PLAYING
             } else {
                 null

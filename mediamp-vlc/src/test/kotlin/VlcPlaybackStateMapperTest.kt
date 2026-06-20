@@ -25,6 +25,28 @@ class VlcPlaybackStateMapperTest {
     }
 
     @Test
+    fun `resume can transition directly from ready to playing`() {
+        val mapper = VlcPlaybackStateMapper()
+
+        mapper.onPlayRequested(PlaybackState.READY)
+
+        assertEquals(PlaybackState.PLAYING, mapper.onPlaying(PlaybackState.READY))
+    }
+
+    @Test
+    fun `initial buffering after resume maps ready to paused buffering until playing callback`() {
+        val mapper = VlcPlaybackStateMapper()
+
+        assertNull(mapper.onBuffering(PlaybackState.READY, 20f))
+
+        mapper.onPlayRequested(PlaybackState.READY)
+
+        assertEquals(PlaybackState.PAUSED_BUFFERING, mapper.onBuffering(PlaybackState.READY, 20f))
+        assertNull(mapper.onBuffering(PlaybackState.PAUSED_BUFFERING, 100f))
+        assertEquals(PlaybackState.PLAYING, mapper.onPlaying(PlaybackState.PAUSED_BUFFERING))
+    }
+
+    @Test
     fun `paused player stays paused during seek buffering`() {
         val mapper = VlcPlaybackStateMapper()
         mapper.onPlaying(PlaybackState.READY)

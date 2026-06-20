@@ -90,6 +90,8 @@ public class AVKitMediampPlayer(
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
 
     private var hasPlaybackStarted: Boolean = false
+    private var chaseSeekMillis: Long? = null
+    private var isSeekInProgress: Boolean = false
 
     @OptIn(ExperimentalMediampApi::class)
     private val bufferingFeature = object : Buffering {
@@ -142,6 +144,7 @@ public class AVKitMediampPlayer(
             super.release()
             mediaProperties.value = null
             currentPositionMillis.value = 0L
+            clearChaseSeek()
             bufferingFeature.isBuffering.value = false
             bufferingFeature.bufferedPercentage.value = 0
             hasPlaybackStarted = false
@@ -175,6 +178,7 @@ public class AVKitMediampPlayer(
         bufferingFeature.isBuffering.value = false
         bufferingFeature.bufferedPercentage.value = 0
         currentPositionMillis.value = 0L
+        clearChaseSeek()
         mediaProperties.value = null
 
         val playerItem = when (data) {
@@ -217,6 +221,7 @@ public class AVKitMediampPlayer(
         bufferingFeature.bufferedPercentage.value = 0
         playbackState.value = PlaybackState.FINISHED
         currentPositionMillis.value = 0L
+        clearChaseSeek()
         impl.pause()
         impl.replaceCurrentItemWithPlayerItem(null)
     }
@@ -228,12 +233,9 @@ public class AVKitMediampPlayer(
             // doc says ignore if < READY
             return
         }
-        val item = impl.currentItem ?: return
-        // Convert from ms to CMTime
-        val clamped = positionMillis.coerceAtLeast(0L)
-        val timeSec = clamped.toDouble() / 1000.0
-        val cmTime = platform.CoreMedia.CMTimeMakeWithSeconds(timeSec, preferredTimescale = 600)
-        item.seekToTime(cmTime)
+        val clamped = coercePositionMillis(positionMillis)
+        chaseSeekMillis = clamped
+        trySeekToChasePosition()
         currentPositionMillis.value = clamped
     }
 
@@ -261,6 +263,7 @@ public class AVKitMediampPlayer(
     override fun closeImpl() {
         playbackState.value = PlaybackState.DESTROYED
         removePlayerItemObservers()
+        clearChaseSeek()
 
         timeControlStatusObserver?.let {
             impl.removeObserver(it, OBSERVATION_KEY_TIME_CONTROL_STATUS)
@@ -349,6 +352,69 @@ public class AVKitMediampPlayer(
             title = null, // Could parse from metadata if you wish
             durationMillis = ms,
         )
+        trySeekToChasePosition()
+    }
+
+    private fun coercePositionMillis(positionMillis: Long): Long {
+        val durationMillis = mediaProperties.value?.durationMillis?.takeIf { it > 0 }
+        return if (durationMillis == null) {
+            positionMillis.coerceAtLeast(0)
+        } else {
+            positionMillis.coerceIn(0, durationMillis)
+        }
+    }
+
+    private fun trySeekToChasePosition() {
+        val targetMillis = chaseSeekMillis ?: return
+        if (isSeekInProgress) {
+            return
+        }
+        val item = impl.currentItem ?: return
+        if (item.status != AVPlayerItemStatusReadyToPlay) {
+            return
+        }
+        seekToChasePosition(targetMillis)
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    private fun seekToChasePosition(targetMillis: Long) {
+        isSeekInProgress = true
+        val timeSec = targetMillis.toDouble() / 1000.0
+        val cmTime = platform.CoreMedia.CMTimeMakeWithSeconds(timeSec, preferredTimescale = 600)
+        val zeroTolerance = platform.CoreMedia.CMTimeMakeWithSeconds(0.0, preferredTimescale = 600)
+        impl.seekToTime(
+            time = cmTime,
+            toleranceBefore = zeroTolerance,
+            toleranceAfter = zeroTolerance,
+            completionHandler = { finished ->
+                coroutineScope.launch {
+                    handleSeekCompletion(targetMillis, finished)
+                }
+            },
+        )
+    }
+
+    private fun handleSeekCompletion(targetMillis: Long, finished: Boolean) {
+        if (playbackState.value < PlaybackState.READY) {
+            isSeekInProgress = false
+            return
+        }
+
+        isSeekInProgress = false
+        if (chaseSeekMillis == targetMillis) {
+            if (finished) {
+                chaseSeekMillis = null
+                currentPositionMillis.value = targetMillis
+            }
+            return
+        }
+
+        trySeekToChasePosition()
+    }
+
+    private fun clearChaseSeek() {
+        chaseSeekMillis = null
+        isSeekInProgress = false
     }
 
     private suspend fun awaitPlayerItemReady(playerItem: AVPlayerItem) {
