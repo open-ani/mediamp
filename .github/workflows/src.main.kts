@@ -568,7 +568,10 @@ workflow(
 
                 runGradle(
                     name = "Update Release Version Name",
-                    tasks = arrayOf("updateReleaseVersionNameFromGit"),
+                    tasks = arrayOf(
+                        "updateReleaseVersionNameFromGit",
+                        "\"-DCI_TAG=${expr { gitTag.tagExpr }}\"",
+                    ),
                     env = mapOf(
                         "GITHUB_TOKEN" to expr { secrets.GITHUB_TOKEN },
                         "GITHUB_REPOSITORY" to expr { secrets.GITHUB_REPOSITORY },
