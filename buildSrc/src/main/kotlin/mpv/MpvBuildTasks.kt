@@ -262,7 +262,8 @@ private fun MpvBuildContext.jniCompilerArgs(target: MpvBuildTarget): List<String
             }
         }
 
-        target.name.startsWith("Macos") -> appleArchArgs(target.name)
+        // -fobjc-arc is required by render_macos.mm; it has no effect on plain C++ sources.
+        target.name.startsWith("Macos") -> appleArchArgs(target.name) + "-fobjc-arc"
         target.name == "LinuxX64" -> listOf("-pthread")
         else -> emptyList()
     }
@@ -272,7 +273,14 @@ private fun MpvBuildContext.jniLinkerArgs(target: MpvBuildTarget): List<String> 
     return when {
         target.name == "WindowsX64" -> listOf("-lopengl32", "-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid")
         target.androidAbi != null -> listOf("-landroid", "-llog")
-        target.name.startsWith("Macos") -> appleArchArgs(target.name)
+        target.name.startsWith("Macos") -> appleArchArgs(target.name) + listOf(
+            // Metal/IOSurface render path (render_macos.mm)
+            "-framework", "Foundation",
+            "-framework", "Metal",
+            "-framework", "IOSurface",
+            "-framework", "OpenGL",
+            "-framework", "QuartzCore",
+        )
         target.name == "LinuxX64" -> listOf("-pthread", "-Wl,-rpath,\$ORIGIN")
         else -> emptyList()
     }

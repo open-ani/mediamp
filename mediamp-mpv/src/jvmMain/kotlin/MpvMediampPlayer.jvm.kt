@@ -1,18 +1,27 @@
 /*
- * Copyright (C) 2024 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
- * Use of this source code is governed by the GNU GENERAL PUBLIC LICENSE version 3 license, which can be found at the following link.
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
 package org.openani.mediamp.mpv
 
+import androidx.compose.ui.geometry.Size
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.features.AudioLevelController
+import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.MediaMetadata
+import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
+import org.openani.mediamp.features.Screenshots
+import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.Platform
 import org.openani.mediamp.internal.currentPlatform
@@ -22,117 +31,263 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.coroutines.CoroutineContext
 
+private const val SEEKABLE_INPUT_LOAD_TARGET_PREFIX = "mediamp://seekble_input_media/"
+
+private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
+    return SEEKABLE_INPUT_LOAD_TARGET_PREFIX + data.uri
+}
+
+/**
+ * How stale position reports are filtered during a seek: mpv keeps reporting the
+ * pre-seek time until the demuxer/decoder lands on the target, which would make the
+ * progress bar jump backwards. While "seeking" is true we keep [currentPositionMillis]
+ * at the user's intent and drop mpv's reports.
+ */
 @kotlin.OptIn(InternalMediampApi::class)
-actual class MpvMediampPlayer (
+abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
-) : AbstractMediampPlayer<MpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
-    class MPVPlayerData(mediaData: MediaData) : Data(mediaData)
+) : AbstractMediampPlayer<JvmMpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
+    open class MPVPlayerData(
+        mediaData: MediaData,
+        val loadTarget: String,
+    ) : Data(mediaData)
 
-    private val handle = MPVHandle(context)
-    
+    private class SeekableInputPlayerData(
+        mediaData: SeekableInputMediaData,
+        loadTarget: String,
+        private val handle: MPVHandle,
+    ) : MPVPlayerData(mediaData, loadTarget) {
+        override fun release() {
+            handle.unregisterSeekableInput(loadTarget)
+            super.release()
+        }
+    }
+
+    internal val handle by lazy { MPVHandle(context) }
+    private var pauseRequestedByUser: Boolean = false
+    private var pausedForCache: Boolean = false
+    private var playbackSessionActive: Boolean = false
+
+    @Volatile
+    private var seekInProgress: Boolean = false
+
+    var currentSize: Size? = null
+        @InternalMediampApi set
+
+    override val impl: Any get() = handle
+
+    private val _currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
+    override val currentPositionMillis: StateFlow<Long> = _currentPositionMillis
+
+    private val _mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
+    override val mediaProperties: StateFlow<MediaProperties?> = _mediaProperties
+
+    private val playbackSpeed = MpvPlaybackSpeed(handle)
+    private val audioLevelController = MpvAudioLevelController(handle)
+    private val buffering = MpvBuffering(playbackState)
+    private val screenshots = MpvScreenshots(handle)
+    private val videoAspectRatio = MpvVideoAspectRatio(handle)
+    private val mediaMetadata = MpvMediaMetadata(handle)
+
+    override val features: PlayerFeatures = buildPlayerFeatures {
+        add(PlaybackSpeed.Key, playbackSpeed)
+        add(AudioLevelController.Key, audioLevelController)
+        add(Buffering.Key, buffering)
+        add(Screenshots.Key, screenshots)
+        add(VideoAspectRatio.Key, videoAspectRatio)
+        add(MediaMetadata, mediaMetadata)
+    }
+
     private val eventListener = object : EventListener {
         override fun onPropertyChange(name: String) {
-            
+            when (name) {
+                "track-list" -> mediaMetadata.refreshTracks()
+                "chapter-list" -> mediaMetadata.refreshChapters()
+            }
         }
 
         override fun onPropertyChange(name: String, value: Boolean) {
             when (name) {
-                "pause" -> playbackState.value = 
-                    if (value) PlaybackState.PAUSED else PlaybackState.PLAYING
-                "paused-for-cache" -> playbackState.value =
-                    if (value) PlaybackState.PAUSED_BUFFERING else PlaybackState.PLAYING
-                
+                "pause" -> {
+                    pauseRequestedByUser = value
+                    syncObservedPlaybackState()
+                }
+
+                "paused-for-cache" -> {
+                    pausedForCache = value
+                    syncObservedPlaybackState()
+                }
+
+                "seeking" -> {
+                    if (!value) seekInProgress = false
+                }
+
+                "mute" -> audioLevelController.onMuteChanged(value)
+
+                "eof-reached" -> {
+                    if (value && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
+                        resetPlaybackSessionFlags()
+                        playbackState.value = PlaybackState.FINISHED
+                    }
+                }
+
+                "idle-active" -> {
+                    if (value && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
+                        // With keep-open=always this only fires when loading fails or the
+                        // file is unloaded externally.
+                        // TODO: distinguish load errors (-> ERROR) from normal unloads.
+                        resetPlaybackSessionFlags()
+                        playbackState.value = PlaybackState.FINISHED
+                    }
+                }
             }
         }
 
         override fun onPropertyChange(name: String, value: Long) {
             when (name) {
-                "time-pos/full" -> currentPositionMillis.value = value * 1000
-                "duration/full" -> mediaProperties.value =
-                    if (mediaProperties.value == null) MediaProperties(null, value * 1000)
-                    else mediaProperties.value?.copy(durationMillis = value * 1000)
+                "cache-buffering-state" -> buffering.bufferedPercentage.value = value.toInt().coerceIn(0, 100)
             }
         }
 
         override fun onPropertyChange(name: String, value: Double) {
+            when (name) {
+                "time-pos" -> {
+                    if (!seekInProgress) {
+                        _currentPositionMillis.value = (value * 1000).toLong()
+                    }
+                }
+
+                "duration" -> {
+                    val durationMillis = (value * 1000).toLong()
+                    _mediaProperties.value = _mediaProperties.value?.copy(durationMillis = durationMillis)
+                        ?: MediaProperties(null, durationMillis)
+                }
+
+                "speed" -> playbackSpeed.onSpeedChanged(value)
+                "volume" -> audioLevelController.onVolumeChanged(value)
+            }
         }
 
         override fun onPropertyChange(name: String, value: String) {
             when (name) {
-                "media-title" -> mediaProperties.value =
-                    if (mediaProperties.value == null) MediaProperties(value, -1)
-                    else mediaProperties.value?.copy(title = value)
+                "media-title" -> _mediaProperties.value = _mediaProperties.value?.copy(title = value)
+                    ?: MediaProperties(value, -1)
             }
         }
-
     }
 
-    override val impl: MPVHandle get() = handle
+    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
 
-    override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
-    
-    override val mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
+    override fun getCurrentPlaybackState(): PlaybackState = playbackState.value
 
-    override val features: PlayerFeatures = buildPlayerFeatures { }
-    
-    override fun getCurrentMediaProperties(): MediaProperties? {
-        return mediaProperties.value
+    override fun getCurrentPositionMillis(): Long = currentPositionMillis.value
+
+    private fun syncObservedPlaybackState() {
+        if (!playbackSessionActive || playbackState.value < PlaybackState.READY) {
+            return
+        }
+        if (playbackState.value == PlaybackState.FINISHED) {
+            // keep-open pauses at EOF; don't resurrect PAUSED after we reported FINISHED.
+            return
+        }
+        playbackState.value = when {
+            pauseRequestedByUser -> PlaybackState.PAUSED
+            pausedForCache -> PlaybackState.PAUSED_BUFFERING
+            else -> PlaybackState.PLAYING
+        }
     }
 
-    override fun getCurrentPlaybackState(): PlaybackState {
-        return playbackState.value
+    private fun resetPlaybackSessionFlags() {
+        pauseRequestedByUser = false
+        pausedForCache = false
+        playbackSessionActive = false
+        seekInProgress = false
     }
 
-    override fun getCurrentPositionMillis(): Long {
-        return currentPositionMillis.value
+    private fun clearPlaybackSession(resetPosition: Boolean) {
+        resetPlaybackSessionFlags()
+        _mediaProperties.value = null
+        mediaMetadata.clear()
+        if (resetPosition) {
+            _currentPositionMillis.value = 0L
+        }
+    }
+
+    @InternalMediampApi
+    fun createRenderContext(devicePtr: Long, contextPtr: Long): Boolean {
+        return createRenderContext(handle.ptr, devicePtr, contextPtr)
+    }
+
+    @InternalMediampApi
+    fun releaseRenderContext(): Boolean {
+        return destroyRenderContext(handle.ptr)
+    }
+
+    @InternalMediampApi
+    fun createTexture(width: Int, height: Int): Int {
+        return createTexture(handle.ptr, width, height)
+    }
+
+    @InternalMediampApi
+    fun releaseTexture(): Boolean {
+        return releaseTexture(handle.ptr)
+    }
+
+    @InternalMediampApi
+    fun renderFrame(): Boolean {
+        return renderFrameToTexture(handle.ptr)
+    }
+
+    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+        return handle.setRenderUpdateListener(listener)
     }
 
     init {
         handle.setEventListener(eventListener)
 
         handle.option("config", "no")
-        // handle.option("config-dir", File(filesDir, "mpv_config").absolutePath)
-        // handle.option("gpu-shader-cache-dir", File(cacheDir, "mpv_gpu_cache").absolutePath)
-        // handle.option("icc-cache-dir", File(cacheDir, "mpv_icc_cache").absolutePath)
         handle.option("profile", "fast")
-        handle.option("vo", "gpu-next")
 
         when (currentPlatform()) {
             is Platform.Android -> {
                 handle.option("gpu-context", "android")
                 handle.option("opengl-es", "yes")
                 handle.option("ao", "audiotrack,opensles")
+                handle.option("vo", "gpu-next")
             }
+
             is Platform.Windows -> {
-                handle.option("gpu-context", "d3d11")
+                handle.option("gpu-context", "win,opengl")
                 handle.option("opengl-es", "no")
 
-                handle.option("ao", "audiotrack")
+                handle.option("ao", "wasapi")
+                handle.option("vo", "libmpv")
+                handle.option("fbo-format", "rgba8")
+                handle.option("dither-depth", "no")
+                handle.option("video-sync", "audio")
+                handle.option("video-timing-offset", "0.0")
             }
+
             is Platform.MacOS -> {
-                handle.option("gpu-context", "macvk")
-                handle.option("opengl-es", "no")
-
-                handle.option("ao", "audiotrack")
+                // The render API provides its own offscreen CGL context (render_macos.mm);
+                // gpu-context is not used with vo=libmpv.
+                handle.option("ao", "coreaudio")
+                handle.option("vo", "libmpv")
             }
 
-            else -> { }
+            else -> {}
         }
-        
-        
+
         handle.option("hwdec", "auto")
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
-        // handle.option("tls-verify", "yes")
-        // handle.option("tls-ca-file", "${this.context.filesDir.path}/cacert.pem")
-        handle.option("input-default-bindings", "yes")
+        handle.option("input-default-bindings", "no")
+        handle.option("volume-max", "200")
 
-        // Limit demuxer cache since the defaults are too high for mobile devices   
+        // Limit demuxer cache since the defaults are too high for mobile devices
         val cacheMegs = if (limitDemuxer()) 32 else 64
         handle.option("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
         handle.option("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
-        // screenshot
-        // handle.option("screenshot-directory", screenshotDir.path)
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
 
@@ -143,22 +298,28 @@ actual class MpvMediampPlayer (
         handle.option("idle", "yes")
         handle.option("keep-open", "always")
 
-        handle.observeProperty("time-pos/full", MPVFormat.MPV_FORMAT_INT64)
-        handle.observeProperty("duration/full", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("idle-active", MPVFormat.MPV_FORMAT_FLAG)
+        handle.observeProperty("eof-reached", MPVFormat.MPV_FORMAT_FLAG)
+        handle.observeProperty("time-pos", MPVFormat.MPV_FORMAT_DOUBLE)
+        handle.observeProperty("duration", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("pause", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("paused-for-cache", MPVFormat.MPV_FORMAT_FLAG)
-        handle.observeProperty("speed", MPVFormat.MPV_FORMAT_STRING) // todo
-        
-        handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING) // to
-        handle.observeProperty("metadata", MPVFormat.MPV_FORMAT_NONE)
+        handle.observeProperty("seeking", MPVFormat.MPV_FORMAT_FLAG)
+        handle.observeProperty("speed", MPVFormat.MPV_FORMAT_DOUBLE)
+        handle.observeProperty("volume", MPVFormat.MPV_FORMAT_DOUBLE)
+        handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
+        handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
+        handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
+        handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("hwdec-current", MPVFormat.MPV_FORMAT_NONE)
     }
-    
+
     @InternalMediampApi
     fun attachRenderSurface(surface: Any): Boolean {
         return attachSurface(handle.ptr, surface)
     }
-    
+
     @InternalMediampApi
     fun detachRenderSurface(): Boolean {
         return detachSurface(handle.ptr)
@@ -166,22 +327,36 @@ actual class MpvMediampPlayer (
 
     override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
-            val headers = data.headers
-            
-            // 清除播放列表
+            clearPlaybackSession(resetPosition = true)
             handle.command("stop")
             handle.command("playlist-clear")
-            // 设置 headers 和 ua
-            handle.option("user-agent", headers["User-Agent"] ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""")
+
+            val headers = data.headers.toMutableMap()
+            headers.remove("User-Agent")?.let { handle.option("user-agent", it) }
+            headers.remove("Referer")?.let { handle.option("referrer", it) }
             handle.option("http-header-fields-clr", "")
             headers.forEach { (key, value) ->
-                handle.option("http-header-fields", "$key: $value")
+                handle.option("http-header-fields-add", "$key: $value")
             }
 
-            MPVPlayerData(data)
+            MPVPlayerData(data, data.uri)
         }
+
         is SeekableInputMediaData -> {
-            TODO()
+            clearPlaybackSession(resetPosition = true)
+            handle.command("stop")
+            handle.command("playlist-clear")
+
+            val loadTarget = buildSeekableInputLoadTarget(data)
+            val input = data.createInput(currentCoroutineContext())
+            val registeredTarget = try {
+                handle.registerSeekableInput(input, loadTarget)
+            } catch (t: Throwable) {
+                input.close()
+                throw t
+            }
+
+            SeekableInputPlayerData(data, registeredTarget, handle)
         }
     }
 
@@ -189,51 +364,72 @@ actual class MpvMediampPlayer (
         when (playbackState.value) {
             PlaybackState.READY -> {
                 val media = openResource.value ?: return
-                handle.option("pause", "true")
-                when (val data = media.mediaData) {
-                    is UriMediaData -> {
-                        handle.command("loadfile", data.uri)
-                        playbackState.value = PlaybackState.PLAYING
-                    }
-                    is SeekableInputMediaData -> TODO()
-                    else -> { } // TODO: log unsupported media type
+                handle.setPropertyBoolean("pause", false)
+                if (handle.command("loadfile", media.loadTarget, "replace")) {
+                    playbackSessionActive = true
+                    pauseRequestedByUser = false
+                    pausedForCache = false
+                    playbackState.value = PlaybackState.PLAYING
                 }
             }
-            PlaybackState.PLAYING -> {
-                handle.command("cycle", "pause")
+
+            PlaybackState.PAUSED, PlaybackState.PAUSED_BUFFERING -> {
+                if (handle.setPropertyBoolean("pause", false)) {
+                    playbackSessionActive = true
+                    pauseRequestedByUser = false
+                    playbackState.value = PlaybackState.PLAYING
+                }
             }
-            else -> { } // TODO: unreachable
+
+            else -> {}
         }
     }
 
     override fun pauseImpl() {
-        if (playbackState.value == PlaybackState.PAUSED) return
-        handle.command("cycle", "pause")
+        if (handle.setPropertyBoolean("pause", true)) {
+            playbackSessionActive = true
+            pauseRequestedByUser = true
+            playbackState.value = PlaybackState.PAUSED
+        }
     }
 
     override fun seekTo(positionMillis: Long) {
-        handle.command("seek", positionMillis.toString(), "absolute+exact")
-        currentPositionMillis.value = positionMillis
+        if (playbackState.value < PlaybackState.READY || openResource.value == null) return
+
+        val targetPositionMillis = positionMillis.coerceAtLeast(0L)
+        val targetSeconds = targetPositionMillis / 1000.0
+        seekInProgress = true
+        if (handle.command("seek", formatSeconds(targetSeconds), "absolute+exact")) {
+            // Optimistic: keep the intent so rapid skip() calls accumulate correctly and
+            // the progress bar never jumps back to a stale pre-seek position.
+            _currentPositionMillis.value = targetPositionMillis
+        } else {
+            seekInProgress = false
+        }
     }
 
     override fun skip(deltaMillis: Long) {
-        handle.command("seek", deltaMillis.toString(), "relative+relative")
-        currentPositionMillis.value += deltaMillis
+        seekTo(_currentPositionMillis.value + deltaMillis)
     }
 
     override fun stopPlaybackImpl() {
         handle.command("stop")
-        currentPositionMillis.value = 0L
+        clearPlaybackSession(resetPosition = true)
         playbackState.value = PlaybackState.FINISHED
     }
-    
 
     override fun closeImpl() {
+        clearPlaybackSession(resetPosition = true)
         handle.command("stop")
         handle.destroy()
         handle.close()
-        
+        playbackState.value = PlaybackState.DESTROYED
     }
-    
-    companion object
 }
+
+private fun formatSeconds(seconds: Double): String {
+    // mpv parses decimal seconds; String.format would be locale-sensitive.
+    return ((seconds * 1000).toLong() / 1000.0).toBigDecimal().toPlainString()
+}
+
+expect fun limitDemuxer(): Boolean
