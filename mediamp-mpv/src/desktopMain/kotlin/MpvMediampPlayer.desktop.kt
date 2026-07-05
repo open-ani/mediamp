@@ -96,6 +96,30 @@ actual class MpvMediampPlayer(
 
     internal fun renderFrameMacos(): Boolean = nRenderFrameMacos(handle.ptr)
 
+    /**
+     * macOS: reads the frame back from our own IOSurface (mpv's screenshot pipeline
+     * cannot convert hwdec videotoolbox frames without zimg). Creates an ephemeral
+     * video-sized surface when none is attached (headless capture).
+     */
+    override suspend fun takeScreenshotImpl(path: String): Boolean {
+        if (hostOs == OS.MacOS) {
+            val hadSurface = nHasMetalSurface(handle.ptr)
+            if (!hadSurface) {
+                val width = handle.getPropertyInt("width")
+                val height = handle.getPropertyInt("height")
+                if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
+                if (nCreateMetalSurface(handle.ptr, width, height, 0L) == 0L) {
+                    return super.takeScreenshotImpl(path)
+                }
+            }
+            nRenderFrameMacos(handle.ptr)
+            val saved = nSaveSurfacePng(handle.ptr, path)
+            if (!hadSurface) nReleaseMetalSurface(handle.ptr)
+            if (saved) return true
+        }
+        return super.takeScreenshotImpl(path)
+    }
+
     internal fun releaseMacosSurface() {
         macosSkiaSurface?.close()
         macosSkiaSurface = null

@@ -86,9 +86,11 @@ internal class MpvBuffering(playbackState: StateFlow<PlaybackState>) : Buffering
 }
 
 @OptIn(InternalForInheritanceMediampApi::class)
-internal class MpvScreenshots(private val handle: MPVHandle) : Screenshots {
+internal class MpvScreenshots(
+    private val takeScreenshotImpl: suspend (path: String) -> Boolean,
+) : Screenshots {
     override suspend fun takeScreenshot(destinationFile: String) {
-        handle.command("screenshot-to-file", destinationFile, "video")
+        takeScreenshotImpl(destinationFile)
     }
 }
 

@@ -79,6 +79,8 @@ public:
     bool release_metal_surface();
 
     bool render_frame();
+    bool has_metal_surface();
+    bool save_surface_png(const char *path);
 #endif
 
     struct seekable_stream_entry;
@@ -115,6 +117,18 @@ private:
     uint32_t fbo_ = 0, texture_ = 0;
     int width_ = 0, height_ = 0;
     CREATE_LOCK(texture_lock);
+
+    // Frame drain: with vo=libmpv, playback stalls unless someone consumes video
+    // frames. While no surface is attached (headless probing, background playback,
+    // surface not composed yet), a daemon thread discards frames via
+    // MPV_RENDER_PARAM_SKIP_RENDERING so the clock keeps advancing.
+    std::atomic_bool surface_active_{false};
+    std::atomic_bool drain_quit_{false};
+    std::atomic_bool drain_pending_{false};
+    void *drain_thread_ = nullptr;  // std::thread*, owned (render_macos.mm)
+    void signal_render_drain();
+    void start_drain_thread();
+    void stop_drain_thread();
 #endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;

@@ -280,6 +280,8 @@ private fun MpvBuildContext.jniLinkerArgs(target: MpvBuildTarget): List<String> 
             "-framework", "IOSurface",
             "-framework", "OpenGL",
             "-framework", "QuartzCore",
+            "-framework", "CoreGraphics",
+            "-framework", "ImageIO",
         )
         target.name == "LinuxX64" -> listOf("-pthread", "-Wl,-rpath,\$ORIGIN")
         else -> emptyList()

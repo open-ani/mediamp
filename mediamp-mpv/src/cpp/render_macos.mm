@@ -24,7 +24,12 @@
 #include <OpenGL/gl3.h>
 #include <OpenGL/CGLIOSurface.h>
 
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+
 #include <dlfcn.h>
+#include <thread>
+#include <chrono>
 
 #include <mpv/client.h>
 #include <mpv/render.h>
@@ -102,6 +107,7 @@ bool mpv_handle_t::create_render_context() {
 
     cgl_context_ = context;
     mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
+    start_drain_thread();
     return true;
 }
 
@@ -200,6 +206,7 @@ int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_de
     mtl_texture_ = (void *) CFBridgingRetain(metal_texture);
     width_ = width;
     height_ = height;
+    surface_active_.store(true);
     LOG("metal surface created %dx%d (IOSurfaceID=%u)\n", width, height, IOSurfaceGetID(surface));
     return (int64_t) (uintptr_t) mtl_texture_;
 }
@@ -217,6 +224,7 @@ bool mpv_handle_t::release_metal_surface() {
     if (mtl_texture_) { CFRelease(mtl_texture_); mtl_texture_ = nullptr; }
     if (io_surface_) { CFRelease((IOSurfaceRef) io_surface_); io_surface_ = nullptr; }
     width_ = height_ = 0;
+    surface_active_.store(false);
     return true;
 }
 
@@ -228,10 +236,11 @@ bool mpv_handle_t::render_frame() {
     CGLSetCurrentContext(context);
 
     mpv_opengl_fbo fbo{(int) fbo_, width_, height_, 0};
-    int flip_y = 1;
+    // No FLIP_Y: mpv then writes the image top-down in surface memory (row 0 = top),
+    // which is what both Skia's SurfaceOrigin.TOP_LEFT sampling and the PNG readback
+    // expect. Verified against ffmpeg-extracted reference frames.
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
     int render_result = mpv_render_context_render(render_context_, params);
@@ -251,6 +260,7 @@ bool mpv_handle_t::render_frame() {
 }
 
 void mpv_handle_t::cleanup_render_resources() {
+    stop_drain_thread();
     release_metal_surface();
 
     if (render_context_) {
@@ -266,6 +276,90 @@ void mpv_handle_t::cleanup_render_resources() {
         CGLDestroyContext((CGLContextObj) cgl_context_);
         cgl_context_ = nullptr;
     }
+}
+
+bool mpv_handle_t::has_metal_surface() {
+    LOCK(texture_lock);
+    return io_surface_ != nullptr;
+}
+
+// Writes the current IOSurface contents (BGRA) as PNG. Independent of mpv's screenshot
+// pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU download.
+bool mpv_handle_t::save_surface_png(const char *path) {
+    LOCK(texture_lock);
+    if (!io_surface_ || !path) return false;
+    auto surface = (IOSurfaceRef) io_surface_;
+
+    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
+        LOG("IOSurfaceLock failed\n");
+        return false;
+    }
+    bool ok = false;
+    void *base = IOSurfaceGetBaseAddress(surface);
+    size_t bpr = IOSurfaceGetBytesPerRow(surface);
+    size_t width = IOSurfaceGetWidth(surface);
+    size_t height = IOSurfaceGetHeight(surface);
+
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, base, bpr * height, nullptr);
+    CGImageRef image = CGImageCreate(
+        width, height, 8, 32, bpr, color_space,
+        kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, // BGRA in memory, alpha ignored
+        provider, nullptr, false, kCGRenderingIntentDefault);
+    if (image) {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+        CGImageDestinationRef dest = CGImageDestinationCreateWithURL(
+            (__bridge CFURLRef) url, CFSTR("public.png"), 1, nullptr);
+        if (dest) {
+            CGImageDestinationAddImage(dest, image, nullptr);
+            ok = CGImageDestinationFinalize(dest);
+            CFRelease(dest);
+        }
+        CGImageRelease(image);
+    }
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(color_space);
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+    if (!ok) LOG("save_surface_png failed for %s\n", path);
+    return ok;
+}
+
+void mpv_handle_t::signal_render_drain() {
+    drain_pending_.store(true);
+}
+
+void mpv_handle_t::start_drain_thread() {
+    if (drain_thread_) return;
+    drain_quit_.store(false);
+    drain_thread_ = new std::thread([this] {
+        while (!drain_quit_.load()) {
+            if (drain_pending_.load() && !surface_active_.load()) {
+                drain_pending_.store(false);
+                LOCK(texture_lock);
+                if (render_context_ && !surface_active_.load()) {
+                    auto context = (CGLContextObj) cgl_context_;
+                    CGLSetCurrentContext(context);
+                    int skip = 1;
+                    mpv_render_param params[] = {
+                        {MPV_RENDER_PARAM_SKIP_RENDERING, &skip},
+                        {MPV_RENDER_PARAM_INVALID, nullptr},
+                    };
+                    mpv_render_context_render(render_context_, params);
+                    CGLSetCurrentContext(nullptr);
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+}
+
+void mpv_handle_t::stop_drain_thread() {
+    if (!drain_thread_) return;
+    drain_quit_.store(true);
+    auto *thread = (std::thread *) drain_thread_;
+    if (thread->joinable()) thread->join();
+    delete thread;
+    drain_thread_ = nullptr;
 }
 
 } // namespace mediampv
