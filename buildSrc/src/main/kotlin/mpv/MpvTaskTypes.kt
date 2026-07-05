@@ -343,8 +343,10 @@ abstract class MpvJniBuildTask : DefaultTask() {
         val target = targetName.get()
         val windowsMsys = hostOsName.get() == "Windows"
 
+        // Objective-C++ sources are macOS-only (Metal/IOSurface render path).
+        val sourceExtensions = if (target.startsWith("Macos")) setOf("cpp", "mm") else setOf("cpp")
         val sourceFiles = sourceRoot.walkTopDown()
-            .filter { it.isFile && it.extension == "cpp" }
+            .filter { it.isFile && it.extension in sourceExtensions }
             .sortedBy { it.absolutePath }
             .toList()
         require(sourceFiles.isNotEmpty()) {

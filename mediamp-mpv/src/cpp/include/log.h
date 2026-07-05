@@ -11,7 +11,9 @@
 #define LOG_TAG "mediampv"
 #if (defined(__APPLE__) && defined(__MACH__)) || (defined(__linux__) && !defined(__ANDROID__)) || (defined(_WIN32) || defined(_WIN64))
 #include <cstdio>
-#define LOG(...) printf(__VA_ARGS__)
+// flush per line: stdout is block-buffered when piped (e.g. under Gradle), which
+// otherwise swallows logs until the buffer fills or the process exits.
+#define LOG(...) do { printf(__VA_ARGS__); fflush(stdout); } while (0)
 #else
 #include <android/log.h>
 #define LOG(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
@@ -25,7 +27,7 @@ struct function_printer_t {
 #ifdef ENABLE_LOGGING
     std::string name;
     explicit function_printer_t(const std::string &name) : name(name) {
-        LOG("Function %s started", name.c_str());
+        LOG("Function %s started\n", name.c_str());
     }
 #else
     explicit function_printer_t(const std::string &_) {}
@@ -33,7 +35,7 @@ struct function_printer_t {
 
     ~function_printer_t() {
 #ifdef ENABLE_LOGGING
-        LOG("Function %s ended", name.c_str());
+        LOG("Function %s ended\n", name.c_str());
 #endif
     }
 };

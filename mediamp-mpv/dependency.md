@@ -308,3 +308,21 @@ Android 子项目额外选项：
 - macOS `MacosX64` / `MacosArm64` 目标定义和打包逻辑已补齐，但尚未在 macOS 主机上实跑验证。
 - Linux 构建逻辑已接通，但尚未在 Linux 主机上实跑产出。
 - 当前仓库仍保留旧 `libmpv/` prebuilt 目录的删除状态；本文档描述的是新的手工构建链路，不再以旧 prebuilt 目录为准。
+
+## macOS 渲染与开发工作流
+
+macOS 桌面渲染路径 (`src/cpp/render_macos.mm`): mpv render API 在独立的离屏 CGL context 上渲染进
+IOSurface 背书的 FBO, 同一块 IOSurface 包装为 Skia 同设备的 MTLTexture, 由 Compose Canvas 直接采样
+(零拷贝, hwdec=videotoolbox 全程留在 GPU)。render context 在播放器构造时即创建 —— `vo=libmpv` 要求
+loadfile 之前 render context 已存在, 否则播放会以 "no audio or video data played" 立即结束。
+
+本地开发无需完整 meson 构建:
+
+```bash
+brew install mpv
+./gradlew :mediamp-mpv:compileJniDevMacos   # 对 Homebrew libmpv 编译 libmediampv.dylib
+# 运行时: MpvMediampPlayer.prepareLibraries("<repo>/mediamp-mpv/build/dev-native", extractRuntimeLibrary = false)
+./gradlew :mediamp-mpv:desktopTest          # 真实 libmpv 集成测试 (URI + stream_cb, headless Metal 渲染)
+```
+
+发布构建仍走 `mpvAssembleMacosArm64`(meson 源码构建 libmpv + ffmpeg, 打包 runtime jar)。

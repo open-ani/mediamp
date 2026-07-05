@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -18,23 +18,15 @@ plugins {
     kotlin("multiplatform")
     id("com.android.kotlin.multiplatform.library")
 
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
+
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
     idea
 }
 
 description = "MediaMP backend using MPV"
-
-val archs = buildList {
-    val abis = getPropertyOrNull("ani.android.abis")?.trim()
-    if (!abis.isNullOrEmpty()) {
-        addAll(abis.split(",").map { it.trim() })
-    } else {
-        add("arm64-v8a")
-        add("armeabi-v7a")
-        add("x86_64")
-    }
-}
 
 kotlin {
     androidLibrary {
@@ -54,10 +46,49 @@ kotlin {
         getByName("jvmMain").dependencies {
             implementation(projects.mediampNativeLoader)
         }
+        getByName("desktopTest").dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 
 configureMediampMpvModule()
+
+// Dev-only fast path (macOS): compile the JNI wrapper against a system (Homebrew) libmpv
+// so the module can be developed/tested without the full meson mpv build. The output
+// directory is meant for MpvMediampPlayer.prepareLibraries(dir, extractRuntimeLibrary = false).
+val devNativeDir = layout.buildDirectory.dir("dev-native")
+val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
+    group = "mediamp"
+    description = "Compile libmediampv.dylib against Homebrew libmpv (macOS dev only)"
+    onlyIf { getOs() == Os.MacOS }
+    val srcDir = layout.projectDirectory.dir("src/cpp")
+    val outputFile = devNativeDir.map { it.file("libmediampv.dylib") }
+    inputs.dir(srcDir)
+    outputs.file(outputFile)
+    val mpvPrefix = getPropertyOrNull("mediamp.mpv.dev.prefix") ?: "/opt/homebrew"
+    commandLine(
+        "/bin/zsh", "-c",
+        buildString {
+            append("mkdir -p \"\$(dirname ${outputFile.get().asFile.absolutePath})\" && ")
+            append("JAVA_HOME=\"\${JAVA_HOME:-\$(/usr/libexec/java_home)}\" && ")
+            append("clang++ -std=c++17 -fPIC -fobjc-arc -O2 -dynamiclib ")
+            append("-I ${srcDir.asFile.absolutePath}/include ")
+            append("-I \"\$JAVA_HOME/include\" -I \"\$JAVA_HOME/include/darwin\" ")
+            append("-I $mpvPrefix/include -L $mpvPrefix/lib -lmpv -lavcodec ")
+            append("-framework Foundation -framework Metal -framework IOSurface ")
+            append("-framework OpenGL -framework QuartzCore ")
+            append("${srcDir.asFile.absolutePath}/*.cpp ${srcDir.asFile.absolutePath}/*.mm ")
+            append("-o ${outputFile.get().asFile.absolutePath}")
+        },
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(compileJniDevMacos)
+    systemProperty("mediamp.mpv.dev.native.dir", devNativeDir.get().asFile.absolutePath)
+}
+
 val hostMpvTargetName = when (getOs()) {
     Os.Windows -> "WindowsX64"
     Os.Linux -> "LinuxX64"
