@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.window.LocalWindow
 import org.jetbrains.skia.BackendTexture
 import org.jetbrains.skia.ColorType
@@ -60,16 +61,27 @@ private fun MpvMediampPlayerSurfaceMacos(
 ) {
     val window = LocalWindow.current
     val interop = remember(window) {
-        window?.findSkiaLayer()?.let { layer ->
-            runCatching { SkiaMetalInterop(layer) }
-                .onFailure { it.printStackTrace() }
-                .getOrNull()
+        if (window == null) {
+            log("LocalWindow.current is null; cannot locate SkiaLayer")
+            return@remember null
         }
+        val layer = window.findSkiaLayer()
+        if (layer == null) {
+            log("no SkiaLayer found in window $window")
+            return@remember null
+        }
+        runCatching { SkiaMetalInterop(layer) }
+            .onFailure { log("SkiaMetalInterop failed: $it") }
+            .getOrNull()
     }
     val frameTick = remember { mutableLongStateOf(0L) }
     // The render context itself is created eagerly by the player (it must exist before
     // loadfile); this composable only owns the IOSurface chain and the frame listener.
     var renderContextReady by remember(player) { mutableStateOf(false) }
+    val loggedStates = remember(player) { mutableSetOf<String>() }
+    fun logOnce(state: String) {
+        if (loggedStates.add(state)) log(state)
+    }
 
     DisposableEffect(player) {
         renderContextReady = player.createMacosRenderContext() // no-op if already created
@@ -92,18 +104,48 @@ private fun MpvMediampPlayerSurfaceMacos(
     Canvas(modifier) {
         frameTick.longValue // subscribe: redraw whenever mpv reports a new frame
 
-        if (!renderContextReady) return@Canvas
-        val skiaInterop = interop ?: return@Canvas
-        val directContext = skiaInterop.directContext ?: return@Canvas
+        if (!renderContextReady) {
+            logOnce("render context not ready")
+            return@Canvas
+        }
+        val skiaInterop = interop
+        if (skiaInterop == null) {
+            logOnce("skia interop unavailable; video stays black (frames are drained)")
+            return@Canvas
+        }
+        val directContext = skiaInterop.directContext
+        if (directContext == null) {
+            logOnce("DirectContext not initialized yet")
+            return@Canvas
+        }
         val width = size.width.toInt()
         val height = size.height.toInt()
         if (width <= 0 || height <= 0) return@Canvas
 
-        if (!player.ensureMacosSurface(width, height, skiaInterop.mtlDevicePtr, directContext)) return@Canvas
-        player.renderFrameMacos()
-        player.macosSkiaSurface?.draw(drawContext.canvas.nativeCanvas, 0, 0, null)
+        if (!player.ensureMacosSurface(width, height, skiaInterop.mtlDevicePtr, directContext)) {
+            logOnce("ensureMacosSurface failed for ${width}x${height}")
+            return@Canvas
+        }
+        logOnce("rendering ${width}x${height} via Metal surface")
+        // Draw through Compose so the op survives RenderNode display-list recording
+        // (raw nativeCanvas draws are dropped there). The image is a Skia-owned texture:
+        // snapshots of the BRT-wrapped surface itself do not render.
+        player.makeFrameImage()?.let { frame ->
+            try {
+                drawImage(frame.toComposeImageBitmap())
+            } finally {
+                frame.close()
+            }
+        }
     }
 }
+
+private fun log(message: String) {
+    println("[MpvMediampPlayerSurface] $message")
+}
+
+
+
 
 /**
  * Windows render path: mpv renders into a GL texture created on Skia's own OpenGL
