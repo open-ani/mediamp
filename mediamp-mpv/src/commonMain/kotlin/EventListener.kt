@@ -29,4 +29,12 @@ interface EventListener {
      * Notify a property change with type MPV_FORMAT_STRING.
      */
     fun onPropertyChange(name: String, value: String)
+
+    /**
+     * Notify that the current file stopped playing (`MPV_EVENT_END_FILE`).
+     *
+     * @param reason `mpv_end_file_reason`: 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT
+     * @param mpvError `mpv_error` code, only meaningful when [reason] is 4 (ERROR)
+     */
+    fun onEndFile(reason: Int, mpvError: Int)
 }

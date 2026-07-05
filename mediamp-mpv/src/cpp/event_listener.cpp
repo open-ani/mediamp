@@ -187,6 +187,14 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 auto *end_file = (mpv_event_end_file *) event->data;
                 LOG("[event_loop] end-file: reason=%d error=%s\n",
                     end_file->reason, mpv_error_string(end_file->error));
+                if (event_listener_ && jni_mediamp_method_EventListener_onEndFile) {
+                    env->CallVoidMethod(
+                        event_listener_,
+                        jni_mediamp_method_EventListener_onEndFile,
+                        static_cast<jint>(end_file->reason),
+                        static_cast<jint>(end_file->error));
+                    clear_jni_exception(env, "EventListener.onEndFile");
+                }
                 break;
             }
             case MPV_EVENT_SHUTDOWN:

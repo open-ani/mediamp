@@ -175,6 +175,16 @@ abstract class JvmMpvMediampPlayer(
                     ?: MediaProperties(value, -1)
             }
         }
+
+        override fun onEndFile(reason: Int, mpvError: Int) {
+            // MPV_END_FILE_REASON_ERROR = 4. Map load/demux failures to ERROR so
+            // downstream error handlers (e.g. automatic source switching) can react;
+            // EOF is handled via the "eof-reached" property, STOP/QUIT via stop()/close().
+            if (reason == 4 && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
+                resetPlaybackSessionFlags()
+                playbackState.value = PlaybackState.ERROR
+            }
+        }
     }
 
     override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value

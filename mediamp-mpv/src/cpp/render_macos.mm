@@ -254,7 +254,9 @@ bool mpv_handle_t::render_frame() {
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    glFlush();
+    // glFinish, not glFlush: Metal samples this IOSurface right after; a mere flush
+    // races with GL completion under load (black frames), finish guarantees visibility.
+    glFinish();
     CGLSetCurrentContext(nullptr);
     return render_result >= 0;
 }

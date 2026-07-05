@@ -51,8 +51,10 @@ actual class MpvMediampPlayer(
     internal var macosSkiaSurface: Surface? = null
         private set
     private var macosRenderTarget: BackendRenderTarget? = null
+    private var macosBlitSurface: Surface? = null
     private var macosSurfaceWidth = 0
     private var macosSurfaceHeight = 0
+    private var macosSurfaceContext: DirectContext? = null
 
     internal fun createMacosRenderContext(): Boolean = nCreateRenderContextMacos(handle.ptr)
 
@@ -65,7 +67,11 @@ actual class MpvMediampPlayer(
         mtlDevicePtr: Long,
         directContext: DirectContext,
     ): Boolean {
-        if (width == macosSurfaceWidth && height == macosSurfaceHeight && macosSkiaSurface != null) return true
+        // Recreate when the size changes OR Skiko swapped its DirectContext (redrawer
+        // recreation): a surface built on a stale context silently renders nothing.
+        if (width == macosSurfaceWidth && height == macosSurfaceHeight &&
+            macosSkiaSurface != null && macosSurfaceContext === directContext
+        ) return true
 
         releaseMacosSurface()
         val metalTexture = nCreateMetalSurface(handle.ptr, width, height, mtlDevicePtr)
@@ -87,14 +93,49 @@ actual class MpvMediampPlayer(
             return false
         }
 
+        // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
+        // texture); blit each frame into a Skia-owned surface and snapshot that instead.
+        val blitSurface = runCatching {
+            Surface.makeRenderTarget(
+                directContext, false,
+                org.jetbrains.skia.ImageInfo.makeN32Premul(width, height),
+            )
+        }.getOrNull()
+        if (blitSurface == null) {
+            surface.close()
+            renderTarget.close()
+            nReleaseMetalSurface(handle.ptr)
+            return false
+        }
+
         macosRenderTarget = renderTarget
         macosSkiaSurface = surface
+        macosBlitSurface = blitSurface
         macosSurfaceWidth = width
         macosSurfaceHeight = height
+        macosSurfaceContext = directContext
         return true
     }
 
     internal fun renderFrameMacos(): Boolean = nRenderFrameMacos(handle.ptr)
+
+    /**
+     * Renders the freshest mpv frame and returns it as a Skia-owned texture image
+     * (safe to draw through Compose, including RenderNode recordings). Caller closes.
+     */
+    internal fun makeFrameImage(): org.jetbrains.skia.Image? {
+        val source = macosSkiaSurface ?: return null
+        val blit = macosBlitSurface ?: return null
+        nRenderFrameMacos(handle.ptr)
+        // The wrapped surface was just modified externally (GL); without this, Skia
+        // reuses a generation-cached snapshot of the texture and the video freezes on
+        // the first (black) frame when sampled into another surface.
+        source.notifyContentWillChange(org.jetbrains.skia.ContentChangeMode.DISCARD)
+        source.draw(blit.canvas, 0, 0, null)
+        return blit.makeImageSnapshot()
+    }
+
+    internal fun dumpSurfaceForDebug(path: String): Boolean = nSaveSurfacePng(handle.ptr, path)
 
     /**
      * macOS: reads the frame back from our own IOSurface (mpv's screenshot pipeline
@@ -123,10 +164,13 @@ actual class MpvMediampPlayer(
     internal fun releaseMacosSurface() {
         macosSkiaSurface?.close()
         macosSkiaSurface = null
+        macosBlitSurface?.close()
+        macosBlitSurface = null
         macosRenderTarget?.close()
         macosRenderTarget = null
         macosSurfaceWidth = 0
         macosSurfaceHeight = 0
+        macosSurfaceContext = null
         nReleaseMetalSurface(handle.ptr)
     }
 
