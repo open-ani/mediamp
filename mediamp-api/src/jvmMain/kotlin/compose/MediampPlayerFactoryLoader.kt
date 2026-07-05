@@ -16,9 +16,13 @@ public object MediampPlayerSurfaceProviderLoader {
 
     /**
      * Register a [MediampPlayerSurfaceProvider] implementation.
+     *
+     * Explicitly registered providers take precedence over ones discovered via
+     * [ServiceLoader] (matters for [first] and for [getByInstance] when multiple
+     * providers match the same player class).
      */
     public fun register(factory: MediampPlayerSurfaceProvider<*>) {
-        factories = (factories + factory).distinctBy { it.forClass }
+        factories = (listOf(factory) + factories).distinctBy { it.forClass }
     }
 
     public fun first(): MediampPlayerSurfaceProvider<*> = factories.firstOrNull()
