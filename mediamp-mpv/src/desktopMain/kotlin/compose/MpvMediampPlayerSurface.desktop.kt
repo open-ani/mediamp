@@ -129,13 +129,14 @@ private fun MpvMediampPlayerSurfaceMacos(
         logOnce("rendering ${width}x${height} via Metal surface")
         // Draw through Compose so the op survives RenderNode display-list recording
         // (raw nativeCanvas draws are dropped there). The image is a Skia-owned texture:
-        // snapshots of the BRT-wrapped surface itself do not render.
-        player.makeFrameImage()?.let { frame ->
-            try {
-                drawImage(frame.toComposeImageBitmap())
-            } finally {
-                frame.close()
-            }
+        // snapshots of the BRT-wrapped surface itself do not render. During resize
+        // animations the frame may still have the pre-resize dimensions — scale to fit.
+        player.currentFrameImage(frameTick.longValue)?.let { frame ->
+            drawImage(
+                frame.toComposeImageBitmap(),
+                srcSize = androidx.compose.ui.unit.IntSize(frame.width, frame.height),
+                dstSize = androidx.compose.ui.unit.IntSize(width, height),
+            )
         }
     }
 }

@@ -56,22 +56,43 @@ actual class MpvMediampPlayer(
     private var macosSurfaceHeight = 0
     private var macosSurfaceContext: DirectContext? = null
 
+    // Frame cache: mpv render + blit + snapshot happen only when mpv actually produced
+    // a new frame; overlay-driven Compose redraws just re-draw the cached image.
+    private var macosCachedFrame: org.jetbrains.skia.Image? = null
+    private var macosCachedTick = -1L
+    // Resize debounce: overlay/page animations resize the composable every frame;
+    // recreating the whole IOSurface chain each time visibly stutters playback. Keep
+    // rendering at the old size (scaled at draw time) until the size settles.
+    private var macosDesiredWidth = 0
+    private var macosDesiredHeight = 0
+    private var macosSizeChangedAtMs = 0L
+
     internal fun createMacosRenderContext(): Boolean = nCreateRenderContextMacos(handle.ptr)
 
     internal fun releaseMacosRenderContext(): Boolean = nDestroyRenderContextMacos(handle.ptr)
 
-    /** (Re)creates the IOSurface/FBO/MTLTexture chain when the composable size changes. */
+    /**
+     * (Re)creates the IOSurface/FBO/MTLTexture chain when the composable size changes.
+     * Size changes are debounced ([SIZE_SETTLE_MILLIS]): during layout animations the
+     * chain keeps its old size and the cached frame is scaled at draw time.
+     */
     internal fun ensureMacosSurface(
         width: Int,
         height: Int,
         mtlDevicePtr: Long,
         directContext: DirectContext,
     ): Boolean {
-        // Recreate when the size changes OR Skiko swapped its DirectContext (redrawer
-        // recreation): a surface built on a stale context silently renders nothing.
-        if (width == macosSurfaceWidth && height == macosSurfaceHeight &&
-            macosSkiaSurface != null && macosSurfaceContext === directContext
-        ) return true
+        val now = System.currentTimeMillis()
+        if (width != macosDesiredWidth || height != macosDesiredHeight) {
+            macosDesiredWidth = width
+            macosDesiredHeight = height
+            macosSizeChangedAtMs = now
+        }
+
+        val contextValid = macosSkiaSurface != null && macosSurfaceContext === directContext
+        if (contextValid && width == macosSurfaceWidth && height == macosSurfaceHeight) return true
+        // Keep the old chain while the size is still animating; scale at draw time.
+        if (contextValid && now - macosSizeChangedAtMs < SIZE_SETTLE_MILLIS) return true
 
         releaseMacosSurface()
         val metalTexture = nCreateMetalSurface(handle.ptr, width, height, mtlDevicePtr)
@@ -120,19 +141,30 @@ actual class MpvMediampPlayer(
     internal fun renderFrameMacos(): Boolean = nRenderFrameMacos(handle.ptr)
 
     /**
-     * Renders the freshest mpv frame and returns it as a Skia-owned texture image
-     * (safe to draw through Compose, including RenderNode recordings). Caller closes.
+     * Returns the current video frame as a Skia-owned texture image (safe to draw
+     * through Compose, including RenderNode recordings). The expensive part (mpv
+     * render + blit + snapshot) only runs when [frameTick] advanced, i.e. mpv actually
+     * produced a new frame; overlay-driven redraws reuse the cached image. Do NOT close
+     * the returned image — it is owned by the player.
      */
-    internal fun makeFrameImage(): org.jetbrains.skia.Image? {
+    internal fun currentFrameImage(frameTick: Long): org.jetbrains.skia.Image? {
         val source = macosSkiaSurface ?: return null
         val blit = macosBlitSurface ?: return null
+        if (frameTick == macosCachedTick) {
+            macosCachedFrame?.let { return it }
+        }
+
         nRenderFrameMacos(handle.ptr)
         // The wrapped surface was just modified externally (GL); without this, Skia
         // reuses a generation-cached snapshot of the texture and the video freezes on
         // the first (black) frame when sampled into another surface.
         source.notifyContentWillChange(org.jetbrains.skia.ContentChangeMode.DISCARD)
         source.draw(blit.canvas, 0, 0, null)
-        return blit.makeImageSnapshot()
+
+        macosCachedFrame?.close()
+        macosCachedFrame = blit.makeImageSnapshot()
+        macosCachedTick = frameTick
+        return macosCachedFrame
     }
 
     internal fun dumpSurfaceForDebug(path: String): Boolean = nSaveSurfacePng(handle.ptr, path)
@@ -162,6 +194,9 @@ actual class MpvMediampPlayer(
     }
 
     internal fun releaseMacosSurface() {
+        macosCachedFrame?.close()
+        macosCachedFrame = null
+        macosCachedTick = -1L
         macosSkiaSurface?.close()
         macosSkiaSurface = null
         macosBlitSurface?.close()
@@ -177,6 +212,7 @@ actual class MpvMediampPlayer(
     companion object {
         internal const val GL_TEXTURE_2D = 0x0DE1
         internal const val GL_RGBA8 = 0x8058
+        private const val SIZE_SETTLE_MILLIS = 150L
 
         /**
          * Configures where the mpv native runtime (libmpv + JNI wrapper) is loaded from.
