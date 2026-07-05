@@ -55,6 +55,7 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import org.openani.mediamp.vlc.VlcMediampPlayer.VlcjData
 import org.openani.mediamp.vlc.internal.VlcPlaybackStateMapper
+import org.openani.mediamp.vlc.internal.VlcSeekCoordinator
 import org.openani.mediamp.vlc.internal.io.SeekableInputCallbackMedia
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
 import uk.co.caprica.vlcj.factory.discovery.NativeDiscovery
@@ -122,6 +123,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private val buffering = VlcBuffering(currentPositionMillis, playbackState)
     private val playbackStateMapper = VlcPlaybackStateMapper()
     private val setTimeLock = ReentrantLock()
+    private val seekCoordinator = VlcSeekCoordinator()
 
     init {
         backgroundScope.launch {
@@ -264,7 +266,16 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                 override fun positionChanged(mediaPlayer: MediaPlayer?, newPosition: Float) {
                     val properties = mediaProperties.value
                     if (properties != null) {
-                        currentPositionMillis.value = (newPosition * properties.durationMillis).toLong()
+                        val reported = (newPosition * properties.durationMillis).toLong()
+                        // While a seek is settling, VLC still emits pre-seek positions; publishing
+                        // them pulls the progress bar back (open-ani/animeko#1238).
+                        val decision = seekCoordinator.onPositionReported(reported)
+                        if (decision.acceptPosition) {
+                            currentPositionMillis.value = reported
+                        }
+                        if (decision.submitTarget != VlcSeekCoordinator.NONE) {
+                            submitNativeSeek(decision.submitTarget)
+                        }
                     }
                 }
             },
@@ -363,6 +374,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     override suspend fun setMediaDataImpl(data: MediaData): VlcjData = when (data) {
         is UriMediaData -> {
             playbackStateMapper.reset()
+            seekCoordinator.reset()
             VlcjData(
                 data,
                 setPlay = {
@@ -389,6 +401,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
         is SeekableInputMediaData -> {
             playbackStateMapper.reset()
+            seekCoordinator.reset()
             val awaitJob = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
             try {
                 val input = data.createInput(backgroundScope.coroutineContext + awaitJob)
@@ -461,7 +474,27 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
             return
         }
 
+        // Optimistic update: the UI follows this value; stale VLC events are gated by the
+        // coordinator, and skip() uses it as the base so rapid skips accumulate correctly.
         currentPositionMillis.value = positionMillis
+
+        val submit = seekCoordinator.requestSeek(positionMillis)
+        if (submit != VlcSeekCoordinator.NONE) {
+            submitNativeSeek(submit)
+        } else {
+            // Throttled: our target got queued (latest wins). Guarantee the trailing flush
+            // even if no further requests or position events arrive (e.g. while paused).
+            backgroundScope.launch {
+                delay(seekCoordinator.minSubmitInterval + 20)
+                val flushed = seekCoordinator.flushQueued()
+                if (flushed != VlcSeekCoordinator.NONE) {
+                    submitNativeSeek(flushed)
+                }
+            }
+        }
+    }
+
+    private fun submitNativeSeek(positionMillis: Long) {
         player.submit {
             setTimeLock.withLock {
                 player.controls().setTime(positionMillis)
@@ -474,17 +507,10 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         if (playbackState.value < PlaybackState.READY || openResource.value == null) {
             return
         }
-        if (playbackState.value == PlaybackState.PAUSED) {
-            // 如果是暂停, 上面 positionChanged 事件不会触发, 所以这里手动更新
-            // 如果正在播放, 这里不能更新. 否则可能导致进度抖动 1 秒
-            currentPositionMillis.value = coercePositionMillis(currentPositionMillis.value + deltaMillis)
-        }
-        player.submit {
-            setTimeLock.withLock {
-                player.controls().skipTime(deltaMillis) // 采用当前 player 时间
-            }
-        }
-        surface.setAllowedDrawFrames(2) // 多渲染一帧, 防止 race 问题
+        // Base on our own (optimistically updated) position, NOT vlcj skipTime's native clock:
+        // while a previous seek is settling the native clock reports pre-seek positions, which
+        // made rapid skips compute from a regressed base and get lost (open-ani/animeko#1238).
+        seekTo(currentPositionMillis.value + deltaMillis)
     }
 
     private fun coercePositionMillis(positionMillis: Long): Long {
@@ -504,6 +530,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 
     override fun stopPlaybackImpl() {
         playbackStateMapper.reset()
+        seekCoordinator.reset()
         playbackState.value = PlaybackState.FINISHED
         currentPositionMillis.value = 0L
         currentPositionMillis.value = 0L

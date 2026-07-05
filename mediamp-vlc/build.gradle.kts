@@ -27,6 +27,9 @@ dependencies {
     implementation(libs.jna)
     implementation(libs.jna.platform)
     testImplementation(kotlin("test"))
+    // SkiaBitmapVideoSurface needs skiko natives at runtime; apps get them from Compose,
+    // tests need them explicitly (used by integration tests running a real libvlc).
+    testRuntimeOnly(compose.desktop.currentOs)
 }
 
 kotlin {
