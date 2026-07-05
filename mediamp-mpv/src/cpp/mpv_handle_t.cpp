@@ -403,6 +403,9 @@ bool mpv_handle_t::initialize() {
 void mpv_handle_t::on_render_update(void *context) {
     auto *instance = static_cast<mpv_handle_t *>(context);
     if (instance) {
+#ifdef __APPLE__
+        instance->signal_render_drain();
+#endif
         instance->notify_render_update();
     }
 }

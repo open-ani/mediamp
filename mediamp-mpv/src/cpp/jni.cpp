@@ -95,6 +95,8 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nCreateMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameMacos)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
 #endif
 
 	/**
@@ -412,6 +414,22 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseMetalSurface)(JNIEnv * env, jclass
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
     auto *instance = get_instance(ptr);
     return instance ? instance->render_frame() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->has_metal_surface() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
+    auto *instance = get_instance(ptr);
+    if (!instance || !path) {
+        return JNI_FALSE;
+    }
+    const char *path_chars = env->GetStringUTFChars(path, nullptr);
+    bool ok = instance->save_surface_png(path_chars);
+    env->ReleaseStringUTFChars(path, path_chars);
+    return ok;
 }
 
 #endif

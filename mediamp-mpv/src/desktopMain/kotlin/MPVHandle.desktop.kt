@@ -44,6 +44,13 @@ external fun nReleaseMetalSurface(ptr: Long): Boolean
 @InternalMediampApi
 external fun nRenderFrameMacos(ptr: Long): Boolean
 
+@InternalMediampApi
+external fun nHasMetalSurface(ptr: Long): Boolean
+
+/** Saves the current IOSurface contents (the last rendered frame) as PNG. */
+@InternalMediampApi
+external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
+
 @OptIn(InternalMediampApi::class)
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
     error("only implemented on Android")

@@ -86,7 +86,7 @@ abstract class JvmMpvMediampPlayer(
     private val playbackSpeed = MpvPlaybackSpeed(handle)
     private val audioLevelController = MpvAudioLevelController(handle)
     private val buffering = MpvBuffering(playbackState)
-    private val screenshots = MpvScreenshots(handle)
+    private val screenshots = MpvScreenshots { path -> takeScreenshotImpl(path) }
     private val videoAspectRatio = MpvVideoAspectRatio(handle)
     private val mediaMetadata = MpvMediaMetadata(handle)
 
@@ -241,6 +241,15 @@ abstract class JvmMpvMediampPlayer(
 
     internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
         return handle.setRenderUpdateListener(listener)
+    }
+
+    /**
+     * Writes the current video frame to [path] as an image. The default uses mpv's
+     * screenshot command, which cannot convert hwdec frames on all builds; platform
+     * subclasses may override with a native readback.
+     */
+    protected open suspend fun takeScreenshotImpl(path: String): Boolean {
+        return handle.command("screenshot-to-file", path, "video")
     }
 
     init {

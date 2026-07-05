@@ -77,7 +77,7 @@ val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
             append("-I \"\$JAVA_HOME/include\" -I \"\$JAVA_HOME/include/darwin\" ")
             append("-I $mpvPrefix/include -L $mpvPrefix/lib -lmpv -lavcodec ")
             append("-framework Foundation -framework Metal -framework IOSurface ")
-            append("-framework OpenGL -framework QuartzCore ")
+            append("-framework OpenGL -framework QuartzCore -framework CoreGraphics -framework ImageIO ")
             append("${srcDir.asFile.absolutePath}/*.cpp ${srcDir.asFile.absolutePath}/*.mm ")
             append("-o ${outputFile.get().asFile.absolutePath}")
         },
