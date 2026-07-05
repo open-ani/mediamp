@@ -258,6 +258,9 @@ bool mpv_handle_t::render_frame() {
     // races with GL completion under load (black frames), finish guarantees visibility.
     glFinish();
     CGLSetCurrentContext(nullptr);
+    last_present_ms_.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
     return render_result >= 0;
 }
 
@@ -335,10 +338,16 @@ void mpv_handle_t::start_drain_thread() {
     drain_quit_.store(false);
     drain_thread_ = new std::thread([this] {
         while (!drain_quit_.load()) {
-            if (drain_pending_.load() && !surface_active_.load()) {
+            bool surface_stale = false;
+            if (surface_active_.load()) {
+                int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                surface_stale = now_ms - last_present_ms_.load() > 250;
+            }
+            if (drain_pending_.load() && (!surface_active_.load() || surface_stale)) {
                 drain_pending_.store(false);
                 LOCK(texture_lock);
-                if (render_context_ && !surface_active_.load()) {
+                if (render_context_) {
                     auto context = (CGLContextObj) cgl_context_;
                     CGLSetCurrentContext(context);
                     int skip = 1;

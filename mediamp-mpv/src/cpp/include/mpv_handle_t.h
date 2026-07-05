@@ -125,6 +125,7 @@ private:
     std::atomic_bool surface_active_{false};
     std::atomic_bool drain_quit_{false};
     std::atomic_bool drain_pending_{false};
+    std::atomic<int64_t> last_present_ms_{0};
     void *drain_thread_ = nullptr;  // std::thread*, owned (render_macos.mm)
     void signal_render_drain();
     void start_drain_thread();
