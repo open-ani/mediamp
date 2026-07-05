@@ -23,9 +23,13 @@ public object MediampPlayerFactoryLoader {
 
     /**
      * Register a [MediampPlayerFactory] implementation.
+     *
+     * Explicitly registered factories take precedence over ones discovered via
+     * [ServiceLoader], so [first] deterministically returns the latest registration
+     * even when multiple backends are on the classpath.
      */
     public fun register(factory: MediampPlayerFactory<*>) {
-        factories = (factories + factory).distinctBy { it.forClass }
+        factories = (listOf(factory) + factories).distinctBy { it.forClass }
     }
 
     public fun first(): MediampPlayerFactory<*> = factories.firstOrNull()
