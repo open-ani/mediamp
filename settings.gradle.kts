@@ -38,6 +38,7 @@ include(":mediamp-test")
 include(":mediamp-web-preview")
 
 //include(":mediamp-preview")
+include(":mediamp-mpv-demo") // macOS-only prototype: mpv hwdec + Compose overlay
 include(":mediamp-source-ktxio")
 
 include(":ci-helper")
