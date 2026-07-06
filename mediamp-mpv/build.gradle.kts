@@ -90,6 +90,8 @@ val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
 tasks.withType<Test>().configureEach {
     dependsOn(compileJniDevMacos)
     systemProperty("mediamp.mpv.dev.native.dir", devNativeDir.get().asFile.absolutePath)
+    // CI 上防静默跳过: -Pmediamp.mpv.test.required=true 时环境缺失会 fail 而不是 skip
+    systemProperty("mediamp.mpv.test.required", getPropertyOrNull("mediamp.mpv.test.required") ?: "false")
 }
 
 val hostMpvTargetName = when (getOs()) {
@@ -152,6 +154,27 @@ val copyNativeJarForCurrentPlatform = tasks.register("copyNativeJarForCurrentPla
 
 tasks.named("assemble") {
     dependsOn(copyNativeJarForCurrentPlatform)
+}
+
+// In-repo zero-config verification: runs MpvZeroConfigTest in a fresh JVM with the platform
+// runtime jar (natives + per-platform manifest) on the classpath and WITHOUT prepareLibraries —
+// exactly the contract consumers get from runtimeOnly("org.openani.mediamp:mediamp-mpv-runtime").
+// A separate Test task because the native loader keeps global state per JVM.
+val hostMpvRuntimeJarTaskName = hostMpvTargetName?.let { "mpvRuntimeJar$it" }
+if (hostMpvRuntimeJarTaskName != null && hostMpvRuntimeJarTaskName in tasks.names) {
+    tasks.register<Test>("zeroConfigTest") {
+        group = "mediamp"
+        description = "Verifies zero-config native loading with the mpv runtime jar on the classpath"
+        val testCompilation = kotlin.targets.getByName("desktop").compilations.getByName("test")
+        testClassesDirs = testCompilation.output.classesDirs
+        classpath = files(
+            testCompilation.output.allOutputs,
+            testCompilation.runtimeDependencyFiles,
+            tasks.named<org.gradle.jvm.tasks.Jar>(hostMpvRuntimeJarTaskName).flatMap { it.archiveFile },
+        )
+        filter { includeTestsMatching("*ZeroConfig*") }
+        systemProperty("mediamp.mpv.zeroconfig", "true")
+    }
 }
 
 mavenPublishing {

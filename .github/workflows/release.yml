@@ -499,7 +499,7 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
     - id: 'step-10'
       name: 'Update Release Version Name'
       env:
@@ -507,10 +507,10 @@ jobs:
         GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
-      run: './gradlew updateReleaseVersionNameFromGit "-DCI_TAG=${{ steps.step-1.outputs.tag }}" "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
+      run: './gradlew updateReleaseVersionNameFromGit "-DCI_TAG=${{ steps.step-1.outputs.tag }}" "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
     - id: 'step-11'
       name: 'Build FFmpeg Apple XCFramework zip'
-      run: './gradlew :mediamp-ffmpeg:ffmpegAppleXcframeworkZip "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
+      run: './gradlew :mediamp-ffmpeg:ffmpegAppleXcframeworkZip "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
     - id: 'step-12'
       name: 'Upload FFmpeg Apple XCFramework zip'
       uses: 'actions/upload-artifact@v4'
@@ -566,7 +566,7 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKey: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKey }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
-      run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
+      run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
     - id: 'step-23'
       name: 'Cleanup temp files'
       continue-on-error: true

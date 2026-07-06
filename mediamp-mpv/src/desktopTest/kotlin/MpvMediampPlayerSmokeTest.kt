@@ -42,24 +42,30 @@ class MpvMediampPlayerSmokeTest {
             ?.let(::File)
             ?.takeIf { it.resolve("libmediampv.dylib").isFile || it.resolve("libmediampv.so").isFile }
 
+    /**
+     * On runners that are expected to have the full environment (self-hosted macOS),
+     * `-Pmediamp.mpv.test.required=true` turns silent skips into failures so the suite
+     * cannot degrade into a permanently-green no-op.
+     */
+    private fun skip(reason: String): Boolean {
+        check(System.getProperty("mediamp.mpv.test.required") != "true") {
+            "mpv smoke tests are required on this runner but would be skipped: $reason"
+        }
+        println("[SmokeTest] skipped: $reason")
+        return false
+    }
+
     private fun prepareOrSkip(): Boolean {
         if (!System.getProperty("os.name").contains("Mac")) {
-            println("[SmokeTest] skipped: not macOS")
-            return false
+            return skip("not macOS")
         }
         val dir = devNativeDir()
-        if (dir == null) {
-            println(
-                "[SmokeTest] skipped: dev native dir not usable " +
+            ?: return skip(
+                "dev native dir not usable " +
                         "(mediamp.mpv.dev.native.dir=${System.getProperty("mediamp.mpv.dev.native.dir")})",
             )
-            return false
-        }
         runCatching { MpvMediampPlayer.prepareLibraries(dir.absolutePath, extractRuntimeLibrary = false) }
-            .onFailure {
-                println("[SmokeTest] skipped: prepareLibraries failed: $it")
-                return false
-            }
+            .onFailure { return skip("prepareLibraries failed: $it") }
         return true
     }
 
@@ -150,7 +156,7 @@ class MpvMediampPlayerSmokeTest {
     @Test
     fun `uri playback - state machine, seek, features`() {
         if (!prepareOrSkip()) return
-        val video = generateTestVideo() ?: return
+        val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
         runBlocking(Dispatchers.Default) {
             val player = MpvMediampPlayer(Any(), coroutineContext)
@@ -249,7 +255,7 @@ class MpvMediampPlayerSmokeTest {
     @Test
     fun `screenshot pixel verification - frame content matches source and updates on seek`() {
         if (!prepareOrSkip()) return
-        val video = generateColorVideo() ?: return
+        val video = generateColorVideo() ?: run { skip("ffmpeg unavailable or color video generation failed"); return }
 
         runBlocking(Dispatchers.Default) {
             val player = MpvMediampPlayer(Any(), coroutineContext)
@@ -289,7 +295,7 @@ class MpvMediampPlayerSmokeTest {
     @Test
     fun `seekable input playback via stream_cb`() {
         if (!prepareOrSkip()) return
-        val video = generateTestVideo() ?: return
+        val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
         runBlocking(Dispatchers.Default) {
             val player = MpvMediampPlayer(Any(), coroutineContext)

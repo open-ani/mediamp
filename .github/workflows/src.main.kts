@@ -411,6 +411,8 @@ val buildMatrixInstances = listOf(
         mpvBuildVariant = "macos",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=arm64-v8a", // speed up testing
+            // self-hosted 环境齐全: mpv smoke 测试环境缺失时必须 fail 而不是静默跳过
+            "-Pmediamp.mpv.test.required=true",
         ),
         kotlinCompilerHeap = "4g",
         gradleParallel = true,
@@ -1131,6 +1133,11 @@ class WithMatrix(
         runGradle(
             name = "Build mpv runtime jar",
             tasks = arrayOf(task),
+        )
+        // 零配置合同验证: runtime jar 上 classpath, 不调 prepareLibraries, 独立 JVM
+        runGradle(
+            name = "Verify mpv zero-config loading",
+            tasks = arrayOf(":mediamp-mpv:zeroConfigTest"),
         )
     }
 

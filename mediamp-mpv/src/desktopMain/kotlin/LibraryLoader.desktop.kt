@@ -16,24 +16,12 @@ import org.openani.mediamp.nativeloader.NativeRuntimeLoader
 
 internal actual object LibraryLoader {
     private const val WRAPPER_NAME: String = "mediampv"
-    private const val LEGACY_MANIFEST: String = "mpv-natives.txt"
 
     private val classLoader: ClassLoader =
         MPVHandle::class.java.classLoader ?: ClassLoader.getSystemClassLoader()
 
-    /**
-     * Runtime jars name their manifest per platform (`mpv-natives-<os>-<arch>.txt`) so that
-     * multiple platforms' jars can coexist on the classpath (the `mediamp-mpv-runtime`
-     * aggregator). Falls back to the legacy un-suffixed name for older runtime jars.
-     */
-    private val manifestResourceName: String = run {
-        val platformSpecific = "mpv-natives-${currentPlatformSuffix()}.txt"
-        when {
-            classLoader.getResource(platformSpecific) != null -> platformSpecific
-            classLoader.getResource(LEGACY_MANIFEST) != null -> LEGACY_MANIFEST
-            else -> platformSpecific // nothing on classpath; keep the specific name for error messages
-        }
-    }
+    private val manifestResourceName: String =
+        selectMpvManifestResource(currentPlatformSuffix()) { classLoader.getResource(it) != null }
 
     private val CLASSPATH_RUNTIME: NativeClasspathRuntime =
         NativeClasspathRuntime(
@@ -77,12 +65,7 @@ internal actual object LibraryLoader {
         synchronized(this) {
             if (runtimeConfigured) return
             if (classLoader.getResource(CLASSPATH_RUNTIME.manifestResourceName) == null) {
-                error(
-                    "mpv native runtime not found: '${CLASSPATH_RUNTIME.manifestResourceName}' is not on the classpath. " +
-                            "Add runtimeOnly(\"org.openani.mediamp:mediamp-mpv-runtime\") (all platforms) or " +
-                            "runtimeOnly(\"org.openani.mediamp:mediamp-mpv-runtime-${currentPlatformSuffix()}\") (this platform only) " +
-                            "to your dependencies, or call MpvMediampPlayer.prepareLibraries(path) if you manage the native libraries yourself.",
-                )
+                error(mpvRuntimeMissingMessage(CLASSPATH_RUNTIME.manifestResourceName, currentPlatformSuffix()))
             }
             useDefaultRuntimeLibraryDirectory()
         }
@@ -98,17 +81,48 @@ internal actual object LibraryLoader {
         }
 }
 
-internal fun currentPlatformSuffix(): String {
-    val osName = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT)
+internal fun currentPlatformSuffix(): String =
+    platformSuffixFor(
+        osName = System.getProperty("os.name").orEmpty(),
+        osArch = System.getProperty("os.arch").orEmpty(),
+    )
+
+/** Maps `os.name`/`os.arch` to the runtime artifact suffix, e.g. `macos-arm64`. */
+internal fun platformSuffixFor(osName: String, osArch: String): String {
     val os = when {
-        osName.contains("win") -> "windows"
-        osName.contains("mac") -> "macos"
+        osName.lowercase(Locale.ROOT).contains("win") -> "windows"
+        osName.lowercase(Locale.ROOT).contains("mac") -> "macos"
         else -> "linux"
     }
-    val archName = System.getProperty("os.arch").orEmpty().lowercase(Locale.ROOT)
-    val arch = when (archName) {
+    val arch = when (osArch.lowercase(Locale.ROOT)) {
         "aarch64", "arm64" -> "arm64"
         else -> "x64"
     }
     return "$os-$arch"
 }
+
+internal const val MPV_LEGACY_MANIFEST: String = "mpv-natives.txt"
+
+/**
+ * Runtime jars name their manifest per platform (`mpv-natives-<os>-<arch>.txt`) so that
+ * multiple platforms' jars can coexist on the classpath (the `mediamp-mpv-runtime`
+ * aggregator). Falls back to the legacy un-suffixed name for older runtime jars; when
+ * nothing is on the classpath, keeps the platform-specific name for error messages.
+ */
+internal fun selectMpvManifestResource(
+    platformSuffix: String,
+    resourceExists: (String) -> Boolean,
+): String {
+    val platformSpecific = "mpv-natives-$platformSuffix.txt"
+    return when {
+        resourceExists(platformSpecific) -> platformSpecific
+        resourceExists(MPV_LEGACY_MANIFEST) -> MPV_LEGACY_MANIFEST
+        else -> platformSpecific
+    }
+}
+
+internal fun mpvRuntimeMissingMessage(manifestResourceName: String, platformSuffix: String): String =
+    "mpv native runtime not found: '$manifestResourceName' is not on the classpath. " +
+            "Add runtimeOnly(\"org.openani.mediamp:mediamp-mpv-runtime\") (all platforms) or " +
+            "runtimeOnly(\"org.openani.mediamp:mediamp-mpv-runtime-$platformSuffix\") (this platform only) " +
+            "to your dependencies, or call MpvMediampPlayer.prepareLibraries(path) if you manage the native libraries yourself."
