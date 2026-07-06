@@ -311,10 +311,19 @@ Android 子项目额外选项：
 
 ## macOS 渲染与开发工作流
 
-macOS 桌面渲染路径 (`src/cpp/render_macos.mm`): mpv render API 在独立的离屏 CGL context 上渲染进
-IOSurface 背书的 FBO, 同一块 IOSurface 包装为 Skia 同设备的 MTLTexture, 由 Compose Canvas 直接采样
-(零拷贝, hwdec=videotoolbox 全程留在 GPU)。render context 在播放器构造时即创建 —— `vo=libmpv` 要求
-loadfile 之前 render context 已存在, 否则播放会以 "no audio or video data played" 立即结束。
+macOS 桌面渲染路径 (`src/cpp/render_macos.mm`): 专用 native 渲染线程通过 mpv render API 在独立的
+离屏 CGL context 上渲染进三重缓冲的 IOSurface FBO 环, 每块 IOSurface 同时包装为 Skia 同设备的
+MTLTexture, 由 Compose Canvas 采样最新一块 (零拷贝, hwdec=videotoolbox 全程留在 GPU)。
+
+线程模型: 所有 GL 调用与缓冲变更只发生在渲染线程 (CGL context 常驻该线程); UI 侧只读打包的
+frame state (`generation|index|w|h|serial`) 并采样 latest buffer, 绘制路径上没有任何渲染/glFinish/
+重建操作。尺寸变化 (窗口 resize、overlay 引起的 relayout) 经 Compose 侧 150ms 防抖后异步投递
+(`nSetSurfaceConfigMacos`), 渲染线程在帧间完成换代: 旧代缓冲保留到消费端重新包装并 ack
+(`nAckRetiredBuffersMacos`) 之后才释放, 期间继续显示旧帧, 因此 resize 不掉帧不闪黑。无 surface 时
+(headless 探测、窗口未合成) 渲染线程用 `MPV_RENDER_PARAM_SKIP_RENDERING` 丢帧, 保证播放时钟推进。
+
+render context 在播放器构造时即创建 —— `vo=libmpv` 要求 loadfile 之前 render context 已存在,
+否则播放会以 "no audio or video data played" 立即结束。
 
 本地开发无需完整 meson 构建:
 

@@ -7,7 +7,9 @@
 
 #include <iostream>
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <jni.h>
@@ -67,18 +69,30 @@ public:
 #endif
 
 #ifdef __APPLE__
-    // Render API (macOS): mpv renders through OpenGL (offscreen CGL context) into an
-    // IOSurface-backed FBO; the same IOSurface is exposed to Skia as an MTLTexture.
-    // Implemented in render_macos.mm.
+    // Render API (macOS): a dedicated native render thread drives mpv through OpenGL
+    // (offscreen CGL context) into a ring of IOSurface-backed FBOs; each IOSurface is
+    // also wrapped as an MTLTexture on the consumer-provided MTLDevice (Skia's device).
+    // Consumers never render; they read the packed frame state and sample the latest
+    // buffer. Implemented in render_macos.mm.
     bool create_render_context();
     bool destroy_render_context();
 
-    // Returns a retained id<MTLTexture> pointer (as int64), or 0 on failure.
-    // The texture is created on the MTLDevice given by mtl_device_ptr (Skia's device).
-    int64_t create_metal_surface(int width, int height, int64_t mtl_device_ptr);
-    bool release_metal_surface();
+    // Requests the render thread to (re)allocate the buffer ring at width x height with
+    // MTLTextures on mtl_device_ptr (0 = system default device). width/height <= 0
+    // deactivates the surface (frames are then drained without rendering). Asynchronous:
+    // returns immediately, the swap happens between frames on the render thread.
+    bool set_surface_config(int width, int height, int64_t mtl_device_ptr);
 
-    bool render_frame();
+    // Packed frame state: generation(16) | latest_index(4, 0xF = none) | width(14) |
+    // height(14) | serial(16). Any change means there is something new to consume; a
+    // generation change means the buffer ring was reallocated (re-wrap textures, then
+    // call ack_retired_buffers()).
+    uint64_t get_frame_state();
+    // Retained id<MTLTexture> pointer of ring buffer `index` for the current generation.
+    int64_t get_buffer_texture(int index);
+    // Consumer no longer references the previous generation; its buffers may be freed.
+    bool ack_retired_buffers();
+
     bool has_metal_surface();
     bool save_surface_png(const char *path);
 #endif
@@ -112,24 +126,56 @@ private:
 #ifdef __APPLE__
     mpv_render_context *render_context_ = nullptr;
     void *cgl_context_ = nullptr;  // CGLContextObj
-    void *io_surface_ = nullptr;   // IOSurfaceRef
-    void *mtl_texture_ = nullptr;  // retained id<MTLTexture>
-    uint32_t fbo_ = 0, texture_ = 0;
-    int width_ = 0, height_ = 0;
-    CREATE_LOCK(texture_lock);
 
-    // Frame drain: with vo=libmpv, playback stalls unless someone consumes video
-    // frames. While no surface is attached (headless probing, background playback,
-    // surface not composed yet), a daemon thread discards frames via
-    // MPV_RENDER_PARAM_SKIP_RENDERING so the clock keeps advancing.
-    std::atomic_bool surface_active_{false};
-    std::atomic_bool drain_quit_{false};
-    std::atomic_bool drain_pending_{false};
-    std::atomic<int64_t> last_present_ms_{0};
-    void *drain_thread_ = nullptr;  // std::thread*, owned (render_macos.mm)
-    void signal_render_drain();
-    void start_drain_thread();
-    void stop_drain_thread();
+    // Triple-buffered IOSurface ring. All GL work and all buffer mutation happens on
+    // the render thread (which keeps the CGL context current for its whole lifetime);
+    // consumers only read the packed frame_state_ and the retained MTLTexture pointers.
+    // Rationale for 3 buffers: the render thread writes (latest+1)%3 while Skia may
+    // still have sampling of both the published latest and the previous frame in
+    // flight on its own GPU timeline.
+    static constexpr int kMacosBufferCount = 3;
+    struct macos_buffer {
+        void *io_surface = nullptr;   // IOSurfaceRef
+        void *mtl_texture = nullptr;  // retained id<MTLTexture>
+        uint32_t texture = 0;         // GL_TEXTURE_RECTANGLE bound to the IOSurface
+        uint32_t fbo = 0;
+    };
+    macos_buffer buffers_[kMacosBufferCount];
+    // Previous generation, kept alive until the consumer re-wrapped and acked, so a
+    // consumer that observed the old generation can still sample it during the swap.
+    macos_buffer retired_buffers_[kMacosBufferCount];
+    bool has_retired_buffers_ = false;
+    bool buffers_allocated_ = false;
+    int buffer_width_ = 0, buffer_height_ = 0;
+    int64_t buffer_device_ptr_ = 0;
+    uint32_t buffer_generation_ = 0;
+    uint64_t frame_serial_ = 0;
+    int latest_index_ = -1;
+    std::atomic<uint64_t> frame_state_{0xFull << 44};  // "no buffer" sentinel
+
+    // Requests to the render thread; guarded by render_mutex_.
+    bool config_pending_ = false;
+    int pending_width_ = 0, pending_height_ = 0;
+    int64_t pending_device_ptr_ = 0;
+    bool retire_ack_pending_ = false;
+    bool render_pending_ = false;
+    bool render_quit_ = false;
+    std::mutex render_mutex_;
+    std::condition_variable render_cv_;
+    void *render_thread_ = nullptr;  // std::thread*, owned (render_macos.mm)
+
+    void signal_render_update();
+    void start_render_thread();
+    void stop_render_thread();
+    void render_thread_loop();
+    // The helpers below assume the CGL context is current on the calling thread and
+    // render_mutex_ is held (except render_into/drain_one_frame, which run unlocked).
+    bool apply_config_locked();
+    bool allocate_buffer(macos_buffer &buffer, int width, int height, void *mtl_device);
+    void destroy_buffer_ring(macos_buffer *ring);
+    void publish_state_locked();
+    bool render_into(const macos_buffer &buffer);
+    void drain_one_frame();
 #endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;

@@ -8,11 +8,15 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.BackendRenderTarget
 import org.jetbrains.skia.BackendTexture
 import org.jetbrains.skia.ColorSpace
+import org.jetbrains.skia.ContentChangeMode
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
+import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
@@ -31,6 +35,7 @@ actual class MpvMediampPlayer(
         // exists at loadfile time ("no audio or video data played"). The macOS render
         // context owns its own offscreen CGL context and does not depend on any window,
         // so create it eagerly to remove the ordering dependency on the Compose surface.
+        // This also starts the native render thread that drives all frame rendering.
         if (hostOs == OS.MacOS) {
             createMacosRenderContext()
         }
@@ -47,172 +52,226 @@ actual class MpvMediampPlayer(
         backendTexture = null
     }
 
-    // macOS Metal path: mpv renders into an IOSurface which Skia samples as MTLTexture.
-    internal var macosSkiaSurface: Surface? = null
-        private set
-    private var macosRenderTarget: BackendRenderTarget? = null
+    // macOS Metal path: the native render thread renders mpv into a triple-buffered
+    // IOSurface ring; this side wraps the ring's MTLTextures as Skia surfaces and
+    // samples whichever buffer the packed frame state marks as latest. All methods
+    // below are called from the Compose/Skiko UI thread only.
+    private val macosWrappedSurfaces = arrayOfNulls<Surface>(MACOS_BUFFER_COUNT)
+    private val macosWrappedTargets = arrayOfNulls<BackendRenderTarget>(MACOS_BUFFER_COUNT)
     private var macosBlitSurface: Surface? = null
-    private var macosSurfaceWidth = 0
-    private var macosSurfaceHeight = 0
+    private var macosWrappedGeneration = -1
     private var macosSurfaceContext: DirectContext? = null
 
-    // Frame cache: mpv render + blit + snapshot happen only when mpv actually produced
-    // a new frame; overlay-driven Compose redraws just re-draw the cached image.
-    private var macosCachedFrame: org.jetbrains.skia.Image? = null
-    private var macosCachedTick = -1L
-    // Resize debounce: overlay/page animations resize the composable every frame;
-    // recreating the whole IOSurface chain each time visibly stutters playback. Keep
-    // rendering at the old size (scaled at draw time) until the size settles.
-    private var macosDesiredWidth = 0
-    private var macosDesiredHeight = 0
-    private var macosSizeChangedAtMs = 0L
+    // Frame cache: blit + snapshot happen only when the native frame state advanced;
+    // overlay-driven Compose redraws just re-draw the cached image.
+    private var macosCachedFrame: Image? = null
+    private var macosCachedState = 0L
+
+    private var macosRequestedWidth = 0
+    private var macosRequestedHeight = 0
+    private var macosRequestedDevicePtr = 0L
 
     internal fun createMacosRenderContext(): Boolean = nCreateRenderContextMacos(handle.ptr)
 
     internal fun releaseMacosRenderContext(): Boolean = nDestroyRenderContextMacos(handle.ptr)
 
     /**
-     * (Re)creates the IOSurface/FBO/MTLTexture chain when the composable size changes.
-     * Size changes are debounced ([SIZE_SETTLE_MILLIS]): during layout animations the
-     * chain keeps its old size and the cached frame is scaled at draw time.
+     * Asks the native render thread to size the buffer ring to [width] x [height]
+     * (physical pixels, normally the composable size — mpv then scales, letterboxes and
+     * renders subtitles at display resolution). Asynchronous and cheap: the swap
+     * happens between frames on the render thread; until the first frame lands in the
+     * new ring, [currentFrameImage] keeps returning the previous frame.
      */
-    internal fun ensureMacosSurface(
+    internal fun requestMacosSurface(width: Int, height: Int, mtlDevicePtr: Long): Boolean {
+        if (width == macosRequestedWidth && height == macosRequestedHeight &&
+            mtlDevicePtr == macosRequestedDevicePtr
+        ) return true
+        if (!nSetSurfaceConfigMacos(handle.ptr, width, height, mtlDevicePtr)) return false
+        macosRequestedWidth = width
+        macosRequestedHeight = height
+        macosRequestedDevicePtr = mtlDevicePtr
+        return true
+    }
+
+    /** Re-posts the current config when Skiko recreated its redrawer on a new MTLDevice. */
+    internal fun refreshMacosDeviceIfChanged(mtlDevicePtr: Long) {
+        if (macosRequestedWidth > 0 && mtlDevicePtr != macosRequestedDevicePtr) {
+            requestMacosSurface(macosRequestedWidth, macosRequestedHeight, mtlDevicePtr)
+        }
+    }
+
+    /**
+     * Returns the latest video frame as a Skia-owned texture image (safe to draw
+     * through Compose, including RenderNode recordings). The expensive part (blit +
+     * snapshot) only runs when the native render thread published a new frame; other
+     * redraws reuse the cached image. During a buffer-ring swap the previous frame is
+     * returned until the new ring has content, so resizes never flash black. Do NOT
+     * close the returned image — it is owned by the player.
+     */
+    internal fun currentFrameImage(directContext: DirectContext): Image? {
+        val state = nGetFrameStateMacos(handle.ptr)
+        if (state == macosCachedState && macosSurfaceContext === directContext) {
+            macosCachedFrame?.let { return it }
+        }
+        val generation = ((state ushr 48) and 0xFFFF).toInt()
+        val index = ((state ushr 44) and 0xF).toInt()
+        val width = ((state ushr 30) and 0x3FFF).toInt()
+        val height = ((state ushr 16) and 0x3FFF).toInt()
+        if (index == 0xF || width <= 0 || height <= 0) return macosCachedFrame
+
+        if (generation != macosWrappedGeneration ||
+            macosSurfaceContext !== directContext ||
+            macosBlitSurface == null
+        ) {
+            if (!rewrapMacosBuffers(generation, width, height, directContext)) {
+                return macosCachedFrame
+            }
+        }
+
+        val source = macosWrappedSurfaces[index] ?: return macosCachedFrame
+        val blit = macosBlitSurface ?: return macosCachedFrame
+        // The wrapped surface content was produced externally (GL); without this, Skia
+        // reuses a generation-cached snapshot of the texture and the video freezes on
+        // the first frame when sampled into another surface.
+        source.notifyContentWillChange(ContentChangeMode.DISCARD)
+        // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
+        // texture), so blit into a Skia-owned surface and snapshot that instead.
+        source.draw(blit.canvas, 0, 0, null)
+        macosCachedFrame?.close()
+        macosCachedFrame = blit.makeImageSnapshot()
+        macosCachedState = state
+        return macosCachedFrame
+    }
+
+    private fun rewrapMacosBuffers(
+        generation: Int,
         width: Int,
         height: Int,
-        mtlDevicePtr: Long,
         directContext: DirectContext,
     ): Boolean {
-        val now = System.currentTimeMillis()
-        if (width != macosDesiredWidth || height != macosDesiredHeight) {
-            macosDesiredWidth = width
-            macosDesiredHeight = height
-            macosSizeChangedAtMs = now
+        if (macosSurfaceContext !== directContext) {
+            // Images from a dead/replaced DirectContext must not be drawn again.
+            macosCachedFrame?.close()
+            macosCachedFrame = null
+            macosCachedState = 0L
         }
+        closeMacosWraps()
+        // Our references to the previous generation are gone; the render thread may
+        // free those buffers now.
+        nAckRetiredBuffersMacos(handle.ptr)
 
-        val contextValid = macosSkiaSurface != null && macosSurfaceContext === directContext
-        if (contextValid && width == macosSurfaceWidth && height == macosSurfaceHeight) return true
-        // Keep the old chain while the size is still animating; scale at draw time.
-        if (contextValid && now - macosSizeChangedAtMs < SIZE_SETTLE_MILLIS) return true
-
-        releaseMacosSurface()
-        val metalTexture = nCreateMetalSurface(handle.ptr, width, height, mtlDevicePtr)
-        if (metalTexture == 0L) return false
-
-        val renderTarget = BackendRenderTarget.makeMetal(width, height, metalTexture)
-        val surface = runCatching {
-            Surface.makeFromBackendRenderTarget(
-                context = directContext,
-                rt = renderTarget,
-                origin = SurfaceOrigin.TOP_LEFT,
-                colorFormat = SurfaceColorFormat.BGRA_8888,
-                colorSpace = ColorSpace.sRGB,
-            )
+        for (i in 0 until MACOS_BUFFER_COUNT) {
+            val texture = nGetBufferTextureMacos(handle.ptr, i)
+            if (texture == 0L) {
+                closeMacosWraps()
+                return false
+            }
+            val target = BackendRenderTarget.makeMetal(width, height, texture)
+            val surface = runCatching {
+                Surface.makeFromBackendRenderTarget(
+                    context = directContext,
+                    rt = target,
+                    origin = SurfaceOrigin.TOP_LEFT,
+                    colorFormat = SurfaceColorFormat.BGRA_8888,
+                    colorSpace = ColorSpace.sRGB,
+                )
+            }.getOrNull()
+            if (surface == null) {
+                target.close()
+                closeMacosWraps()
+                return false
+            }
+            macosWrappedTargets[i] = target
+            macosWrappedSurfaces[i] = surface
+        }
+        macosBlitSurface = runCatching {
+            Surface.makeRenderTarget(directContext, false, ImageInfo.makeN32Premul(width, height))
         }.getOrNull()
-        if (surface == null) {
-            renderTarget.close()
-            nReleaseMetalSurface(handle.ptr)
+        if (macosBlitSurface == null) {
+            closeMacosWraps()
             return false
         }
 
-        // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
-        // texture); blit each frame into a Skia-owned surface and snapshot that instead.
-        val blitSurface = runCatching {
-            Surface.makeRenderTarget(
-                directContext, false,
-                org.jetbrains.skia.ImageInfo.makeN32Premul(width, height),
-            )
-        }.getOrNull()
-        if (blitSurface == null) {
-            surface.close()
-            renderTarget.close()
-            nReleaseMetalSurface(handle.ptr)
+        // The ack above may have unblocked a pending reconfig; if the ring was swapped
+        // again while we were wrapping, these wraps are stale — drop them and let the
+        // next draw retry against the newer generation.
+        val currentGeneration = ((nGetFrameStateMacos(handle.ptr) ushr 48) and 0xFFFF).toInt()
+        if (currentGeneration != generation) {
+            closeMacosWraps()
             return false
         }
 
-        macosRenderTarget = renderTarget
-        macosSkiaSurface = surface
-        macosBlitSurface = blitSurface
-        macosSurfaceWidth = width
-        macosSurfaceHeight = height
+        macosWrappedGeneration = generation
         macosSurfaceContext = directContext
         return true
     }
 
-    internal fun renderFrameMacos(): Boolean = nRenderFrameMacos(handle.ptr)
-
-    /**
-     * Returns the current video frame as a Skia-owned texture image (safe to draw
-     * through Compose, including RenderNode recordings). The expensive part (mpv
-     * render + blit + snapshot) only runs when [frameTick] advanced, i.e. mpv actually
-     * produced a new frame; overlay-driven redraws reuse the cached image. Do NOT close
-     * the returned image — it is owned by the player.
-     */
-    internal fun currentFrameImage(frameTick: Long): org.jetbrains.skia.Image? {
-        val source = macosSkiaSurface ?: return null
-        val blit = macosBlitSurface ?: return null
-        if (frameTick == macosCachedTick) {
-            macosCachedFrame?.let { return it }
+    private fun closeMacosWraps() {
+        for (i in 0 until MACOS_BUFFER_COUNT) {
+            macosWrappedSurfaces[i]?.close()
+            macosWrappedSurfaces[i] = null
+            macosWrappedTargets[i]?.close()
+            macosWrappedTargets[i] = null
         }
+        macosBlitSurface?.close()
+        macosBlitSurface = null
+        macosWrappedGeneration = -1
+    }
 
-        nRenderFrameMacos(handle.ptr)
-        // The wrapped surface was just modified externally (GL); without this, Skia
-        // reuses a generation-cached snapshot of the texture and the video freezes on
-        // the first (black) frame when sampled into another surface.
-        source.notifyContentWillChange(org.jetbrains.skia.ContentChangeMode.DISCARD)
-        source.draw(blit.canvas, 0, 0, null)
-
+    internal fun releaseMacosSurface() {
         macosCachedFrame?.close()
-        macosCachedFrame = blit.makeImageSnapshot()
-        macosCachedTick = frameTick
-        return macosCachedFrame
+        macosCachedFrame = null
+        macosCachedState = 0L
+        closeMacosWraps()
+        macosSurfaceContext = null
+        // All texture references are dropped, so the render thread may free both
+        // generations immediately; frames go back to being drained.
+        nSetSurfaceConfigMacos(handle.ptr, 0, 0, 0L)
+        macosRequestedWidth = 0
+        macosRequestedHeight = 0
+        macosRequestedDevicePtr = 0L
     }
 
     internal fun dumpSurfaceForDebug(path: String): Boolean = nSaveSurfacePng(handle.ptr, path)
 
     /**
      * macOS: reads the frame back from our own IOSurface (mpv's screenshot pipeline
-     * cannot convert hwdec videotoolbox frames without zimg). Creates an ephemeral
-     * video-sized surface when none is attached (headless capture).
+     * cannot convert hwdec videotoolbox frames without zimg). When no surface is
+     * attached (headless capture), configures an ephemeral video-sized ring and waits
+     * for the render thread to produce a frame in it.
      */
     override suspend fun takeScreenshotImpl(path: String): Boolean {
         if (hostOs == OS.MacOS) {
             val hadSurface = nHasMetalSurface(handle.ptr)
+            var configured = false
             if (!hadSurface) {
                 val width = handle.getPropertyInt("width")
                 val height = handle.getPropertyInt("height")
                 if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
-                if (nCreateMetalSurface(handle.ptr, width, height, 0L) == 0L) {
+                configured = nSetSurfaceConfigMacos(handle.ptr, width, height, 0L)
+                if (!configured) return super.takeScreenshotImpl(path)
+                val rendered = withTimeoutOrNull(2_000) {
+                    while (((nGetFrameStateMacos(handle.ptr) ushr 44) and 0xF).toInt() == 0xF) {
+                        delay(10)
+                    }
+                    true
+                } ?: false
+                if (!rendered) {
+                    nSetSurfaceConfigMacos(handle.ptr, 0, 0, 0L)
                     return super.takeScreenshotImpl(path)
                 }
             }
-            nRenderFrameMacos(handle.ptr)
             val saved = nSaveSurfacePng(handle.ptr, path)
-            if (!hadSurface) nReleaseMetalSurface(handle.ptr)
+            if (configured) nSetSurfaceConfigMacos(handle.ptr, 0, 0, 0L)
             if (saved) return true
         }
         return super.takeScreenshotImpl(path)
     }
 
-    internal fun releaseMacosSurface() {
-        macosCachedFrame?.close()
-        macosCachedFrame = null
-        macosCachedTick = -1L
-        macosSkiaSurface?.close()
-        macosSkiaSurface = null
-        macosBlitSurface?.close()
-        macosBlitSurface = null
-        macosRenderTarget?.close()
-        macosRenderTarget = null
-        macosSurfaceWidth = 0
-        macosSurfaceHeight = 0
-        macosSurfaceContext = null
-        nReleaseMetalSurface(handle.ptr)
-    }
-
     companion object {
         internal const val GL_TEXTURE_2D = 0x0DE1
         internal const val GL_RGBA8 = 0x8058
-        private const val SIZE_SETTLE_MILLIS = 150L
+        internal const val MACOS_BUFFER_COUNT = 3
 
         /**
          * Configures where the mpv native runtime (libmpv + JNI wrapper) is loaded from.

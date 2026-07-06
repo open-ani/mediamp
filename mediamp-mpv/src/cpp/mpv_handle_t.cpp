@@ -402,12 +402,15 @@ bool mpv_handle_t::initialize() {
 
 void mpv_handle_t::on_render_update(void *context) {
     auto *instance = static_cast<mpv_handle_t *>(context);
-    if (instance) {
+    if (!instance) return;
 #ifdef __APPLE__
-        instance->signal_render_drain();
+    // The render thread consumes the update and calls notify_render_update() only
+    // after the frame is actually in an IOSurface, so consumers never wake up to a
+    // stale buffer.
+    instance->signal_render_update();
+#else
+    instance->notify_render_update();
 #endif
-        instance->notify_render_update();
-    }
 }
 
 bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {

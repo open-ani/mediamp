@@ -68,25 +68,17 @@ class MpvMediampPlayerSmokeTest {
 
     /**
      * With vo=libmpv, frames are only consumed when a render context drains them; without
-     * one, playback never advances. This drives the real macOS Metal render path headlessly
-     * (device ptr 0 = system default MTLDevice).
+     * one, playback never advances. The native render thread does all rendering; this
+     * just configures a headless buffer ring (device ptr 0 = system default MTLDevice)
+     * so the real Metal render path is exercised.
      */
     @OptIn(InternalMediampApi::class)
     private fun startHeadlessRenderer(player: MpvMediampPlayer): AutoCloseable {
         val handle = player.impl as MPVHandle
         check(player.createMacosRenderContext()) { "createMacosRenderContext failed" }
-        check(nCreateMetalSurface(handle.ptr, 640, 360, 0L) != 0L) { "nCreateMetalSurface failed" }
-        val running = java.util.concurrent.atomic.AtomicBoolean(true)
-        val thread = Thread {
-            while (running.get()) {
-                nRenderFrameMacos(handle.ptr)
-                Thread.sleep(15)
-            }
-        }.apply { isDaemon = true; start() }
+        check(nSetSurfaceConfigMacos(handle.ptr, 640, 360, 0L)) { "nSetSurfaceConfigMacos failed" }
         return AutoCloseable {
-            running.set(false)
-            thread.join(2000)
-            nReleaseMetalSurface(handle.ptr)
+            nSetSurfaceConfigMacos(handle.ptr, 0, 0, 0L)
             player.releaseMacosRenderContext()
         }
     }

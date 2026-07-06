@@ -13,16 +13,25 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.LocalWindow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import org.jetbrains.skia.BackendTexture
 import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.Image
@@ -49,9 +58,10 @@ actual fun MpvMediampPlayerSurface(
 }
 
 /**
- * macOS render path: mpv draws (hwdec=videotoolbox, OpenGL over an offscreen CGL context)
- * into an IOSurface, which Skia samples as an MTLTexture on its own Metal device — the
- * video becomes a regular draw call in the Compose scene graph, zero-copy end to end.
+ * macOS render path: a native render thread drives mpv (hwdec=videotoolbox, OpenGL over
+ * an offscreen CGL context) into a triple-buffered IOSurface ring, which Skia samples
+ * as MTLTextures on its own Metal device — the video becomes a regular draw call in the
+ * Compose scene graph, zero-copy end to end, and this thread never renders or blocks.
  */
 @OptIn(InternalMediampApi::class)
 @Composable
@@ -75,8 +85,9 @@ private fun MpvMediampPlayerSurfaceMacos(
             .getOrNull()
     }
     val frameTick = remember { mutableLongStateOf(0L) }
+    val canvasSize = remember { mutableStateOf(IntSize.Zero) }
     // The render context itself is created eagerly by the player (it must exist before
-    // loadfile); this composable only owns the IOSurface chain and the frame listener.
+    // loadfile); this composable only owns the surface config and the frame listener.
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
     fun logOnce(state: String) {
@@ -101,8 +112,33 @@ private fun MpvMediampPlayerSurfaceMacos(
         }
     }
 
-    Canvas(modifier) {
-        frameTick.longValue // subscribe: redraw whenever mpv reports a new frame
+    // Buffer-ring sizing: the first layout configures immediately; later size changes
+    // (window resize, overlay-driven relayout) settle for 150ms first. The reallocation
+    // itself happens between frames on the native render thread, and the draw pass
+    // letterboxes whatever the ring currently contains, so resizes cost no visible
+    // frames — the video keeps playing at the old size until the new ring has content.
+    LaunchedEffect(player, interop) {
+        val skiaInterop = interop ?: return@LaunchedEffect
+        var configured = false
+        snapshotFlow { canvasSize.value }
+            .filter { it.width > 0 && it.height > 0 }
+            .collectLatest { size ->
+                if (configured) delay(150)
+                while (true) {
+                    val devicePtr = runCatching { skiaInterop.mtlDevicePtr }.getOrNull()
+                    if (devicePtr != null &&
+                        player.requestMacosSurface(size.width, size.height, devicePtr)
+                    ) {
+                        configured = true
+                        break
+                    }
+                    delay(50) // Skiko redrawer not up yet; retry shortly
+                }
+            }
+    }
+
+    Canvas(modifier.onSizeChanged { canvasSize.value = it }) {
+        frameTick.longValue // subscribe: redraw whenever mpv publishes a new frame
 
         if (!renderContextReady) {
             logOnce("render context not ready")
@@ -121,21 +157,34 @@ private fun MpvMediampPlayerSurfaceMacos(
         val width = size.width.toInt()
         val height = size.height.toInt()
         if (width <= 0 || height <= 0) return@Canvas
-
-        if (!player.ensureMacosSurface(width, height, skiaInterop.mtlDevicePtr, directContext)) {
-            logOnce("ensureMacosSurface failed for ${width}x${height}")
-            return@Canvas
+        // Skiko can recreate its redrawer (and MTLDevice) at runtime; the ring's
+        // textures must live on Skia's current device.
+        runCatching { skiaInterop.mtlDevicePtr }.getOrNull()?.let {
+            player.refreshMacosDeviceIfChanged(it)
         }
+
         logOnce("rendering ${width}x${height} via Metal surface")
         // Draw through Compose so the op survives RenderNode display-list recording
         // (raw nativeCanvas draws are dropped there). The image is a Skia-owned texture:
-        // snapshots of the BRT-wrapped surface itself do not render. During resize
-        // animations the frame may still have the pre-resize dimensions — scale to fit.
-        player.currentFrameImage(frameTick.longValue)?.let { frame ->
+        // snapshots of the BRT-wrapped surface itself do not render. The frame normally
+        // matches the composable size; during a resize settle it is the old size, so fit
+        // it preserving aspect (letterbox) instead of stretching.
+        player.currentFrameImage(directContext)?.let { frame ->
+            val scale = minOf(
+                size.width / frame.width.toFloat(),
+                size.height / frame.height.toFloat(),
+            )
+            val dstWidth = (frame.width * scale).toInt()
+            val dstHeight = (frame.height * scale).toInt()
             drawImage(
                 frame.toComposeImageBitmap(),
-                srcSize = androidx.compose.ui.unit.IntSize(frame.width, frame.height),
-                dstSize = androidx.compose.ui.unit.IntSize(width, height),
+                srcSize = IntSize(frame.width, frame.height),
+                dstOffset = IntOffset(
+                    (width - dstWidth) / 2,
+                    (height - dstHeight) / 2,
+                ),
+                dstSize = IntSize(dstWidth, dstHeight),
+                filterQuality = FilterQuality.High,
             )
         }
     }
