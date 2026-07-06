@@ -50,6 +50,33 @@ internal fun Project.createDependencyOnlyDesktopRuntimeElements(
         dependencies.add(this@createDependencyOnlyDesktopRuntimeElements.dependencies.create(dependencyNotation))
     }
 
+/**
+ * A single dependency-only JVM runtime variant WITHOUT OS/arch attributes: plain JVM consumers
+ * (which carry no [OperatingSystemFamily]/[MachineArchitecture] attributes and thus cannot
+ * disambiguate attribute-split variants) resolve it unambiguously and pull every listed
+ * platform artifact; the native loader then picks the current platform's manifest at runtime.
+ */
+internal fun Project.createDependencyOnlyJvmRuntimeElements(
+    configurationName: String,
+    dependencyNotations: List<String>,
+): Configuration =
+    configurations.create(configurationName).apply {
+        isCanBeConsumed = true
+        isCanBeResolved = false
+        attributes.attribute(Usage.USAGE_ATTRIBUTE, objects.named<Usage>(Usage.JAVA_RUNTIME))
+        attributes.attribute(Category.CATEGORY_ATTRIBUTE, objects.named<Category>(Category.LIBRARY))
+        attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named<Bundling>(Bundling.EXTERNAL))
+        attributes.attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named<LibraryElements>(LibraryElements.JAR))
+        attributes.attribute(KotlinPlatformType.attribute, KotlinPlatformType.jvm)
+        attributes.attribute(
+            TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE,
+            objects.named<TargetJvmEnvironment>(TargetJvmEnvironment.STANDARD_JVM),
+        )
+        dependencyNotations.forEach { notation ->
+            dependencies.add(this@createDependencyOnlyJvmRuntimeElements.dependencies.create(notation))
+        }
+    }
+
 internal fun Project.publishDesktopRuntimeAggregator(
     componentName: String,
     publicationName: String,

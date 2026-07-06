@@ -485,6 +485,101 @@ abstract class MpvAssembleTask : DefaultTask() {
             ffmpegInstallDir = ffmpegPrefix,
             outputDir = outputPrefix,
         )
+
+        if (targetName.get().startsWith("Macos")) {
+            bundleAppleExternalDependencies(
+                execOperations = execOperations,
+                logger = logger,
+                libDir = outputPrefix.resolve("lib"),
+            )
+        }
+    }
+}
+
+/**
+ * Makes the macOS runtime self-contained: recursively copies every non-system dylib
+ * dependency (e.g. Homebrew libass/libplacebo and their transitive deps) into [libDir]
+ * and rewrites the load commands to `@loader_path`, mirroring what
+ * [collectWindowsRuntimeDlls] does for Windows. Without this, libmpv keeps absolute
+ * `/opt/homebrew/...` references and fails to load on machines without Homebrew.
+ */
+private fun bundleAppleExternalDependencies(
+    execOperations: ExecOperations,
+    logger: Logger,
+    libDir: File,
+) {
+    if (!libDir.isDirectory) return
+
+    fun listDylibs(): List<File> =
+        libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".dylib") }.orEmpty()
+
+    fun dependencyPaths(machO: File): List<String> {
+        val output = java.io.ByteArrayOutputStream()
+        execOperations.exec {
+            commandLine("xcrun", "otool", "-L", machO.absolutePath)
+            standardOutput = output
+        }
+        return output.toString()
+            .lineSequence()
+            .drop(1) // first line is the file itself
+            .map { it.trim().substringBefore(" (") }
+            .filter { it.isNotEmpty() }
+            .toList()
+    }
+
+    // System libraries and frameworks stay external; anything else must be bundled.
+    fun isExternal(path: String): Boolean =
+        path.startsWith("/") && !path.startsWith("/usr/lib/") && !path.startsWith("/System/")
+
+    val copied = mutableSetOf<String>()
+    var changed = true
+    while (changed) {
+        changed = false
+        listDylibs().forEach { machO ->
+            dependencyPaths(machO).forEach inner@{ dep ->
+                if (!isExternal(dep)) return@inner
+                val real = File(dep).canonicalFile
+                require(real.isFile) {
+                    "Dylib dependency '$dep' of ${machO.name} does not exist on this machine."
+                }
+                val bundled = libDir.resolve(real.name)
+                if (!bundled.exists()) {
+                    real.copyTo(bundled)
+                    bundled.setReadable(true, false)
+                    bundled.setWritable(true, true) // install_name_tool needs write access
+                    bundled.setExecutable(true, false)
+                    execOperations.exec {
+                        commandLine(
+                            "xcrun", "install_name_tool",
+                            "-id", "@loader_path/${real.name}",
+                            bundled.absolutePath,
+                        )
+                    }
+                    copied.add(real.name)
+                    changed = true
+                }
+                execOperations.exec {
+                    commandLine(
+                        "xcrun", "install_name_tool",
+                        "-change", dep, "@loader_path/${real.name}",
+                        machO.absolutePath,
+                    )
+                    isIgnoreExitValue = true
+                }
+            }
+        }
+    }
+
+    // install_name_tool edits invalidate code signatures, and arm64 macOS refuses to load
+    // unsigned dylibs — re-sign everything ad-hoc.
+    listDylibs().forEach { dylib ->
+        execOperations.exec {
+            commandLine("codesign", "--force", "--sign", "-", dylib.absolutePath)
+        }
+    }
+
+    if (copied.isNotEmpty()) {
+        logger.lifecycle("Bundled external macOS dylibs for mpv: ${copied.sorted().joinToString()}")
     }
 }
 
