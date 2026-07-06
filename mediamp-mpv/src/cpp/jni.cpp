@@ -92,9 +92,10 @@ extern "C" {
 #ifdef __APPLE__
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextMacos)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jlong JNICALL FN_DESKTOP(nCreateMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameMacos)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
 #endif
@@ -401,19 +402,24 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextMacos)(JNIEnv * env, 
     return instance ? instance->destroy_render_context() : JNI_FALSE;
 }
 
-JNIEXPORT jlong JNICALL FN_DESKTOP(nCreateMetalSurface)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr) {
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigMacos)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr) {
     auto *instance = get_instance(ptr);
-    return instance ? static_cast<jlong>(instance->create_metal_surface(width, height, mtl_device_ptr)) : 0;
+    return instance ? instance->set_surface_config(width, height, mtl_device_ptr) : JNI_FALSE;
 }
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseMetalSurface)(JNIEnv * env, jclass clazz, jlong ptr) {
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance ? instance->release_metal_surface() : JNI_FALSE;
+    return instance ? static_cast<jlong>(instance->get_frame_state()) : 0;
 }
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv * env, jclass clazz, jlong ptr, jint index) {
     auto *instance = get_instance(ptr);
-    return instance ? instance->render_frame() : JNI_FALSE;
+    return instance ? static_cast<jlong>(instance->get_buffer_texture(index)) : 0;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->ack_retired_buffers() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv * env, jclass clazz, jlong ptr) {

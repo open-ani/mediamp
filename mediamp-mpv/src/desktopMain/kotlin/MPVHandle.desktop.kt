@@ -26,7 +26,8 @@ external fun nReleaseTexture(ptr: Long): Boolean
 @InternalMediampApi
 external fun nRenderFrameToTexture(ptr: Long): Boolean
 
-// macOS render path (render_macos.mm): mpv → IOSurface-backed FBO → MTLTexture for Skia.
+// macOS render path (render_macos.mm): a native render thread drives mpv into a ring
+// of IOSurface-backed FBOs, each also wrapped as an MTLTexture for Skia.
 
 @InternalMediampApi
 external fun nCreateRenderContextMacos(ptr: Long): Boolean
@@ -34,20 +35,33 @@ external fun nCreateRenderContextMacos(ptr: Long): Boolean
 @InternalMediampApi
 external fun nDestroyRenderContextMacos(ptr: Long): Boolean
 
-/** Returns a retained MTLTexture pointer backed by the IOSurface mpv renders into, or 0. */
+/**
+ * Asks the render thread to (re)allocate the buffer ring at [width] x [height] with
+ * MTLTextures on [mtlDevicePtr] (0 = system default device). Non-positive size
+ * deactivates the surface. Asynchronous — the swap happens between frames.
+ */
 @InternalMediampApi
-external fun nCreateMetalSurface(ptr: Long, width: Int, height: Int, mtlDevicePtr: Long): Long
+external fun nSetSurfaceConfigMacos(ptr: Long, width: Int, height: Int, mtlDevicePtr: Long): Boolean
 
+/**
+ * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
+ * height(14) | serial(16). Any change means a new frame or a new buffer ring.
+ */
 @InternalMediampApi
-external fun nReleaseMetalSurface(ptr: Long): Boolean
+external fun nGetFrameStateMacos(ptr: Long): Long
 
+/** Retained MTLTexture pointer of ring buffer [index] for the current generation, or 0. */
 @InternalMediampApi
-external fun nRenderFrameMacos(ptr: Long): Boolean
+external fun nGetBufferTextureMacos(ptr: Long, index: Int): Long
+
+/** Signals that the previous buffer generation is no longer referenced and may be freed. */
+@InternalMediampApi
+external fun nAckRetiredBuffersMacos(ptr: Long): Boolean
 
 @InternalMediampApi
 external fun nHasMetalSurface(ptr: Long): Boolean
 
-/** Saves the current IOSurface contents (the last rendered frame) as PNG. */
+/** Saves the latest rendered frame (IOSurface contents) as PNG. */
 @InternalMediampApi
 external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
 

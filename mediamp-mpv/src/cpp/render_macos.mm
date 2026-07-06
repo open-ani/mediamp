@@ -6,11 +6,20 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-// macOS render path: mpv renders (hwdec=videotoolbox stays on GPU) through the libmpv
-// OpenGL render API on an offscreen CGL context, into an FBO whose color attachment is
-// an IOSurface-backed GL_TEXTURE_RECTANGLE. The same IOSurface is wrapped as an
-// MTLTexture on the caller-provided MTLDevice (Skia's device), so Compose/Skia can
-// sample the video frames zero-copy.
+// macOS render path: a dedicated render thread drives mpv (hwdec=videotoolbox stays on
+// GPU) through the libmpv OpenGL render API on an offscreen CGL context, into a ring of
+// FBOs whose color attachments are IOSurface-backed GL_TEXTURE_RECTANGLEs. Each
+// IOSurface is also wrapped as an MTLTexture on the consumer-provided MTLDevice (Skia's
+// device), so Compose/Skia can sample the video frames zero-copy.
+//
+// Threading model: the render thread owns the CGL context (current for its lifetime)
+// and is the only thread that touches GL or mutates the buffer ring. mpv's update
+// callback, buffer reconfiguration (resize) and consumer acks are requests posted under
+// render_mutex_; consumers read the packed frame_state_ and sample the latest buffer.
+// Because rendering never happens on the UI thread, buffer reallocation and glFinish
+// cost the video pipeline nothing user-visible: during a resize the consumer keeps
+// drawing the previous generation (kept alive until acked), and swaps to the new ring
+// the first time it observes a frame in it.
 
 #ifdef __APPLE__
 
@@ -29,7 +38,6 @@
 
 #include <dlfcn.h>
 #include <thread>
-#include <chrono>
 
 #include <mpv/client.h>
 #include <mpv/render.h>
@@ -107,7 +115,7 @@ bool mpv_handle_t::create_render_context() {
 
     cgl_context_ = context;
     mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
-    start_drain_thread();
+    start_render_thread();
     return true;
 }
 
@@ -117,21 +125,217 @@ bool mpv_handle_t::destroy_render_context() {
     return true;
 }
 
-int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_device_ptr) {
+bool mpv_handle_t::set_surface_config(int width, int height, int64_t mtl_device_ptr) {
     FP;
-    LOCK(texture_lock);
-    if (!cgl_context_ || width <= 0 || height <= 0) return 0;
+    if (!render_thread_) return false;
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        pending_width_ = width;
+        pending_height_ = height;
+        pending_device_ptr_ = mtl_device_ptr;
+        config_pending_ = true;
+    }
+    render_cv_.notify_all();
+    return true;
+}
 
+uint64_t mpv_handle_t::get_frame_state() {
+    return frame_state_.load(std::memory_order_acquire);
+}
+
+int64_t mpv_handle_t::get_buffer_texture(int index) {
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    if (!buffers_allocated_ || index < 0 || index >= kMacosBufferCount) return 0;
+    return (int64_t) (uintptr_t) buffers_[index].mtl_texture;
+}
+
+bool mpv_handle_t::ack_retired_buffers() {
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        retire_ack_pending_ = true;
+    }
+    render_cv_.notify_all();
+    return true;
+}
+
+bool mpv_handle_t::has_metal_surface() {
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    return buffers_allocated_;
+}
+
+// ---- render thread ----
+
+void mpv_handle_t::signal_render_update() {
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        render_pending_ = true;
+    }
+    render_cv_.notify_all();
+}
+
+void mpv_handle_t::start_render_thread() {
+    if (render_thread_) return;
+    render_quit_ = false;
+    render_thread_ = new std::thread([this] { render_thread_loop(); });
+}
+
+void mpv_handle_t::stop_render_thread() {
+    if (!render_thread_) return;
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        render_quit_ = true;
+    }
+    render_cv_.notify_all();
+    auto *thread = (std::thread *) render_thread_;
+    if (thread->joinable()) thread->join();
+    delete thread;
+    render_thread_ = nullptr;
+}
+
+void mpv_handle_t::render_thread_loop() {
+    // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
+    // attach/detach pair.
+    JNIEnv *thread_env = nullptr;
+    bool attached = jvm_ &&
+        jvm_->AttachCurrentThread(reinterpret_cast<void **>(&thread_env), nullptr) == JNI_OK;
     auto context = (CGLContextObj) cgl_context_;
     CGLSetCurrentContext(context);
 
-    // Release the previous chain first (GL objects need the context current).
-    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
-    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
-    if (mtl_texture_) { CFRelease(mtl_texture_); mtl_texture_ = nullptr; }
-    if (io_surface_) { CFRelease((IOSurfaceRef) io_surface_); io_surface_ = nullptr; }
-    width_ = height_ = 0;
+    std::unique_lock<std::mutex> lock(render_mutex_);
+    while (!render_quit_) {
+        render_cv_.wait(lock, [this] {
+            return render_quit_ || render_pending_ || config_pending_ || retire_ack_pending_;
+        });
+        if (render_quit_) break;
 
+        if (retire_ack_pending_) {
+            retire_ack_pending_ = false;
+            if (has_retired_buffers_) {
+                destroy_buffer_ring(retired_buffers_);
+                has_retired_buffers_ = false;
+            }
+        }
+
+        // A reconfig retires the current ring; never stack a second retirement on top
+        // of an unacked one (the consumer may still be sampling it) — postpone until
+        // the ack arrives.
+        bool configured = false;
+        if (config_pending_ && !has_retired_buffers_) {
+            config_pending_ = false;
+            configured = apply_config_locked();
+        }
+
+        bool want_render = render_pending_;
+        render_pending_ = false;
+
+        if (!buffers_allocated_) {
+            // With vo=libmpv, playback stalls unless someone consumes video frames.
+            // While no surface is configured (headless probing, surface not composed
+            // yet), discard them so the playback clock keeps advancing.
+            if (want_render) {
+                lock.unlock();
+                drain_one_frame();
+                lock.lock();
+            }
+            continue;
+        }
+
+        bool has_new_frame = false;
+        if (want_render && render_context_) {
+            has_new_frame =
+                (mpv_render_context_update(render_context_) & MPV_RENDER_UPDATE_FRAME) != 0;
+        }
+        // After a reconfig, redraw the current frame into the new ring even if mpv has
+        // nothing new (e.g. resizing while paused).
+        if (!has_new_frame && !configured) continue;
+
+        int next = (latest_index_ + 1) % kMacosBufferCount;
+        macos_buffer target = buffers_[next];
+        lock.unlock();
+        bool rendered = render_into(target);
+        lock.lock();
+        if (rendered) {
+            latest_index_ = next;
+            ++frame_serial_;
+            publish_state_locked();
+            lock.unlock();
+            // Notify only after the frame is actually in the IOSurface, so a consumer
+            // waking on this never samples a stale buffer.
+            notify_render_update();
+            lock.lock();
+        }
+    }
+    lock.unlock();
+    CGLSetCurrentContext(nullptr);
+    if (attached) jvm_->DetachCurrentThread();
+}
+
+bool mpv_handle_t::apply_config_locked() {
+    const int width = pending_width_, height = pending_height_;
+    const int64_t device_ptr = pending_device_ptr_;
+
+    if (width <= 0 || height <= 0) {
+        // Deactivate. The consumer drops all texture references before requesting
+        // this, so both generations can be freed immediately.
+        if (has_retired_buffers_) {
+            destroy_buffer_ring(retired_buffers_);
+            has_retired_buffers_ = false;
+        }
+        if (buffers_allocated_) {
+            destroy_buffer_ring(buffers_);
+            buffers_allocated_ = false;
+        }
+        latest_index_ = -1;
+        buffer_width_ = buffer_height_ = 0;
+        buffer_device_ptr_ = 0;
+        ++buffer_generation_;
+        publish_state_locked();
+        return false;
+    }
+    if (buffers_allocated_ && width == buffer_width_ && height == buffer_height_ &&
+        device_ptr == buffer_device_ptr_) {
+        return false;
+    }
+
+    if (buffers_allocated_) {
+        for (int i = 0; i < kMacosBufferCount; ++i) {
+            retired_buffers_[i] = buffers_[i];
+            buffers_[i] = macos_buffer{};
+        }
+        has_retired_buffers_ = true;
+        buffers_allocated_ = false;
+    }
+
+    id<MTLDevice> device = device_ptr != 0
+        ? (__bridge id<MTLDevice>) (void *) (uintptr_t) device_ptr
+        : MTLCreateSystemDefaultDevice();
+    bool ok = device != nil;
+    for (int i = 0; i < kMacosBufferCount && ok; ++i) {
+        ok = allocate_buffer(buffers_[i], width, height, (__bridge void *) device);
+    }
+    if (!ok) {
+        LOG("buffer ring allocation failed (%dx%d)\n", width, height);
+        destroy_buffer_ring(buffers_);
+        latest_index_ = -1;
+        buffer_width_ = buffer_height_ = 0;
+        buffer_device_ptr_ = 0;
+        ++buffer_generation_;
+        publish_state_locked();
+        return false;
+    }
+
+    buffers_allocated_ = true;
+    buffer_width_ = width;
+    buffer_height_ = height;
+    buffer_device_ptr_ = device_ptr;
+    latest_index_ = -1;
+    ++buffer_generation_;
+    publish_state_locked();
+    LOG("buffer ring allocated %dx%d gen=%u\n", width, height, buffer_generation_);
+    return true;
+}
+
+bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, void *mtl_device) {
     NSDictionary *surface_props = @{
         (id) kIOSurfaceWidth: @(width),
         (id) kIOSurfaceHeight: @(height),
@@ -141,10 +345,10 @@ int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_de
     IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) surface_props);
     if (!surface) {
         LOG("IOSurfaceCreate failed (%dx%d)\n", width, height);
-        CGLSetCurrentContext(nullptr);
-        return 0;
+        return false;
     }
 
+    auto context = (CGLContextObj) cgl_context_;
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_RECTANGLE, texture);
@@ -156,8 +360,7 @@ int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_de
         LOG("CGLTexImageIOSurface2D failed: %d\n", cgl_err);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
-        CGLSetCurrentContext(nullptr);
-        return 0;
+        return false;
     }
 
     GLuint fbo = 0;
@@ -166,20 +369,15 @@ int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_de
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, texture, 0);
     GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    CGLSetCurrentContext(nullptr);
     if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
         LOG("IOSurface FBO incomplete: 0x%x\n", fbo_status);
-        CGLSetCurrentContext(context);
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
-        CGLSetCurrentContext(nullptr);
         CFRelease(surface);
-        return 0;
+        return false;
     }
 
-    id<MTLDevice> device = mtl_device_ptr != 0
-        ? (__bridge id<MTLDevice>) (void *) (uintptr_t) mtl_device_ptr
-        : MTLCreateSystemDefaultDevice();
+    id<MTLDevice> device = (__bridge id<MTLDevice>) mtl_device;
     MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                      width:(NSUInteger) width
@@ -192,50 +390,45 @@ int64_t mpv_handle_t::create_metal_surface(int width, int height, int64_t mtl_de
                                                               plane:0];
     if (!metal_texture) {
         LOG("newTextureWithDescriptor:iosurface: failed\n");
-        CGLSetCurrentContext(context);
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
-        CGLSetCurrentContext(nullptr);
         CFRelease(surface);
-        return 0;
+        return false;
     }
 
-    io_surface_ = (void *) surface;
-    texture_ = texture;
-    fbo_ = fbo;
-    mtl_texture_ = (void *) CFBridgingRetain(metal_texture);
-    width_ = width;
-    height_ = height;
-    surface_active_.store(true);
-    LOG("metal surface created %dx%d (IOSurfaceID=%u)\n", width, height, IOSurfaceGetID(surface));
-    return (int64_t) (uintptr_t) mtl_texture_;
-}
-
-bool mpv_handle_t::release_metal_surface() {
-    FP;
-    LOCK(texture_lock);
-    if (!cgl_context_) return false;
-
-    auto context = (CGLContextObj) cgl_context_;
-    CGLSetCurrentContext(context);
-    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
-    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
-    CGLSetCurrentContext(nullptr);
-    if (mtl_texture_) { CFRelease(mtl_texture_); mtl_texture_ = nullptr; }
-    if (io_surface_) { CFRelease((IOSurfaceRef) io_surface_); io_surface_ = nullptr; }
-    width_ = height_ = 0;
-    surface_active_.store(false);
+    buffer.io_surface = (void *) surface;
+    buffer.texture = texture;
+    buffer.fbo = fbo;
+    buffer.mtl_texture = (void *) CFBridgingRetain(metal_texture);
     return true;
 }
 
-bool mpv_handle_t::render_frame() {
-    LOCK(texture_lock);
-    if (!render_context_ || !cgl_context_ || !fbo_) return false;
+void mpv_handle_t::destroy_buffer_ring(macos_buffer *ring) {
+    for (int i = 0; i < kMacosBufferCount; ++i) {
+        macos_buffer &buffer = ring[i];
+        if (buffer.fbo) glDeleteFramebuffers(1, &buffer.fbo);
+        if (buffer.texture) glDeleteTextures(1, &buffer.texture);
+        if (buffer.mtl_texture) CFRelease(buffer.mtl_texture);
+        if (buffer.io_surface) CFRelease((IOSurfaceRef) buffer.io_surface);
+        buffer = macos_buffer{};
+    }
+}
 
-    auto context = (CGLContextObj) cgl_context_;
-    CGLSetCurrentContext(context);
+void mpv_handle_t::publish_state_locked() {
+    uint64_t index_bits = latest_index_ < 0 ? 0xFull : (uint64_t) latest_index_;
+    frame_state_.store(
+        ((uint64_t) (buffer_generation_ & 0xFFFFu) << 48) |
+        (index_bits << 44) |
+        ((uint64_t) (buffer_width_ & 0x3FFF) << 30) |
+        ((uint64_t) (buffer_height_ & 0x3FFF) << 16) |
+        (frame_serial_ & 0xFFFFu),
+        std::memory_order_release);
+}
 
-    mpv_opengl_fbo fbo{(int) fbo_, width_, height_, 0};
+bool mpv_handle_t::render_into(const macos_buffer &buffer) {
+    if (!render_context_ || !buffer.fbo) return false;
+
+    mpv_opengl_fbo fbo{(int) buffer.fbo, buffer_width_, buffer_height_, 0};
     // No FLIP_Y: mpv then writes the image top-down in surface memory (row 0 = top),
     // which is what both Skia's SurfaceOrigin.TOP_LEFT sampling and the PNG readback
     // expect. Verified against ffmpeg-extracted reference frames.
@@ -247,30 +440,55 @@ bool mpv_handle_t::render_frame() {
 
     // mpv leaves the alpha channel undefined for opaque video; force it to 1 so
     // Skia's premultiplied sampling does not discard the frame.
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer.fbo);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // glFinish, not glFlush: Metal samples this IOSurface right after; a mere flush
-    // races with GL completion under load (black frames), finish guarantees visibility.
+    // glFinish, not glFlush: Metal samples this IOSurface right after the buffer is
+    // published; a mere flush races with GL completion under load (black frames),
+    // finish guarantees visibility. Runs on the render thread, so it never blocks UI.
     glFinish();
-    CGLSetCurrentContext(nullptr);
-    last_present_ms_.store(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
     return render_result >= 0;
 }
 
+void mpv_handle_t::drain_one_frame() {
+    if (!render_context_) return;
+    mpv_render_context_update(render_context_);
+    int skip = 1;
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_SKIP_RENDERING, &skip},
+        {MPV_RENDER_PARAM_INVALID, nullptr},
+    };
+    mpv_render_context_render(render_context_, params);
+}
+
 void mpv_handle_t::cleanup_render_resources() {
-    stop_drain_thread();
-    release_metal_surface();
+    stop_render_thread();
+
+    auto context = (CGLContextObj) cgl_context_;
+    if (context) {
+        CGLSetCurrentContext(context);
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        if (has_retired_buffers_) {
+            destroy_buffer_ring(retired_buffers_);
+            has_retired_buffers_ = false;
+        }
+        if (buffers_allocated_) {
+            destroy_buffer_ring(buffers_);
+            buffers_allocated_ = false;
+        }
+        latest_index_ = -1;
+        buffer_width_ = buffer_height_ = 0;
+        buffer_device_ptr_ = 0;
+        publish_state_locked();
+        CGLSetCurrentContext(nullptr);
+    }
 
     if (render_context_) {
         mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
-        auto context = (CGLContextObj) cgl_context_;
         if (context) CGLSetCurrentContext(context);
         mpv_render_context_free(render_context_);
         if (context) CGLSetCurrentContext(nullptr);
@@ -283,17 +501,15 @@ void mpv_handle_t::cleanup_render_resources() {
     }
 }
 
-bool mpv_handle_t::has_metal_surface() {
-    LOCK(texture_lock);
-    return io_surface_ != nullptr;
-}
-
-// Writes the current IOSurface contents (BGRA) as PNG. Independent of mpv's screenshot
-// pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU download.
+// Writes the latest rendered frame (BGRA IOSurface) as PNG. Independent of mpv's
+// screenshot pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU
+// download. Holds render_mutex_ for the whole save so the render thread cannot cycle
+// the ring back onto this buffer mid-read.
 bool mpv_handle_t::save_surface_png(const char *path) {
-    LOCK(texture_lock);
-    if (!io_surface_ || !path) return false;
-    auto surface = (IOSurfaceRef) io_surface_;
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    if (!buffers_allocated_ || latest_index_ < 0 || !path) return false;
+    auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
+    if (!surface) return false;
 
     if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
         LOG("IOSurfaceLock failed\n");
@@ -327,50 +543,6 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
     if (!ok) LOG("save_surface_png failed for %s\n", path);
     return ok;
-}
-
-void mpv_handle_t::signal_render_drain() {
-    drain_pending_.store(true);
-}
-
-void mpv_handle_t::start_drain_thread() {
-    if (drain_thread_) return;
-    drain_quit_.store(false);
-    drain_thread_ = new std::thread([this] {
-        while (!drain_quit_.load()) {
-            bool surface_stale = false;
-            if (surface_active_.load()) {
-                int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                surface_stale = now_ms - last_present_ms_.load() > 250;
-            }
-            if (drain_pending_.load() && (!surface_active_.load() || surface_stale)) {
-                drain_pending_.store(false);
-                LOCK(texture_lock);
-                if (render_context_) {
-                    auto context = (CGLContextObj) cgl_context_;
-                    CGLSetCurrentContext(context);
-                    int skip = 1;
-                    mpv_render_param params[] = {
-                        {MPV_RENDER_PARAM_SKIP_RENDERING, &skip},
-                        {MPV_RENDER_PARAM_INVALID, nullptr},
-                    };
-                    mpv_render_context_render(render_context_, params);
-                    CGLSetCurrentContext(nullptr);
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    });
-}
-
-void mpv_handle_t::stop_drain_thread() {
-    if (!drain_thread_) return;
-    drain_quit_.store(true);
-    auto *thread = (std::thread *) drain_thread_;
-    if (thread->joinable()) thread->join();
-    delete thread;
-    drain_thread_ = nullptr;
 }
 
 } // namespace mediampv
