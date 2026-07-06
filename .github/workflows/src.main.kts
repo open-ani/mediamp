@@ -160,6 +160,11 @@ class MatrixInstance(
     val buildIosFramework: Boolean = false,
     val buildAllAndroidAbis: Boolean = true,
     val ffmpegBuildVariant: String? = null,
+    /**
+     * mpv 原生构建家族 (`mediamp.mpv.buildvariant`). null = 不设置属性 (Gradle 侧默认全家族注册).
+     * 注意 mpv 没有 windows-arm64 与 ios 目标; Android 交叉编译管线未就绪, 发布时勿包含 android.
+     */
+    val mpvBuildVariant: String? = null,
 
     // Gradle command line args
     gradleHeap: String = "4g",
@@ -206,6 +211,10 @@ class MatrixInstance(
 
         ffmpegBuildVariant?.let {
             add(quote("-Pmediamp.ffmpeg.buildvariant=$it"))
+        }
+
+        mpvBuildVariant?.let {
+            add(quote("-Pmediamp.mpv.buildvariant=$it"))
         }
     }.joinToString(" ")
 
@@ -349,6 +358,7 @@ val buildMatrixInstances = listOf(
         gradleHeap = "4g",
         uploadDesktopInstallers = true,
         ffmpegBuildVariant = "windows",
+        mpvBuildVariant = "windows",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=x86_64",
         ),
@@ -376,6 +386,7 @@ val buildMatrixInstances = listOf(
         gradleHeap = "4g",
         uploadDesktopInstallers = true,
         ffmpegBuildVariant = "linux",
+        mpvBuildVariant = "linux",
         extraGradleArgs = emptyList(),
         buildAllAndroidAbis = true,
     ),
@@ -386,6 +397,7 @@ val buildMatrixInstances = listOf(
         buildIosFramework = false,
         gradleHeap = "4g",
         ffmpegBuildVariant = "ios,macos",
+        mpvBuildVariant = "macos",
         extraGradleArgs = listOf(),
         buildAllAndroidAbis = true,
     ),
@@ -395,6 +407,8 @@ val buildMatrixInstances = listOf(
         composeResourceTriple = "macos-arm64",
         uploadDesktopInstallers = true,
         ffmpegBuildVariant = "ios,macos,android",
+        // android 的 mpv NDK meson 交叉编译尚未修好, 发布时只构建 macos, 修好后加回 android
+        mpvBuildVariant = "macos",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=arm64-v8a", // speed up testing
         ),
@@ -421,16 +435,17 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         buildFfmpegArtifacts()
         uploadWindowsArm64Runtime()
         verifyAppleXcframeworkPublication()
-        // uploadMediampBackendMpv()
+        buildMpvArtifacts()
+        verifyMpvPublication()
 
         cleanupTempFiles()
     }
 }
 
 object ArtifactNames {
-    fun mediampBackendMpvNativeJar(os: OS, arch: Arch) = "mediamp-mpv-${os}-${arch}"
     fun ffmpegRuntimeJar(platformId: String) = "mediamp-ffmpeg-runtime-$platformId"
     fun ffmpegAppleXcframeworkZip() = "mediamp-ffmpeg-runtime-ios-xcframework"
+    fun mpvRuntimeJar(platformId: String) = "mediamp-mpv-runtime-$platformId"
 }
 
 workflow(
@@ -577,10 +592,7 @@ workflow(
                     ),
                 )
 
-
                 // no check
-                // uploadMediampBackendMpv()
-
                 additionalSteps(matrix)
 
                 cleanupTempFiles()
@@ -595,6 +607,7 @@ workflow(
                 artifactName = ArtifactNames.ffmpegRuntimeJar("windows-x64"),
                 path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-x64.jar",
             )
+            uploadMpvRuntimeJar()
         }
     }
     val winArm64 = addJob(buildMatrixInstances[Runner.GithubWindows11Arm64]) {
@@ -613,6 +626,7 @@ workflow(
                 artifactName = ArtifactNames.ffmpegRuntimeJar("linux-x64"),
                 path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-linux-x64.jar",
             )
+            uploadMpvRuntimeJar()
         }
     }
     val macX8664 = addJob(buildMatrixInstances[Runner.GithubMacOS15Intel]) {
@@ -622,6 +636,7 @@ workflow(
                 artifactName = ArtifactNames.ffmpegRuntimeJar("macos-x64"),
                 path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-macos-x64.jar",
             )
+            uploadMpvRuntimeJar()
         }
     }
 
@@ -637,6 +652,17 @@ workflow(
                 )
             }
             run(command = "ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true")
+            // mpv runtime prebuilt jars (macos-arm64 在本机由 publish 触发 mpvAssembleMacosArm64 构建;
+            // mpv 没有 windows-arm64 目标)
+            listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
+                uses(
+                    action = DownloadArtifact(
+                        name = ArtifactNames.mpvRuntimeJar(platformId),
+                        path = "mediamp-mpv/build/prebuilt-runtime-jars/$platformId",
+                    ),
+                )
+            }
+            run(command = "ls -R mediamp-mpv/build/prebuilt-runtime-jars || true")
             runGradle(
                 name = "Publish",
                 tasks = arrayOf("publish"),
@@ -921,16 +947,67 @@ class WithMatrix(
                 ),
             )
         }
+        if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows")) {
+            // mpv 的 Windows 构建走 MSYS2 UCRT64 (packages 与 MpvSupport.windowsTarget 对齐)
+            val msys2 = uses(
+                name = "Setup MSYS2 ucrt64 for mpv",
+                action = CustomAction(
+                    actionOwner = "msys2",
+                    actionName = "setup-msys2",
+                    actionVersion = "v2",
+                    inputs = mapOf(
+                        "msystem" to "UCRT64",
+                        "update" to "true",
+                        "install" to """
+                            git
+                            mingw-w64-ucrt-x86_64-ca-certificates
+                            mingw-w64-ucrt-x86_64-gcc
+                            mingw-w64-ucrt-x86_64-libass
+                            mingw-w64-ucrt-x86_64-libplacebo
+                            mingw-w64-ucrt-x86_64-meson
+                            mingw-w64-ucrt-x86_64-ninja
+                            mingw-w64-ucrt-x86_64-pkgconf
+                            mingw-w64-ucrt-x86_64-python-certifi
+                            mingw-w64-ucrt-x86_64-python
+                            mingw-w64-ucrt-x86_64-shaderc
+                            mingw-w64-ucrt-x86_64-spirv-cross
+                        """.trimIndent(),
+                    ),
+                ),
+            )
+            run(
+                name = "Configure MSYS2 root",
+                command = shell(
+                    $$"""
+                    $msys2Dir = '$${expr { msys2.outputs["msys2-location"] }}'.Replace('\', '/')
+                    "msys2.dir=$msys2Dir" >> local.properties
+                    """.trimIndent(),
+                ),
+            )
+        }
         if (matrix.isMacOSX64) {
             run(
                 name = "Install dependencies for macOS",
                 command = shell($$"""brew install nasm"""),
             )
         }
+        if (matrix.isMacOS && matrix.hasMpvBuildVariant("macos") && matrix.installNativeDeps) {
+            // mpv 的 meson 构建 + macOS dylib 闭包捆绑 (libass/libplacebo 及其依赖树从本机收集)
+            run(
+                name = "Install mpv build dependencies for macOS",
+                command = shell($$"""brew install meson ninja libass libplacebo"""),
+            )
+        }
         if (matrix.isUbuntu && matrix.ffmpegBuildVariant != null) {
             run(
                 name = "Install FFmpeg Dependencies for Ubuntu",
                 command = shell("""chmod +x ./ci-helper/install-ffmpeg-deps-ubuntu.sh && ./ci-helper/install-ffmpeg-deps-ubuntu.sh"""),
+            )
+        }
+        if (matrix.isUbuntu && matrix.hasMpvBuildVariant("linux")) {
+            run(
+                name = "Install mpv Dependencies for Ubuntu",
+                command = shell("""chmod +x ./ci-helper/install-mpv-deps-ubuntu.sh && ./ci-helper/install-mpv-deps-ubuntu.sh"""),
             )
         }
     }
@@ -1031,16 +1108,59 @@ class WithMatrix(
         )
     }
 
-    fun JobBuilder<*>.uploadMediampBackendMpv(): ActionStep<UploadArtifact.Outputs> {
+    /**
+     * mpv 在当前 host 上的 runtime jar 任务. mpv 没有 windows-arm64 目标.
+     */
+    fun mpvHostRuntimeJarInfo(): Pair<String, String>? = when {
+        matrix.isWindows && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarWindowsX64" to "windows-x64"
+        matrix.isUbuntu && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarLinuxX64" to "linux-x64"
+        matrix.isMacOS && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarMacosX64" to "macos-x64"
+        matrix.isMacOSAArch64 -> ":mediamp-mpv:mpvRuntimeJarMacosArm64" to "macos-arm64"
+        else -> null
+    }
+
+    /**
+     * Build 流程: 仅验证 mpv 原生构建不挂 (不上传).
+     */
+    fun JobBuilder<*>.buildMpvArtifacts() {
+        if (matrix.mpvBuildVariant == null) return
+        val (task, _) = mpvHostRuntimeJarInfo() ?: return
         runGradle(
-            name = "Build mediamp-mpv",
-            tasks = arrayOf("copyNativeJarForCurrentPlatform"),
+            name = "Build mpv runtime jar",
+            tasks = arrayOf(task),
+        )
+    }
+
+    /**
+     * Build 流程: 验证 mpv 的 Maven 发布链路 (KMP 模块 + 当前平台 runtime publication + 聚合工件),
+     * 发布到隔离的本地 repo, 不污染 runner 的 ~/.m2.
+     */
+    fun JobBuilder<*>.verifyMpvPublication() {
+        if (matrix.mpvBuildVariant == null) return
+        runGradle(
+            name = "Verify mpv Maven publication",
+            tasks = arrayOf(
+                "-Dmaven.repo.local=mediamp-mpv/build/maven-local",
+                ":mediamp-mpv:publishToMavenLocal",
+            ),
+        )
+    }
+
+    /**
+     * Release 流程: 构建并上传 mpv runtime jar, 供 publish job 作为 prebuilt jar 消费.
+     */
+    fun JobBuilder<*>.uploadMpvRuntimeJar(): ActionStep<UploadArtifact.Outputs>? {
+        if (matrix.mpvBuildVariant == null) return null
+        val (task, platformId) = mpvHostRuntimeJarInfo() ?: return null
+        runGradle(
+            name = "Build mpv runtime jar",
+            tasks = arrayOf(task),
         )
         return uses(
-            name = "Upload mediamp-mpv native builds",
+            name = "Upload mpv runtime jar",
             action = UploadArtifact(
-                name = ArtifactNames.mediampBackendMpvNativeJar(matrix.os, matrix.arch),
-                path_Untyped = "mediamp-mpv/build/native-jars/mediamp-mpv-*.jar",
+                name = ArtifactNames.mpvRuntimeJar(platformId),
+                path_Untyped = "mediamp-mpv/build/libs/mediamp-mpv-runtime-*-$platformId.jar",
                 overwrite = true,
                 ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Error,
             ),
@@ -1086,6 +1206,10 @@ val MatrixInstance.isMacOSX64 get() = (os == OS.MACOS) and (arch == Arch.X64)
 val MatrixInstance.isWindowsAArch64 get() = (os == OS.WINDOWS) and (arch == Arch.AARCH64)
 fun MatrixInstance.hasFfmpegBuildVariant(variant: String): Boolean {
     return ffmpegBuildVariant?.split(',')?.map { it.trim() }?.any { it == variant } == true
+}
+
+fun MatrixInstance.hasMpvBuildVariant(variant: String): Boolean {
+    return mpvBuildVariant?.split(',')?.map { it.trim() }?.any { it == variant } == true
 }
 
 // only for highlighting (though this does not work in KT 2.1.0)
