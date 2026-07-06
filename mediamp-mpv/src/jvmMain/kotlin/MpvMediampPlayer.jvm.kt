@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.mpv.internal.MpvPlaybackStateMachine
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
@@ -65,12 +66,7 @@ abstract class JvmMpvMediampPlayer(
     }
 
     internal val handle by lazy { MPVHandle(context) }
-    private var pauseRequestedByUser: Boolean = false
-    private var pausedForCache: Boolean = false
-    private var playbackSessionActive: Boolean = false
-
-    @Volatile
-    private var seekInProgress: Boolean = false
+    private val stateMachine = MpvPlaybackStateMachine()
 
     var currentSize: Size? = null
         @InternalMediampApi set
@@ -110,36 +106,23 @@ abstract class JvmMpvMediampPlayer(
         override fun onPropertyChange(name: String, value: Boolean) {
             when (name) {
                 "pause" -> {
-                    pauseRequestedByUser = value
-                    syncObservedPlaybackState()
+                    stateMachine.onPauseProperty(value, playbackState.value)?.let { playbackState.value = it }
                 }
 
                 "paused-for-cache" -> {
-                    pausedForCache = value
-                    syncObservedPlaybackState()
+                    stateMachine.onPausedForCacheProperty(value, playbackState.value)?.let { playbackState.value = it }
                 }
 
-                "seeking" -> {
-                    if (!value) seekInProgress = false
-                }
+                "seeking" -> stateMachine.onSeekingProperty(value)
 
                 "mute" -> audioLevelController.onMuteChanged(value)
 
                 "eof-reached" -> {
-                    if (value && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
-                        resetPlaybackSessionFlags()
-                        playbackState.value = PlaybackState.FINISHED
-                    }
+                    stateMachine.onEofReachedProperty(value, playbackState.value)?.let { playbackState.value = it }
                 }
 
                 "idle-active" -> {
-                    if (value && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
-                        // With keep-open=always this only fires when loading fails or the
-                        // file is unloaded externally.
-                        // TODO: distinguish load errors (-> ERROR) from normal unloads.
-                        resetPlaybackSessionFlags()
-                        playbackState.value = PlaybackState.FINISHED
-                    }
+                    stateMachine.onIdleActiveProperty(value, playbackState.value)?.let { playbackState.value = it }
                 }
             }
         }
@@ -153,7 +136,7 @@ abstract class JvmMpvMediampPlayer(
         override fun onPropertyChange(name: String, value: Double) {
             when (name) {
                 "time-pos" -> {
-                    if (!seekInProgress) {
+                    if (!stateMachine.shouldIgnoreTimePos()) {
                         _currentPositionMillis.value = (value * 1000).toLong()
                     }
                 }
@@ -177,13 +160,7 @@ abstract class JvmMpvMediampPlayer(
         }
 
         override fun onEndFile(reason: Int, mpvError: Int) {
-            // MPV_END_FILE_REASON_ERROR = 4. Map load/demux failures to ERROR so
-            // downstream error handlers (e.g. automatic source switching) can react;
-            // EOF is handled via the "eof-reached" property, STOP/QUIT via stop()/close().
-            if (reason == 4 && playbackSessionActive && playbackState.value >= PlaybackState.READY) {
-                resetPlaybackSessionFlags()
-                playbackState.value = PlaybackState.ERROR
-            }
+            stateMachine.onEndFile(reason, playbackState.value)?.let { playbackState.value = it }
         }
     }
 
@@ -193,30 +170,8 @@ abstract class JvmMpvMediampPlayer(
 
     override fun getCurrentPositionMillis(): Long = currentPositionMillis.value
 
-    private fun syncObservedPlaybackState() {
-        if (!playbackSessionActive || playbackState.value < PlaybackState.READY) {
-            return
-        }
-        if (playbackState.value == PlaybackState.FINISHED) {
-            // keep-open pauses at EOF; don't resurrect PAUSED after we reported FINISHED.
-            return
-        }
-        playbackState.value = when {
-            pauseRequestedByUser -> PlaybackState.PAUSED
-            pausedForCache -> PlaybackState.PAUSED_BUFFERING
-            else -> PlaybackState.PLAYING
-        }
-    }
-
-    private fun resetPlaybackSessionFlags() {
-        pauseRequestedByUser = false
-        pausedForCache = false
-        playbackSessionActive = false
-        seekInProgress = false
-    }
-
     private fun clearPlaybackSession(resetPosition: Boolean) {
-        resetPlaybackSessionFlags()
+        stateMachine.reset()
         _mediaProperties.value = null
         mediaMetadata.clear()
         if (resetPosition) {
@@ -385,17 +340,14 @@ abstract class JvmMpvMediampPlayer(
                 val media = openResource.value ?: return
                 handle.setPropertyBoolean("pause", false)
                 if (handle.command("loadfile", media.loadTarget, "replace")) {
-                    playbackSessionActive = true
-                    pauseRequestedByUser = false
-                    pausedForCache = false
+                    stateMachine.onPlaybackStarted()
                     playbackState.value = PlaybackState.PLAYING
                 }
             }
 
             PlaybackState.PAUSED, PlaybackState.PAUSED_BUFFERING -> {
                 if (handle.setPropertyBoolean("pause", false)) {
-                    playbackSessionActive = true
-                    pauseRequestedByUser = false
+                    stateMachine.onResumed()
                     playbackState.value = PlaybackState.PLAYING
                 }
             }
@@ -406,8 +358,7 @@ abstract class JvmMpvMediampPlayer(
 
     override fun pauseImpl() {
         if (handle.setPropertyBoolean("pause", true)) {
-            playbackSessionActive = true
-            pauseRequestedByUser = true
+            stateMachine.onPauseRequested()
             playbackState.value = PlaybackState.PAUSED
         }
     }
@@ -417,13 +368,13 @@ abstract class JvmMpvMediampPlayer(
 
         val targetPositionMillis = positionMillis.coerceAtLeast(0L)
         val targetSeconds = targetPositionMillis / 1000.0
-        seekInProgress = true
+        stateMachine.onSeekStarted()
         if (handle.command("seek", formatSeconds(targetSeconds), "absolute+exact")) {
             // Optimistic: keep the intent so rapid skip() calls accumulate correctly and
             // the progress bar never jumps back to a stale pre-seek position.
             _currentPositionMillis.value = targetPositionMillis
         } else {
-            seekInProgress = false
+            stateMachine.onSeekRejected()
         }
     }
 
