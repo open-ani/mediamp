@@ -1143,7 +1143,8 @@ class WithMatrix(
         runGradle(
             name = "Verify mpv Maven publication",
             tasks = arrayOf(
-                "-Dmaven.repo.local=mediamp-mpv/build/maven-local",
+                // 预引号: PowerShell 会把未引号的 -Dmaven.repo.local=... 分词拆坏
+                "\"-Dmaven.repo.local=mediamp-mpv/build/maven-local\"",
                 ":mediamp-mpv:publishToMavenLocal",
             ),
         )

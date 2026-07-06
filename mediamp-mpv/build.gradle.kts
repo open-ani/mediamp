@@ -58,15 +58,18 @@ configureMediampMpvModule()
 // so the module can be developed/tested without the full meson mpv build. The output
 // directory is meant for MpvMediampPlayer.prepareLibraries(dir, extractRuntimeLibrary = false).
 val devNativeDir = layout.buildDirectory.dir("dev-native")
+val devMpvPrefix = getPropertyOrNull("mediamp.mpv.dev.prefix") ?: "/opt/homebrew"
 val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
     group = "mediamp"
     description = "Compile libmediampv.dylib against Homebrew libmpv (macOS dev only)"
-    onlyIf { getOs() == Os.MacOS }
+    // CI runners don't have Homebrew mpv headers; the real runtime is built via meson
+    // (mpvAssemble*) there, so silently skip this dev convenience when headers are absent.
+    onlyIf { getOs() == Os.MacOS && file("$devMpvPrefix/include/mpv/client.h").isFile }
     val srcDir = layout.projectDirectory.dir("src/cpp")
     val outputFile = devNativeDir.map { it.file("libmediampv.dylib") }
     inputs.dir(srcDir)
     outputs.file(outputFile)
-    val mpvPrefix = getPropertyOrNull("mediamp.mpv.dev.prefix") ?: "/opt/homebrew"
+    val mpvPrefix = devMpvPrefix
     commandLine(
         "/bin/zsh", "-c",
         buildString {
