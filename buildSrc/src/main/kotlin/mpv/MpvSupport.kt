@@ -79,6 +79,9 @@ internal class MpvBuildContext(
     val desktopRuntimeTargets: List<DesktopRuntimeTarget> = DEFAULT_DESKTOP_RUNTIME_TARGETS
 
     val commonMesonOptions: List<String> = buildList {
+        // Debian/Ubuntu 的 meson 默认 libdir 是 multiarch 子目录 (lib/x86_64-linux-gnu),
+        // 而打包/JNI 链接统一从 install/lib 取, 显式固定为 lib.
+        add("-Dlibdir=lib")
         add("-Dlibmpv=true")
         add("-Dcplayer=false")
         add("-Dtests=false")
