@@ -59,9 +59,8 @@ sealed class Platform {
 private val _currentPlatform = runCatching { currentPlatformImpl() } // throw only on get
 
 /**
- * 获取当前的平台. 在 Linux 上使用时会抛出 [UnsupportedOperationException].
- *
- * CI 会跑 Ubuntu test (比较快), 所以在 test 环境需要谨慎使用此 API.
+ * 获取当前的平台. 支持 macOS / Windows / Linux 桌面; 无法识别的 os.name 才抛
+ * [UnsupportedOperationException].
  */
 
 fun currentPlatform(): Platform = _currentPlatform.getOrThrow()

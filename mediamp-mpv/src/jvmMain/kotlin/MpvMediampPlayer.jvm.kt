@@ -250,6 +250,13 @@ abstract class JvmMpvMediampPlayer(
                 handle.option("vo", "libmpv")
             }
 
+            is Platform.Linux -> {
+                // vo=libmpv defers GL context creation to the render API (the desktop render
+                // path is not implemented on Linux yet); ao is picked at playback time.
+                handle.option("ao", "pulse,alsa")
+                handle.option("vo", "libmpv")
+            }
+
             else -> {}
         }
 
