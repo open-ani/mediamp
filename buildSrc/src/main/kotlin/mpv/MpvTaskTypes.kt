@@ -493,6 +493,46 @@ abstract class MpvAssembleTask : DefaultTask() {
                 libDir = outputPrefix.resolve("lib"),
             )
         }
+
+        if (targetName.get() == "LinuxX64") {
+            setLinuxRunpathOrigin(
+                execOperations = execOperations,
+                logger = logger,
+                libDir = outputPrefix.resolve("lib"),
+            )
+        }
+    }
+}
+
+/**
+ * Makes the bundled Linux libraries load their siblings from the same directory: sets
+ * `RUNPATH=$ORIGIN` on every regular `.so`, the ELF equivalent of macOS `@loader_path`
+ * and the Windows `SetDllDirectory` path. Without it, `System.load(libmediampv.so)` cannot
+ * resolve `libmpv.so.2` and the bundled ffmpeg libraries that sit next to it.
+ *
+ * System libraries (libass, libplacebo, glibc, X11, ...) are intentionally NOT bundled and
+ * are still resolved via the system linker; the Linux runtime is therefore not fully
+ * self-contained (documented limitation), but it is loadable wherever those system libraries
+ * are present.
+ */
+private fun setLinuxRunpathOrigin(
+    execOperations: ExecOperations,
+    logger: Logger,
+    libDir: File,
+) {
+    if (!libDir.isDirectory) return
+    val soFiles = libDir.listFiles()
+        ?.filter { it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) && it.name.contains(".so") }
+        .orEmpty()
+
+    soFiles.forEach { so ->
+        execOperations.exec {
+            commandLine("patchelf", "--set-rpath", "\$ORIGIN", so.absolutePath)
+        }
+    }
+
+    if (soFiles.isNotEmpty()) {
+        logger.lifecycle("Set RUNPATH=\$ORIGIN on Linux runtime libraries: ${soFiles.map { it.name }.sorted().joinToString()}")
     }
 }
 

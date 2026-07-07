@@ -19,6 +19,7 @@ sudo apt-get update -qq
 sudo apt-get install -y --no-install-recommends \
     meson \
     ninja-build \
+    patchelf \
     pkg-config \
     libass-dev \
     libplacebo-dev \
