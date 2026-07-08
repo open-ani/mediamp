@@ -17,6 +17,7 @@ import org.gradle.api.logging.Logger
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
@@ -160,12 +161,25 @@ abstract class MpvConfigureTask : DefaultTask() {
                 .joinToString(":")
         }
 
+        // Meson >= 1.11 validates --prefix against the *host* system's path semantics on
+        // cross builds, so a Windows-style prefix is rejected when targeting Android.
+        // Cross builds therefore configure prefix=/ and install with --destdir instead
+        // (see MpvBuildTask); the assembled layout is identical. MSYS2's argument
+        // conversion would rewrite a bare `/` into the msys root's Windows path, so the
+        // flag uses the combined form and is excluded from conversion.
+        if (crossFile != null && windowsMsys) {
+            baseEnv["MSYS2_ARG_CONV_EXCL"] = "--prefix="
+        }
         val commandArgs = buildList {
             add("setup")
             add(pathForShell(mesonBuildDir, windowsMsys))
             add(pathForShell(sourceDir, windowsMsys))
-            add("--prefix")
-            add(pathForShell(installDir, windowsMsys))
+            if (crossFile != null) {
+                add("--prefix=/")
+            } else {
+                add("--prefix")
+                add(pathForShell(installDir, windowsMsys))
+            }
             add("--buildtype")
             add(mesonBuildType.get())
             crossFile?.let {
@@ -259,6 +273,11 @@ abstract class MpvBuildTask : DefaultTask() {
     @get:Input
     abstract val hostOsName: Property<String>
 
+    /** Set on cross builds, which configure prefix=/ and install here via --destdir. */
+    @get:Input
+    @get:Optional
+    abstract val installDestDir: Property<String>
+
     @get:OutputDirectory
     abstract val buildDirPath: DirectoryProperty
 
@@ -274,6 +293,9 @@ abstract class MpvBuildTask : DefaultTask() {
         val mesonBuildDir = buildRoot.resolve("meson")
         val windowsMsys = hostOsName.get() == "Windows"
 
+        val destDirArg = installDestDir.orNull
+            ?.let { " --destdir ${shellQuote(pathForShell(File(it), windowsMsys))}" }
+            .orEmpty()
         execOperations.exec {
             commandLine(
                 shell.get(),
@@ -282,7 +304,7 @@ abstract class MpvBuildTask : DefaultTask() {
                 shellScriptWithExports(
                     envVars.get(),
                     "meson compile -C ${shellQuote(pathForShell(mesonBuildDir, windowsMsys))} && " +
-                        "meson install -C ${shellQuote(pathForShell(mesonBuildDir, windowsMsys))}",
+                        "meson install -C ${shellQuote(pathForShell(mesonBuildDir, windowsMsys))}$destDirArg",
                 ),
             )
             environment(envVars.get())
@@ -315,6 +337,8 @@ abstract class MpvJniBuildTask : DefaultTask() {
     @get:Input
     abstract val hostOsName: Property<String>
 
+    // Toolchain description, provided by MpvJniToolchain (MpvTargets.kt).
+
     @get:Input
     abstract val compilerCommand: Property<String>
 
@@ -323,6 +347,15 @@ abstract class MpvJniBuildTask : DefaultTask() {
 
     @get:Input
     abstract val linkerArgs: ListProperty<String>
+
+    @get:Input
+    abstract val sourceExtensions: SetProperty<String>
+
+    @get:Input
+    abstract val useJdkIncludes: Property<Boolean>
+
+    @get:Input
+    abstract val linkLibraryPatterns: ListProperty<String>
 
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
@@ -340,13 +373,11 @@ abstract class MpvJniBuildTask : DefaultTask() {
         val mpvInstall = mpvInstallDir.get().asFile
         val ffmpegInstall = ffmpegInstallDir.get().asFile
         val output = outputFile.get().asFile
-        val target = targetName.get()
         val windowsMsys = hostOsName.get() == "Windows"
 
-        // Objective-C++ sources are macOS-only (Metal/IOSurface render path).
-        val sourceExtensions = if (target.startsWith("Macos")) setOf("cpp", "mm") else setOf("cpp")
+        val extensions = sourceExtensions.get()
         val sourceFiles = sourceRoot.walkTopDown()
-            .filter { it.isFile && it.extension in sourceExtensions }
+            .filter { it.isFile && it.extension in extensions }
             .sortedBy { it.absolutePath }
             .toList()
         require(sourceFiles.isNotEmpty()) {
@@ -361,26 +392,17 @@ abstract class MpvJniBuildTask : DefaultTask() {
             require(dir.isDirectory) { "Required JNI include directory not found at ${dir.absolutePath}" }
         }
 
-        val mpvLinkLibrary = locateLinkLibrary(mpvInstall.resolve("lib"), target, "mpv")
-        val avcodecLinkLibrary = locateLinkLibrary(ffmpegInstall.resolve("lib"), target, "avcodec")
+        val patterns = linkLibraryPatterns.get()
+        val mpvLinkLibrary = locateLinkLibrary(mpvInstall.resolve("lib"), patterns, targetName.get(), "mpv")
+        val avcodecLinkLibrary = locateLinkLibrary(ffmpegInstall.resolve("lib"), patterns, targetName.get(), "avcodec")
 
         output.parentFile.mkdirs()
 
         val args = buildList {
             add(compilerCommand.get())
             addAll(compilerArgs.get())
-            add("-std=c++17")
-            add("-fPIC")
-            if (target.startsWith("Macos")) {
-                add("-dynamiclib")
-            } else {
-                add("-shared")
-            }
-            if (target == "WindowsX64") {
-                add("-D_WIN32_WINNT=0x0A00")
-            }
-            if (!target.startsWith("Android")) {
-                addAll(jniIncludeFlags(target, windowsMsys))
+            if (useJdkIncludes.get()) {
+                addAll(jniIncludeFlags(windowsMsys))
             }
             includeDirs.forEach { dir ->
                 add("-I${pathForShell(dir, windowsMsys)}")
@@ -428,6 +450,16 @@ abstract class MpvAssembleTask : DefaultTask() {
     @get:Optional
     abstract val androidLibcxxShared: RegularFileProperty
 
+    // Runtime layout, provided by MpvRuntimeLayout (MpvTargets.kt).
+
+    /** Directory (relative to the install prefix) holding the shared libraries: `bin` or `lib`. */
+    @get:Input
+    abstract val runtimeDirName: Property<String>
+
+    /** Name of a [MpvRuntimePostProcessing] constant. */
+    @get:Input
+    abstract val postProcessing: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -443,63 +475,53 @@ abstract class MpvAssembleTask : DefaultTask() {
         val installPrefix = installDir.get().asFile
         val ffmpegPrefix = ffmpegInstallDir.get().asFile
         val outputPrefix = outputDir.get().asFile
+        val runtimeSubdir = runtimeDirName.get()
+        val runtimeDir = outputPrefix.resolve(runtimeSubdir)
 
         recreateDirectory(outputPrefix)
         copyTreePreservingLinks(installPrefix, outputPrefix)
+        copyTreePreservingLinks(ffmpegPrefix.resolve(runtimeSubdir), runtimeDir)
 
         jniLibrary.orNull?.asFile?.takeIf(File::isFile)?.let { wrapper ->
-            val runtimeDir = when {
-                targetName.get() == "WindowsX64" -> outputPrefix.resolve("bin")
-                else -> outputPrefix.resolve("lib")
-            }
             runtimeDir.mkdirs()
             wrapper.copyTo(runtimeDir.resolve(wrapper.name), overwrite = true)
         }
 
-        when {
-            targetName.get() == "WindowsX64" -> {
-                copyTreePreservingLinks(ffmpegPrefix.resolve("bin"), outputPrefix.resolve("bin"))
+        when (MpvRuntimePostProcessing.valueOf(postProcessing.get())) {
+            MpvRuntimePostProcessing.WINDOWS_COLLECT_DLLS -> {
                 val msys2Root = msys2Dir.orNull?.asFile
                     ?: error("MSYS2 directory must be configured for Windows mpv assembly.")
-                collectWindowsRuntimeDlls(execOperations, logger, msys2Root, outputPrefix.resolve("bin"))
+                collectWindowsRuntimeDlls(execOperations, logger, msys2Root, runtimeDir)
             }
 
-            targetName.get().startsWith("Android") -> {
-                copyTreePreservingLinks(ffmpegPrefix.resolve("lib"), outputPrefix.resolve("lib"))
+            MpvRuntimePostProcessing.MACOS_BUNDLE_DYLIBS -> {
+                rewriteAppleInstallNames(
+                    execOperations = execOperations,
+                    mpvInstallDir = installPrefix,
+                    ffmpegInstallDir = ffmpegPrefix,
+                    outputDir = outputPrefix,
+                )
+                bundleAppleExternalDependencies(
+                    execOperations = execOperations,
+                    logger = logger,
+                    libDir = runtimeDir,
+                )
+            }
+
+            MpvRuntimePostProcessing.LINUX_RUNPATH_ORIGIN -> {
+                setLinuxRunpathOrigin(
+                    execOperations = execOperations,
+                    logger = logger,
+                    libDir = runtimeDir,
+                )
+            }
+
+            MpvRuntimePostProcessing.ANDROID_BUNDLE_LIBCXX -> {
                 androidLibcxxShared.orNull?.asFile?.takeIf(File::isFile)?.let { libcxx ->
-                    val libDir = outputPrefix.resolve("lib")
-                    libDir.mkdirs()
-                    libcxx.copyTo(libDir.resolve(libcxx.name), overwrite = true)
+                    runtimeDir.mkdirs()
+                    libcxx.copyTo(runtimeDir.resolve(libcxx.name), overwrite = true)
                 }
             }
-
-            else -> {
-                copyTreePreservingLinks(ffmpegPrefix.resolve("lib"), outputPrefix.resolve("lib"))
-            }
-        }
-
-        rewriteAppleInstallNames(
-            execOperations = execOperations,
-            targetName = targetName.get(),
-            mpvInstallDir = installPrefix,
-            ffmpegInstallDir = ffmpegPrefix,
-            outputDir = outputPrefix,
-        )
-
-        if (targetName.get().startsWith("Macos")) {
-            bundleAppleExternalDependencies(
-                execOperations = execOperations,
-                logger = logger,
-                libDir = outputPrefix.resolve("lib"),
-            )
-        }
-
-        if (targetName.get() == "LinuxX64") {
-            setLinuxRunpathOrigin(
-                execOperations = execOperations,
-                logger = logger,
-                libDir = outputPrefix.resolve("lib"),
-            )
         }
     }
 }
@@ -672,13 +694,10 @@ private fun collectWindowsRuntimeDlls(
 
 private fun rewriteAppleInstallNames(
     execOperations: ExecOperations,
-    targetName: String,
     mpvInstallDir: File,
     ffmpegInstallDir: File,
     outputDir: File,
 ) {
-    if (targetName != "MacosArm64" && targetName != "MacosX64") return
-
     val outputLibDir = outputDir.resolve("lib")
     val machOFiles = outputLibDir.walkTopDown()
         .filter { it.isFile && it.name.endsWith(".dylib") }
@@ -718,8 +737,14 @@ private fun rewriteAppleInstallNames(
     }
 }
 
+/**
+ * Resolves a link library by trying each pattern in order. `{name}` is substituted with
+ * [baseName]; a pattern ending in `*` matches any file whose name starts with the prefix
+ * before the `*` (versioned shared objects like `libmpv.so.2`).
+ */
 private fun locateLinkLibrary(
     libDir: File,
+    patterns: List<String>,
     targetName: String,
     baseName: String,
 ): File {
@@ -727,21 +752,16 @@ private fun locateLinkLibrary(
         "Library directory not found at ${libDir.absolutePath} while resolving $baseName for $targetName"
     }
 
-    val candidates = when {
-        targetName == "WindowsX64" -> listOf(
-            libDir.resolve("lib$baseName.dll.a"),
-            libDir.resolve("$baseName.lib"),
-        )
-
-        targetName.startsWith("Macos") -> listOf(
-            libDir.resolve("lib$baseName.dylib"),
-        )
-
-        else -> listOf(
-            libDir.resolve("lib$baseName.so"),
-        ) + libDir.listFiles()
-            ?.filter { it.isFile && it.name.startsWith("lib$baseName.so.") }
-            .orEmpty()
+    val candidates = patterns.flatMap { pattern ->
+        val fileName = pattern.replace("{name}", baseName)
+        if (fileName.endsWith("*")) {
+            val prefix = fileName.removeSuffix("*")
+            libDir.listFiles()
+                ?.filter { it.isFile && it.name.startsWith(prefix) }
+                .orEmpty()
+        } else {
+            listOf(libDir.resolve(fileName))
+        }
     }
 
     return candidates.firstOrNull(File::isFile)

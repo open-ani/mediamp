@@ -89,16 +89,18 @@ abstract class FfmpegConfigureTask : DefaultTask() {
             val msys2Root = msys2Dir.orNull?.asFile
                 ?: error("MSYS2 directory must be configured for Windows FFmpeg builds.")
             val packages = msys2Packages.get()
-            logger.lifecycle("Ensuring MSYS2 packages: ${packages.joinToString()}")
-            execOperations.exec {
-                commandLine(
-                    shell.get(),
-                    "-l",
-                    "-c",
-                    "pacman -S --needed --noconfirm ${packages.joinToString(" ")}",
-                )
-                environment(envVars.get())
-                workingDir = msys2Root
+            if (packages.isNotEmpty()) {
+                logger.lifecycle("Ensuring MSYS2 packages: ${packages.joinToString()}")
+                execOperations.exec {
+                    commandLine(
+                        shell.get(),
+                        "-l",
+                        "-c",
+                        "pacman -S --needed --noconfirm ${packages.joinToString(" ")}",
+                    )
+                    environment(envVars.get())
+                    workingDir = msys2Root
+                }
             }
         }
 
@@ -237,6 +239,34 @@ abstract class FfmpegAssembleTask : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
+    // Per-platform behavior, provided by FfmpegBuildTarget (FfmpegTargets.kt).
+
+    /** File name of the JVM JNI wrapper to build, absent for targets without one (iOS). */
+    @get:Input
+    @get:Optional
+    abstract val jniWrapperName: Property<String>
+
+    @get:Input
+    abstract val jniWrapperLinkFlags: ListProperty<String>
+
+    @get:Input
+    abstract val jniWrapperExtraLibs: ListProperty<String>
+
+    @get:Input
+    abstract val jniWrapperUseJdkIncludes: Property<Boolean>
+
+    @get:Input
+    abstract val msysSubsystem: Property<String>
+
+    @get:Input
+    abstract val collectWindowsRuntime: Property<Boolean>
+
+    @get:Input
+    abstract val rewriteAppleInstallNames: Property<Boolean>
+
+    @get:Input
+    abstract val bundleFfmpegExecutable: Property<Boolean>
+
     @get:InputFile
     @get:Optional
     abstract val commandWrapperSource: RegularFileProperty
@@ -274,78 +304,54 @@ abstract class FfmpegAssembleTask : DefaultTask() {
         }
 
         val ffmpegExe = if (libExtension.get() == "dll") binDir.resolve("ffmpeg.exe") else binDir.resolve("ffmpeg")
-        if (ffmpegExe.exists() && targetName.get() != "IosArm64" && targetName.get() != "IosSimulatorArm64") {
+        if (ffmpegExe.exists() && bundleFfmpegExecutable.get()) {
             ffmpegExe.copyTo(outputDirFile.resolve(ffmpegExe.name), overwrite = true)
         }
 
-        when (targetName.get()) {
-            "WindowsX64", "WindowsArm64" -> {
-                buildJvmJniWrapper(
-                    execOperations = execOperations,
-                    logger = logger,
-                    targetName = targetName.get(),
-                    commandWrapperSource = commandWrapperSource.get().asFile,
-                    jniWrapperSource = jniWrapperSource.get().asFile,
-                    buildDir = buildDirFile,
-                    installDir = installDirFile,
-                    outputDir = outputDirFile,
-                    msys2Dir = msys2Dir.orNull?.asFile,
-                )
-                val msys2Root = msys2Dir.orNull?.asFile
-                    ?: error("MSYS2 directory must be configured for Windows FFmpeg runtime assembly.")
-                copyWindowsTlsCertificates(
-                    logger = logger,
-                    msys2Dir = msys2Root,
-                    targetName = targetName.get(),
-                    outputDir = outputDirFile,
-                )
-                collectWindowsRuntimeDlls(
-                    execOperations = execOperations,
-                    logger = logger,
-                    msys2Dir = msys2Root,
-                    targetName = targetName.get(),
-                    ffmpegLibNames = ffmpegLibNames.get(),
-                    outputDir = outputDirFile,
-                )
-            }
-
-            "LinuxX64", "MacosArm64", "MacosX64" -> {
-                buildJvmJniWrapper(
-                    execOperations = execOperations,
-                    logger = logger,
-                    targetName = targetName.get(),
-                    commandWrapperSource = commandWrapperSource.get().asFile,
-                    jniWrapperSource = jniWrapperSource.get().asFile,
-                    buildDir = buildDirFile,
-                    installDir = installDirFile,
-                    outputDir = outputDirFile,
-                    msys2Dir = null,
-                )
-            }
-
-            else -> {
-                if (targetName.get().startsWith("Android")) {
-                    buildJvmJniWrapper(
-                        execOperations = execOperations,
-                        logger = logger,
-                        targetName = targetName.get(),
-                        commandWrapperSource = commandWrapperSource.get().asFile,
-                        jniWrapperSource = jniWrapperSource.get().asFile,
-                        buildDir = buildDirFile,
-                        installDir = installDirFile,
-                        outputDir = outputDirFile,
-                        msys2Dir = msys2Dir.orNull?.asFile,
-                    )
-                }
-            }
+        jniWrapperName.orNull?.let { wrapperName ->
+            buildJvmJniWrapper(
+                execOperations = execOperations,
+                logger = logger,
+                wrapperName = wrapperName,
+                linkFlags = jniWrapperLinkFlags.get(),
+                extraLibs = jniWrapperExtraLibs.get(),
+                useJdkIncludes = jniWrapperUseJdkIncludes.get(),
+                msysSubsystem = msysSubsystem.get(),
+                commandWrapperSource = commandWrapperSource.get().asFile,
+                jniWrapperSource = jniWrapperSource.get().asFile,
+                buildDir = buildDirFile,
+                installDir = installDirFile,
+                outputDir = outputDirFile,
+                msys2Dir = msys2Dir.orNull?.asFile,
+            )
         }
 
-        rewriteAppleInstallNames(
-            execOperations = execOperations,
-            targetName = targetName.get(),
-            installDir = installDirFile,
-            outputDir = outputDirFile,
-        )
+        if (collectWindowsRuntime.get()) {
+            val msys2Root = msys2Dir.orNull?.asFile
+                ?: error("MSYS2 directory must be configured for Windows FFmpeg runtime assembly.")
+            copyWindowsTlsCertificates(
+                logger = logger,
+                msys2Dir = msys2Root,
+                msysSubsystem = msysSubsystem.get(),
+                outputDir = outputDirFile,
+            )
+            collectWindowsRuntimeDlls(
+                execOperations = execOperations,
+                logger = logger,
+                msys2Dir = msys2Root,
+                msysSubsystem = msysSubsystem.get(),
+                ffmpegLibNames = ffmpegLibNames.get(),
+                outputDir = outputDirFile,
+            )
+        }
+
+        if (rewriteAppleInstallNames.get()) {
+            rewriteAppleInstallNames(
+                execOperations = execOperations,
+                installDir = installDirFile,
+                outputDir = outputDirFile,
+            )
+        }
 
         val includeDir = installDirFile.resolve("include")
         if (includeDir.isDirectory) {
@@ -359,10 +365,10 @@ abstract class FfmpegAssembleTask : DefaultTask() {
 private fun copyWindowsTlsCertificates(
     logger: Logger,
     msys2Dir: File,
-    targetName: String,
+    msysSubsystem: String,
     outputDir: File,
 ) {
-    val certFile = msys2Dir.resolve("${windowsMsysRootName(targetName)}/etc/ssl/cert.pem")
+    val certFile = msys2Dir.resolve("$msysSubsystem/etc/ssl/cert.pem")
     if (!certFile.isFile) return
 
     val targetFile = outputDir.resolve("etc/ssl/cert.pem")
@@ -374,7 +380,11 @@ private fun copyWindowsTlsCertificates(
 private fun buildJvmJniWrapper(
     execOperations: ExecOperations,
     logger: Logger,
-    targetName: String,
+    wrapperName: String,
+    linkFlags: List<String>,
+    extraLibs: List<String>,
+    useJdkIncludes: Boolean,
+    msysSubsystem: String,
     commandWrapperSource: File,
     jniWrapperSource: File,
     buildDir: File,
@@ -390,11 +400,6 @@ private fun buildJvmJniWrapper(
     }
 
     val config = readFfmpegConfig(buildDir.resolve("ffbuild/config.mak"))
-    val wrapperName = when {
-        targetName.startsWith("Windows") -> "ffmpegkitjni.dll"
-        targetName.startsWith("Macos") -> "libffmpegkitjni.dylib"
-        else -> "libffmpegkitjni.so"
-    }
     val wrapperOut = buildDir.resolve(wrapperName)
     val fftoolsDir = buildDir.resolve("fftools")
     val fftoolsObjects = fftoolsDir.walkTopDown()
@@ -416,10 +421,10 @@ private fun buildJvmJniWrapper(
     val jniWrapper = shellQuote(pathForShell(jniWrapperSource, windowsMsys))
     val outputPath = shellQuote(pathForShell(wrapperOut, windowsMsys))
     val buildDirPath = shellQuote(pathForShell(buildDir, windowsMsys))
-    val jniIncludes = if (targetName.startsWith("Android")) {
-        ""
+    val jniIncludes = if (useJdkIncludes) {
+        jniIncludeFlags(windowsMsys).joinToString(" ") { shellQuote(it) }
     } else {
-        jniIncludeFlags(targetName, windowsMsys).joinToString(" ") { shellQuote(it) }
+        ""
     }
     val ffmpegIncludes = listOf(
         installDir.resolve("include"),
@@ -428,11 +433,7 @@ private fun buildJvmJniWrapper(
         .distinctBy { it.absolutePath }
         .onEach { require(it.isDirectory) { "FFmpeg include directory not found at ${it.absolutePath}" } }
         .joinToString(" ") { "-I${shellQuote(pathForShell(it, windowsMsys))}" }
-    val linkerMode = when {
-        targetName.startsWith("Windows") -> "-shared"
-        targetName.startsWith("Macos") -> "-dynamiclib -Wl,-install_name,@loader_path/$wrapperName"
-        else -> "-shared"
-    }
+    val linkerMode = linkFlags.joinToString(" ")
     val linkLibraries = buildString {
         append("-L${shellQuote(pathForShell(buildDir.resolve("libavdevice"), windowsMsys))} ")
         append("-L${shellQuote(pathForShell(buildDir.resolve("libavfilter"), windowsMsys))} ")
@@ -442,9 +443,7 @@ private fun buildJvmJniWrapper(
         append("-L${shellQuote(pathForShell(buildDir.resolve("libswscale"), windowsMsys))} ")
         append("-L${shellQuote(pathForShell(buildDir.resolve("libavutil"), windowsMsys))} ")
         append("-lavdevice -lavfilter -lavformat -lavcodec -lswresample -lswscale -lavutil -lm -pthread")
-        if (targetName.startsWith("Windows")) {
-            append(" -lstdc++")
-        }
+        extraLibs.forEach { append(" $it") }
     }
     val command = buildString {
         append(expandMakeVariables(config.getValue("CC"), config))
@@ -475,25 +474,19 @@ private fun buildJvmJniWrapper(
     execOperations.exec {
         commandLine(shell, "-l", "-c", "cd $buildDirPath && $command")
         if (windowsMsys) {
-            environment("MSYSTEM", windowsMsysRootName(targetName).uppercase())
+            environment("MSYSTEM", msysSubsystem.uppercase())
         }
     }
 
     wrapperOut.copyTo(outputDir.resolve(wrapperName), overwrite = true)
     logger.info("Built JVM FFmpeg JNI wrapper: $wrapperOut")
 }
+
 private fun rewriteAppleInstallNames(
     execOperations: ExecOperations,
-    targetName: String,
     installDir: File,
     outputDir: File,
 ) {
-    if (targetName != "IosArm64" &&
-        targetName != "IosSimulatorArm64" &&
-        targetName != "MacosArm64" &&
-        targetName != "MacosX64"
-    ) return
-
     val copiedDylibs = outputDir.listFiles()?.filter { it.isFile && it.name.endsWith(".dylib") }.orEmpty()
     val machOFiles = buildList {
         addAll(copiedDylibs)
@@ -548,12 +541,12 @@ private fun collectWindowsRuntimeDlls(
     execOperations: ExecOperations,
     logger: Logger,
     msys2Dir: File,
-    targetName: String,
+    msysSubsystem: String,
     ffmpegLibNames: List<String>,
     outputDir: File,
 ) {
-    val mingwBin = msys2Dir.resolve("${windowsMsysRootName(targetName)}/bin")
-    val objdumpExecutable = resolveWindowsObjdump(msys2Dir, "${windowsMsysRootName(targetName)}/bin")
+    val mingwBin = msys2Dir.resolve("$msysSubsystem/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir, "$msysSubsystem/bin")
     val collectedDlls = mutableSetOf<String>()
 
     fun collectDeps(dllFile: File) {
@@ -578,6 +571,3 @@ private fun collectWindowsRuntimeDlls(
         logger.lifecycle("Collected external DLLs from MSYS2: ${collectedDlls.sorted().joinToString()}")
     }
 }
-
-private fun windowsMsysRootName(targetName: String): String =
-    if (targetName == "WindowsArm64") "clangarm64" else "ucrt64"
