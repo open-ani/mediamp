@@ -135,6 +135,18 @@ private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget = FfmpegBui
         "--enable-protocol=tls",
         "--enable-protocol=http",
         "--enable-protocol=https",
+        // D3D11VA hardware decoding: hwcontext_d3d11va for mpv's hwdec=d3d11va
+        // (--disable-everything/--disable-autodetect strip these otherwise; without
+        // them mpv falls back to software decoding on Windows).
+        "--enable-d3d11va",
+        "--enable-hwaccel=h264_d3d11va",
+        "--enable-hwaccel=h264_d3d11va2",
+        "--enable-hwaccel=hevc_d3d11va",
+        "--enable-hwaccel=hevc_d3d11va2",
+        "--enable-hwaccel=vp9_d3d11va",
+        "--enable-hwaccel=vp9_d3d11va2",
+        "--enable-hwaccel=av1_d3d11va",
+        "--enable-hwaccel=av1_d3d11va2",
     ),
     env = mapOf("MSYSTEM" to "UCRT64"),
     shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
