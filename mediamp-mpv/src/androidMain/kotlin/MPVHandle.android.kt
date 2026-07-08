@@ -29,23 +29,3 @@ actual fun detachSurface(ptr: Long): Boolean {
     return nDetachAndroidSurface(ptr)
 }
 
-actual fun createRenderContext(ptr: Long, devicePtr: Long, contextPtr: Long): Boolean {
-    error("only implemented on desktop")
-}
-
-actual fun destroyRenderContext(ptr: Long): Boolean {
-    error("only implemented on desktop")
-}
-
-actual fun createTexture(ptr: Long, width: Int, height: Int): Int {
-    error("only implemented on desktop")
-}
-
-actual fun releaseTexture(ptr: Long): Boolean {
-    error("only implemented on desktop")
-}
-
-@OptIn(InternalMediampApi::class)
-actual fun renderFrameToTexture(ptr: Long): Boolean {
-    error("only implemented on desktop")
-}

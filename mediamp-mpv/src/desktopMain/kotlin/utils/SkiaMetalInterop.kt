@@ -25,7 +25,7 @@ import java.lang.reflect.Method
  * Supports both of Skiko's Metal render paths (verified against Skiko 0.9.37 / CMP 1.10):
  * [MetalRedrawer] (AWT window rendering) and [MetalSwingRedrawer] (offscreen swing interop).
  */
-internal class SkiaMetalInterop(private val layer: SkiaLayer) {
+internal class SkiaMetalInterop(private val layer: SkiaLayer) : SkiaRenderDeviceInterop {
     private val getRedrawerMethod: Method = SkiaLayer::class.java.getMethod("getRedrawer\$skiko")
 
     private class RedrawerAccess(redrawerClass: Class<*>) {
@@ -71,7 +71,7 @@ internal class SkiaMetalInterop(private val layer: SkiaLayer) {
     }
 
     /** The MTLDevice pointer Skia renders with. */
-    val mtlDevicePtr: Long
+    override val renderDevicePtr: Long
         get() {
             val redrawer = currentRedrawer()
             val access = accessFor(redrawer)
@@ -79,7 +79,7 @@ internal class SkiaMetalInterop(private val layer: SkiaLayer) {
         }
 
     /** Skia's *current* GrDirectContext; null until the first frame has been rendered. */
-    val directContext: DirectContext?
+    override val directContext: DirectContext?
         get() {
             val redrawer = currentRedrawer()
             val access = accessFor(redrawer)

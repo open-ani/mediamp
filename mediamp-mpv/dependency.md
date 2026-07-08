@@ -309,6 +309,35 @@ Android 子项目额外选项：
 - Linux 构建逻辑已接通，但尚未在 Linux 主机上实跑产出。
 - 当前仓库仍保留旧 `libmpv/` prebuilt 目录的删除状态；本文档描述的是新的手工构建链路，不再以旧 prebuilt 目录为准。
 
+## Windows 渲染与开发工作流
+
+Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
+**D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
+以 `render_d3d11.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除)在我们自建的
+`ID3D11Device` 上渲染进三重缓冲的共享纹理环 (`DXGI_FORMAT_R8G8B8A8_UNORM`,
+`D3D11_RESOURCE_MISC_SHARED | SHARED_NTHANDLE`), 每块纹理经 NT 共享句柄在 Skia 的
+D3D12 设备 (Compose Windows 默认后端, Skiko `Direct3DRedrawer`) 上打开为
+`ID3D12Resource`, 由 Compose Canvas 采样最新一块 (零拷贝, hwdec=d3d11va 全程留在 GPU)。
+
+线程模型与 macOS 完全一致 (消费端状态机为共享代码 `internal/MpvSurfaceRing.kt`):
+渲染线程是唯一渲染方, 帧完成用 `D3D11_QUERY_EVENT` CPU 等待 (glFinish 等价) 后才
+publish + notify; UI 侧只读打包 frame state 并采样。immediate context 开启
+multithread-protected, 截图读回 (staging + WIC PNG) 可在 JNI 线程安全执行。
+Skia 侧的 `ID3D12Device` 从 Skiko `Direct3DRedrawer.device`(原生 `DirectXDevice`
+结构指针, Kotlin 反射见 `utils/SkiaDirectXInterop.kt`) 提取, 原生侧做槽位等值校验 +
+`QueryInterface` 验证后才使用 (`render_d3d11.cpp` 内 `open_skia_d3d12_device`)。
+包装颜色类型为 `RGBA_8888`(`RGB_888x` 不可 wrap 为 render target; mpv d3d11
+渲染器对不透明视频输出 alpha=1, 已经像素验证)。
+
+本地开发 (无 Homebrew 等价物, 必须用本仓库构建的 patched libmpv):
+
+```powershell
+./gradlew :mediamp-mpv:mpvAssembleWindowsX64   # meson 构建 patched libmpv + ffmpeg + JNI, 组装 runtime
+./gradlew :mediamp-mpv-demo:runD3D11 "-Pvideo=C:\path\to.mp4"   # 生产路径冒烟 demo
+#   -PscreenshotDir=<dir> 每 2s 从 native 环读回一帧 PNG, 用于像素验证
+./gradlew :mediamp-mpv:desktopTest             # 集成测试 (需要 PATH 上有可编码的 ffmpeg 生成测试视频)
+```
+
 ## macOS 渲染与开发工作流
 
 macOS 桌面渲染路径 (`src/cpp/render_macos.mm`): 专用 native 渲染线程通过 mpv render API 在独立的

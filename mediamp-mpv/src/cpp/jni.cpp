@@ -82,11 +82,14 @@ extern "C" {
     JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 
 #ifdef _WIN32
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContext)(JNIEnv *env, jclass clazz, jlong ptr, jlong device_ptr, jlong context_ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContext)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jint JNICALL FN_DESKTOP(nCreateTexture)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseTexture)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameToTexture)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
 #endif
 
 #ifdef __APPLE__
@@ -355,37 +358,51 @@ JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass
 
 #ifdef _WIN32
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContext)(JNIEnv * env, jclass clazz, jlong ptr, jlong device_ptr, jlong context_ptr) {
-	auto *instance = get_instance(ptr);
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->create_render_context() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->destroy_render_context() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->set_surface_config(width, height, skiko_device_ptr) : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? (jlong) instance->get_frame_state() : 0;
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint index) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->get_buffer_texture(index) : 0;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->ack_retired_buffers() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->has_d3d11_surface() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
+    auto *instance = get_instance(ptr);
     if (!instance) {
         return JNI_FALSE;
     }
-    auto device = reinterpret_cast<HDC>(static_cast<uintptr_t>(device_ptr));
-    auto context = reinterpret_cast<HGLRC>(static_cast<uintptr_t>(context_ptr));
-	return instance->create_render_context(device, context);
-}
-
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContext)(JNIEnv * env, jclass clazz, jlong ptr) {
-	auto *instance = get_instance(ptr);
-    if (!instance) {
+    scoped_utf_chars path_chars(env, path);
+    if (!path_chars.valid()) {
         return JNI_FALSE;
     }
-	return instance->destroy_render_context();
-}
-
-JNIEXPORT jint JNICALL FN_DESKTOP(nCreateTexture)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height) {
-	auto *instance = get_instance(ptr);
-    return instance ? static_cast<jint>(instance->create_texture(width, height)) : 0;
-}
-
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nReleaseTexture)(JNIEnv * env, jclass clazz, jlong ptr) {
-	auto *instance = get_instance(ptr);
-	return instance ? instance->release_texture() : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nRenderFrameToTexture)(JNIEnv * env, jclass clazz, jlong ptr) {
-	auto *instance = get_instance(ptr);
-	return instance ? instance->render_frame() : JNI_FALSE;
+    return instance->save_surface_png(path_chars.get());
 }
 
 #endif

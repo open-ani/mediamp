@@ -271,7 +271,8 @@ private fun MpvBuildContext.jniCompilerArgs(target: MpvBuildTarget): List<String
 
 private fun MpvBuildContext.jniLinkerArgs(target: MpvBuildTarget): List<String> {
     return when {
-        target.name == "WindowsX64" -> listOf("-lopengl32", "-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid")
+        // D3D11 render path (render_d3d11.cpp); windowscodecs/ole32 are for the WIC PNG readback.
+        target.name == "WindowsX64" -> listOf("-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid", "-lwindowscodecs", "-lole32")
         target.androidAbi != null -> listOf("-landroid", "-llog")
         target.name.startsWith("Macos") -> appleArchArgs(target.name) + listOf(
             // Metal/IOSurface render path (render_macos.mm)

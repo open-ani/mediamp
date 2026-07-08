@@ -199,28 +199,3 @@ internal expect fun detachSurface(ptr: Long): Boolean
 
 private external fun nDestroy(ptr: Long): Boolean
 private external fun nFinalize(ptr: Long)
-
-/**
- * Desktop only
- */
-internal expect fun createRenderContext(ptr: Long, devicePtr: Long, contextPtr: Long): Boolean
-
-/**
- * Desktop only
- */
-internal expect fun destroyRenderContext(ptr: Long): Boolean
-
-/**
- * Desktop only
- */
-internal expect fun createTexture(ptr: Long, width: Int, height: Int): Int
-
-/**
- * Desktop only
- */
-internal expect fun releaseTexture(ptr: Long): Boolean
-
-/**
- * Desktop only
- */
-internal expect fun renderFrameToTexture(ptr: Long): Boolean

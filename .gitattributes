@@ -1,0 +1,3 @@
+# Patch files are applied verbatim with `git apply` (see applyMpvPatches); CRLF
+# conversion on checkout would make their context lines mismatch the LF sources.
+*.patch -text

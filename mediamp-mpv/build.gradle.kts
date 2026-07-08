@@ -89,7 +89,12 @@ val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
 
 tasks.withType<Test>().configureEach {
     dependsOn(compileJniDevMacos)
-    systemProperty("mediamp.mpv.dev.native.dir", devNativeDir.get().asFile.absolutePath)
+    // macOS: JNI wrapper compiled against Homebrew libmpv (fast dev loop).
+    // Windows: the assembled meson runtime (no system libmpv exists, and the D3D11
+    // render API needs our patched build anyway); run mpvAssembleWindowsX64 first.
+    val windowsRuntimeDir = layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
+    val testNativeDir = if (getOs() == Os.Windows) windowsRuntimeDir else devNativeDir.get().asFile
+    systemProperty("mediamp.mpv.dev.native.dir", testNativeDir.absolutePath)
     // CI 上防静默跳过: -Pmediamp.mpv.test.required=true 时环境缺失会 fail 而不是 skip
     systemProperty("mediamp.mpv.test.required", getPropertyOrNull("mediamp.mpv.test.required") ?: "false")
 }

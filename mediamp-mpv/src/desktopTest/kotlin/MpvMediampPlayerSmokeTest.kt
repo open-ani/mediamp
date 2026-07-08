@@ -40,7 +40,10 @@ class MpvMediampPlayerSmokeTest {
     private fun devNativeDir(): File? =
         System.getProperty("mediamp.mpv.dev.native.dir")
             ?.let(::File)
-            ?.takeIf { it.resolve("libmediampv.dylib").isFile || it.resolve("libmediampv.so").isFile }
+            ?.takeIf {
+                it.resolve("libmediampv.dylib").isFile || it.resolve("libmediampv.so").isFile ||
+                        it.resolve("mediampv.dll").isFile
+            }
 
     /**
      * On runners that are expected to have the full environment (self-hosted macOS),
@@ -56,8 +59,9 @@ class MpvMediampPlayerSmokeTest {
     }
 
     private fun prepareOrSkip(): Boolean {
-        if (!System.getProperty("os.name").contains("Mac")) {
-            return skip("not macOS")
+        val osName = System.getProperty("os.name")
+        if (!osName.contains("Mac") && !osName.contains("Windows")) {
+            return skip("no desktop render path on $osName")
         }
         val dir = devNativeDir()
             ?: return skip(
@@ -70,7 +74,7 @@ class MpvMediampPlayerSmokeTest {
     }
 
     private fun findFfmpeg(): String? =
-        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg")
+        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg", "ffmpeg.exe")
             .firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
 
     private fun runFfmpeg(vararg args: String): Boolean {
@@ -111,17 +115,16 @@ class MpvMediampPlayerSmokeTest {
     /**
      * With vo=libmpv, frames are only consumed when a render context drains them; without
      * one, playback never advances. The native render thread does all rendering; this
-     * just configures a headless buffer ring (device ptr 0 = system default MTLDevice)
-     * so the real Metal render path is exercised.
+     * just configures a headless buffer ring (device ptr 0 = system default MTLDevice on
+     * macOS, a D3D11-only ring on Windows) so the real native render path is exercised.
      */
     @OptIn(InternalMediampApi::class)
     private fun startHeadlessRenderer(player: MpvMediampPlayer): AutoCloseable {
-        val handle = player.impl as MPVHandle
-        check(player.createMacosRenderContext()) { "createMacosRenderContext failed" }
-        check(nSetSurfaceConfigMacos(handle.ptr, 640, 360, 0L)) { "nSetSurfaceConfigMacos failed" }
+        check(player.createRenderContext()) { "createRenderContext failed" }
+        check(player.requestSurface(640, 360, 0L)) { "requestSurface failed" }
         return AutoCloseable {
-            nSetSurfaceConfigMacos(handle.ptr, 0, 0, 0L)
-            player.releaseMacosRenderContext()
+            player.releaseSurface()
+            player.releaseRenderContext()
         }
     }
 

@@ -8,7 +8,6 @@
 
 package org.openani.mediamp.mpv
 
-import androidx.compose.ui.geometry.Size
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,9 +66,6 @@ abstract class JvmMpvMediampPlayer(
 
     internal val handle by lazy { MPVHandle(context) }
     private val stateMachine = MpvPlaybackStateMachine()
-
-    var currentSize: Size? = null
-        @InternalMediampApi set
 
     override val impl: Any get() = handle
 
@@ -179,31 +175,6 @@ abstract class JvmMpvMediampPlayer(
         }
     }
 
-    @InternalMediampApi
-    fun createRenderContext(devicePtr: Long, contextPtr: Long): Boolean {
-        return createRenderContext(handle.ptr, devicePtr, contextPtr)
-    }
-
-    @InternalMediampApi
-    fun releaseRenderContext(): Boolean {
-        return destroyRenderContext(handle.ptr)
-    }
-
-    @InternalMediampApi
-    fun createTexture(width: Int, height: Int): Int {
-        return createTexture(handle.ptr, width, height)
-    }
-
-    @InternalMediampApi
-    fun releaseTexture(): Boolean {
-        return releaseTexture(handle.ptr)
-    }
-
-    @InternalMediampApi
-    fun renderFrame(): Boolean {
-        return renderFrameToTexture(handle.ptr)
-    }
-
     internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
         return handle.setRenderUpdateListener(listener)
     }
@@ -232,15 +203,10 @@ abstract class JvmMpvMediampPlayer(
             }
 
             is Platform.Windows -> {
-                handle.option("gpu-context", "win,opengl")
-                handle.option("opengl-es", "no")
-
+                // The desktop render path drives the libmpv D3D11 render API on its own
+                // ID3D11Device (render_d3d11.cpp); gpu-context is not used with vo=libmpv.
                 handle.option("ao", "wasapi")
                 handle.option("vo", "libmpv")
-                handle.option("fbo-format", "rgba8")
-                handle.option("dither-depth", "no")
-                handle.option("video-sync", "audio")
-                handle.option("video-timing-offset", "0.0")
             }
 
             is Platform.MacOS -> {

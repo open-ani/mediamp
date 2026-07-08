@@ -11,7 +11,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <gl/GL.h>
 #endif
 
 extern "C" {
@@ -28,43 +27,6 @@ extern "C" {
 }
 
 namespace mediampv {
-
-#ifdef _WIN32
-bool release_texture_impl(GLuint* texture_id, GLuint* framebuffer_object);
-static void* get_proc_address_mpv(void* ctx, const char* name);
-
-#define GL_FRAMEBUFFER            0x8D40
-#define GL_FRAMEBUFFER_BINDING    0x8CA6
-#define GL_COLOR_ATTACHMENT0      0x8CE0
-#define GL_RGBA8                  0x8058
-#define GL_FRAMEBUFFER_COMPLETE   0x8CD5
-typedef void (APIENTRY *PFNGLGENFRAMEBUFFERSPROC)(GLsizei n, GLuint *framebuffers);
-typedef void (APIENTRY *PFNGLBINDFRAMEBUFFERPROC)(GLenum target, GLuint framebuffer);
-typedef void (APIENTRY *PFNGLFRAMEBUFFERTEXTURE2DPROC)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-typedef void (APIENTRY *PFNGLDELETEFRAMEBUFFERSPROC)(GLsizei n, const GLuint *framebuffers);
-typedef GLenum (APIENTRY *PFNGLCHECKFRAMEBUFFERSTATUSPROC)(GLenum target);
-
-static PFNGLGENFRAMEBUFFERSPROC pfnGlGenFramebuffers = nullptr;
-static PFNGLBINDFRAMEBUFFERPROC pfnGlBindFramebuffer = nullptr;
-static PFNGLFRAMEBUFFERTEXTURE2DPROC pfnGlFramebufferTexture2D = nullptr;
-static PFNGLDELETEFRAMEBUFFERSPROC pfnGlDeleteFramebuffers = nullptr;
-static PFNGLCHECKFRAMEBUFFERSTATUSPROC pfnGlCheckFramebufferStatus = nullptr;
-
-static bool gl_functions_loaded = false;
-static bool load_gl_functions() {
-    if (gl_functions_loaded) return true;
-    pfnGlGenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)get_proc_address_mpv(nullptr, "glGenFramebuffers");
-    pfnGlBindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)get_proc_address_mpv(nullptr, "glBindFramebuffer");
-    pfnGlFramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)get_proc_address_mpv(nullptr, "glFramebufferTexture2D");
-    pfnGlDeleteFramebuffers = (PFNGLDELETEFRAMEBUFFERSPROC)get_proc_address_mpv(nullptr, "glDeleteFramebuffers");
-    pfnGlCheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)get_proc_address_mpv(nullptr, "glCheckFramebufferStatus");
-    gl_functions_loaded = pfnGlGenFramebuffers && pfnGlBindFramebuffer &&
-                          pfnGlFramebufferTexture2D && pfnGlDeleteFramebuffers &&
-                          pfnGlCheckFramebufferStatus;
-    return gl_functions_loaded;
-}
-
-#endif
 
 CREATE_LOCK(global_guard);
 JavaVM *global_jvm = nullptr;
@@ -403,10 +365,10 @@ bool mpv_handle_t::initialize() {
 void mpv_handle_t::on_render_update(void *context) {
     auto *instance = static_cast<mpv_handle_t *>(context);
     if (!instance) return;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     // The render thread consumes the update and calls notify_render_update() only
-    // after the frame is actually in an IOSurface, so consumers never wake up to a
-    // stale buffer.
+    // after the frame is actually in a shared buffer, so consumers never wake up to
+    // a stale buffer.
     instance->signal_render_update();
 #else
     instance->notify_render_update();
@@ -716,217 +678,6 @@ bool mpv_handle_t::detach_window_surface() {
 }
 #endif
 
-#ifdef _WIN32
-bool mpv_handle_t::create_render_context(HDC device, HGLRC context) {
-    FP;
-    CHECK_HANDLE()
-    if (!device || !context) {
-        return false;
-    }
-    if (render_context_)
-        return true;
-
-    device_ = device;
-    context_ = context;
-
-    HDC old_dc = wglGetCurrentDC();
-    HGLRC old_ctx = wglGetCurrentContext();
-    wglMakeCurrent(device_, context_);
-
-    if (!load_gl_functions()) {
-        LOG("Failed to load OpenGL functions");
-        wglMakeCurrent(old_dc, old_ctx);
-        return false;
-    }
-
-    mpv_opengl_init_params gl_init_params{
-            .get_proc_address = get_proc_address_mpv,
-            .get_proc_address_ctx = nullptr
-    };
-    mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
-            {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
-            {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-
-    if (mpv_render_context_create(&render_context_, handle_, params) < 0) {
-        render_context_ = nullptr;
-        wglMakeCurrent(old_dc, old_ctx);
-        return false;
-    }
-
-    mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
-
-    wglMakeCurrent(old_dc, old_ctx);
-
-    return true;
-}
-
-#ifdef _WIN32
-static void* get_proc_address_mpv(void* ctx, const char* name) {
-    void* addr = (void*)wglGetProcAddress(name);
-    if (addr == nullptr || (reinterpret_cast<intptr_t>(addr) >= -1 && reinterpret_cast<intptr_t>(addr) <= 3)) {
-        static HMODULE opengl32 = LoadLibraryA("opengl32.dll");
-        if (opengl32) {
-            addr = (void*)GetProcAddress(opengl32, name);
-        }
-    }
-    return addr;
-}
-#endif
-
-bool mpv_handle_t::destroy_render_context() {
-    FP;
-    CHECK_HANDLE()
-
-    if (!render_context_)
-        return false;
-
-    HDC old_dc = wglGetCurrentDC();
-    HGLRC old_ctx = wglGetCurrentContext();
-    wglMakeCurrent(device_, context_);
-
-    mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
-    mpv_render_context_free(render_context_);
-
-    wglMakeCurrent(old_dc, old_ctx);
-
-    render_context_ = nullptr;
-    context_ = nullptr;
-    device_ = nullptr;
-    return true;
-}
-
-GLuint mpv_handle_t::create_texture(int width, int height) {
-    FP;
-    CHECK_HANDLE_RETURN_INT()
-    LOCK(texture_lock);
-
-    HDC old_dc = wglGetCurrentDC();
-    HGLRC old_ctx = wglGetCurrentContext();
-    wglMakeCurrent(device_, context_);
-
-    GLint previous_texture_binding = 0;
-    GLint previous_framebuffer_binding = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture_binding);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer_binding);
-
-    if (texture_ != GL_ZERO && fbo_ != GL_ZERO) {
-        width_ = 0;
-        height_ = 0;
-        release_texture_impl(&texture_, &fbo_);
-    }
-
-    glGenTextures(1, &texture_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    pfnGlGenFramebuffers(1, &fbo_);
-    pfnGlBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    pfnGlFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, texture_, 0);
-
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture_binding));
-    pfnGlBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer_binding));
-    wglMakeCurrent(old_dc, old_ctx);
-
-    width_ = width;
-    height_ = height;
-
-    return texture_;
-}
-
-bool mpv_handle_t::release_texture() {
-    FP;
-    CHECK_HANDLE()
-    LOCK(texture_lock);
-
-    width_ = 0;
-    height_ = 0;
-
-
-    HDC old_dc = wglGetCurrentDC();
-    HGLRC old_ctx = wglGetCurrentContext();
-    wglMakeCurrent(device_, context_);
-
-    GLint previous_texture_binding = 0;
-    GLint previous_framebuffer_binding = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture_binding);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer_binding);
-
-    bool released = release_texture_impl(&texture_, &fbo_);
-
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture_binding));
-    pfnGlBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer_binding));
-    wglMakeCurrent(old_dc, old_ctx);
-
-    return released;
-}
-
-bool release_texture_impl(GLuint* texture_id, GLuint* framebuffer_object) {
-    if (*texture_id == GL_ZERO || *framebuffer_object == GL_ZERO) return false;
-
-    GLuint framebuffer_to_delete[1] = {*framebuffer_object};
-
-    // The texture is adopted by Skia via Image.adoptTextureFrom(), so Skia owns its lifetime.
-    // Native code only tears down the FBO wrapper and forgets the texture handle.
-    pfnGlDeleteFramebuffers(1, framebuffer_to_delete);
-
-    *texture_id = GL_ZERO;
-    *framebuffer_object = GL_ZERO;
-    return true;
-}
-
-bool mpv_handle_t::render_frame() {
-    CHECK_HANDLE()
-    LOCK(texture_lock);
-
-    if (!render_context_ || !context_ || !device_ || !fbo_ || !texture_ || !width_ || !height_)
-        return false;
-
-    mpv_render_context_update(render_context_);
-
-    HDC old_dc = wglGetCurrentDC();
-    HGLRC old_ctx = wglGetCurrentContext();
-    if (!wglMakeCurrent(device_, context_)) {
-        LOG("Failed to make OpenGL context current in render_frame");
-        return false;
-    }
-
-    // 绑定 FBO 并检查状态
-    pfnGlBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    GLenum status = pfnGlCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        LOG("Framebuffer not complete: 0x%x", status);
-        wglMakeCurrent(old_dc, old_ctx);
-        return false;
-    }
-
-    mpv_opengl_fbo fbo_params{static_cast<int>(fbo_), width_, height_, GL_RGBA8};
-    mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_OPENGL_FBO, &fbo_params},
-            {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-
-    int render_result = mpv_render_context_render(render_context_, params);
-    if (render_result < 0) {
-        LOG("mpv_render_context_render failed: %d", render_result);
-    }
-
-    // 解绑 FBO
-    pfnGlBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    glFinish();
-    wglMakeCurrent(old_dc, old_ctx);
-
-    return render_result >= 0;
-}
-#endif
-
 bool mpv_handle_t::destroy(JNIEnv *env) {
     FP;
     event_loop_request_exit.store(true, std::memory_order_release);
@@ -1007,43 +758,6 @@ void mpv_handle_t::clear_android_surface(JNIEnv *env) {
     attached_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, surface_);
     surface_attached_ = false;
-}
-#endif
-
-#ifdef _WIN32
-void mpv_handle_t::cleanup_render_resources() {
-    LOCK(texture_lock);
-
-    HDC old_dc = nullptr;
-    HGLRC old_ctx = nullptr;
-    bool current_context_ready = false;
-    if (device_ && context_) {
-        old_dc = wglGetCurrentDC();
-        old_ctx = wglGetCurrentContext();
-        current_context_ready = wglMakeCurrent(device_, context_) == TRUE;
-    }
-
-    if (current_context_ready && texture_ != GL_ZERO && fbo_ != GL_ZERO) {
-        release_texture_impl(&texture_, &fbo_);
-    } else {
-        texture_ = GL_ZERO;
-        fbo_ = GL_ZERO;
-    }
-    width_ = 0;
-    height_ = 0;
-
-    if (render_context_) {
-        mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
-        mpv_render_context_free(render_context_);
-        render_context_ = nullptr;
-    }
-
-    if (current_context_ready) {
-        wglMakeCurrent(old_dc, old_ctx);
-    }
-
-    context_ = nullptr;
-    device_ = nullptr;
 }
 #endif
 

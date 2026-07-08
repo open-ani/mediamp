@@ -20,6 +20,8 @@ dependencies {
     // Baseline for benchmarking: the current production VLC stack.
     implementation(projects.mediampVlc)
     implementation(projects.mediampApi)
+    // Production mpv path (runD3D11 smoke demo).
+    implementation(projects.mediampMpv)
 }
 
 val nativeOutput = layout.buildDirectory.file("native/libmpvskiabridge.dylib")
@@ -51,6 +53,28 @@ compose.desktop {
 // The compose desktop plugin registers "run" after evaluation; match lazily.
 tasks.matching { it.name == "run" }.configureEach {
     dependsOn(compileNativeBridge)
+}
+
+// Production mediamp-mpv path (Windows D3D11 / macOS Metal) against a locally
+// assembled runtime: ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
+tasks.register<JavaExec>("runD3D11") {
+    group = "mediamp"
+    description = "Run the production mediamp-mpv demo (D3D11 on Windows, Metal on macOS)"
+    mainClass = "org.openani.mediamp.mpvdemo.MpvD3D11MainKt"
+    classpath = sourceSets["main"].runtimeClasspath
+    val runtimeTarget = when {
+        System.getProperty("os.name").contains("Windows") -> "WindowsX64"
+        System.getProperty("os.arch") == "aarch64" -> "MacosArm64"
+        else -> "MacosX64"
+    }
+    val runtimeSubdir = if (runtimeTarget == "WindowsX64") "bin" else "lib"
+    systemProperty(
+        "mediamp.mpv.runtime.dir",
+        project(":mediamp-mpv").layout.buildDirectory
+            .dir("mpv-output/$runtimeTarget/$runtimeSubdir").get().asFile.absolutePath,
+    )
+    (findProperty("video") as String?)?.let { args(it) }
+    (findProperty("screenshotDir") as String?)?.let { systemProperty("mpvdemo.screenshot.dir", it) }
 }
 
 // VLC baseline player for benchmarks: ./gradlew :mediamp-mpv-demo:runVlc -Pvideo=/path/to.mp4
