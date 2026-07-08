@@ -59,10 +59,15 @@ internal fun Project.createDependencyOnlyDesktopRuntimeElements(
 internal fun Project.createDependencyOnlyJvmRuntimeElements(
     configurationName: String,
     dependencyNotations: List<String>,
+    capabilityNotation: String,
 ): Configuration =
     configurations.create(configurationName).apply {
         isCanBeConsumed = true
         isCanBeResolved = false
+        // An explicit capability keeps this variant out of default-capability project
+        // dependency resolution (a plain `implementation(projects.mediampMpv)` must
+        // select the library variants, never this aggregator).
+        outgoing.capability(capabilityNotation)
         attributes.attribute(Usage.USAGE_ATTRIBUTE, objects.named<Usage>(Usage.JAVA_RUNTIME))
         attributes.attribute(Category.CATEGORY_ATTRIBUTE, objects.named<Category>(Category.LIBRARY))
         attributes.attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named<Bundling>(Bundling.EXTERNAL))

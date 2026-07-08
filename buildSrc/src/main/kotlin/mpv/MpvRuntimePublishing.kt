@@ -152,6 +152,7 @@ internal fun configureRuntimePublishing(
             dependencyNotations = desktopRuntimeJarTasks.keys.map { target ->
                 "org.openani.mediamp:mediamp-mpv-runtime-${target.artifactSuffix()}:$deployVersion"
             },
+            capabilityNotation = "org.openani.mediamp:mediamp-mpv-runtime:$deployVersion",
         )
 
         context.project.publishDesktopRuntimeAggregator(
