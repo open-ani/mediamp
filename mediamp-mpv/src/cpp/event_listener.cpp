@@ -63,14 +63,14 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
 
     switch (prop->format) {
         case MPV_FORMAT_NONE:
-            LOG("[event_loop] property change: %s", prop->name);
+            LOG("[event_loop] property change: %s\n", prop->name);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_NONE,
                                 prop_name);
             break;
         case MPV_FORMAT_FLAG:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %i", prop->name, *(int *) prop->data);
+            LOG("[event_loop] property change: %s, %i\n", prop->name, *(int *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_FLAG,
                                 prop_name,
@@ -78,7 +78,7 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_INT64:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %lld", prop->name, *(int64_t *) prop->data);
+            LOG("[event_loop] property change: %s, %lld\n", prop->name, *(int64_t *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_INT64,
                                 prop_name,
@@ -86,7 +86,7 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_DOUBLE:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %f", prop->name, *(double *) prop->data);
+            LOG("[event_loop] property change: %s, %f\n", prop->name, *(double *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_DOUBLE,
                                 prop_name,
@@ -94,7 +94,7 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_STRING:
             if (!prop->data || !*(const char **) prop->data) break;
-            LOG("[event_loop] property change: %s, %s", prop->name, *(const char **) prop->data);
+            LOG("[event_loop] property change: %s, %s\n", prop->name, *(const char **) prop->data);
             value = env->NewStringUTF(*(const char **) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_STRING,
@@ -102,7 +102,7 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
                                 value);
             break;
         default:
-            LOG("emit_property_change: Unknown property update format received in callback: %d", prop->format);
+            LOG("emit_property_change: Unknown property update format received in callback: %d\n", prop->format);
             break;
     }
     clear_jni_exception(env, "EventListener.onPropertyChange");
