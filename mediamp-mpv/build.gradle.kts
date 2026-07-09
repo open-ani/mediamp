@@ -88,12 +88,32 @@ val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
 }
 
 tasks.withType<Test>().configureEach {
-    dependsOn(compileJniDevMacos)
-    // macOS: JNI wrapper compiled against Homebrew libmpv (fast dev loop).
-    // Windows: the assembled meson runtime (no system libmpv exists, and the D3D11
-    // render API needs our patched build anyway); run mpvAssembleWindowsX64 first.
-    val windowsRuntimeDir = layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
-    val testNativeDir = if (getOs() == Os.Windows) windowsRuntimeDir else devNativeDir.get().asFile
+    // Where MpvMediampPlayerSmokeTest loads the native runtime from:
+    // - Windows: the assembled meson runtime (no system libmpv exists, and the D3D11
+    //     render API needs our patched build anyway) — mpv-output/WindowsX64/bin.
+    // - macOS on a required runner (self-hosted, full environment): the assembled meson
+    //     runtime — mpv-output/<target>/lib, which includes libmediampv.dylib. That
+    //     runner has no Homebrew libmpv, so the dev fast-path below would skip and, under
+    //     required mode, fail; and it is the one place that builds the real runtime, so
+    //     the smoke test should exercise exactly what ships.
+    // - macOS local dev: the JNI wrapper compiled against Homebrew libmpv (fast loop,
+    //     no full meson build required).
+    val mpvTestRequired = getPropertyOrNull("mediamp.mpv.test.required") == "true"
+    val testNativeDir = when {
+        getOs() == Os.Windows ->
+            layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
+
+        getOs() == Os.MacOS && mpvTestRequired -> {
+            val macosTarget = if (getArch() == Arch.AARCH64) "MacosArm64" else "MacosX64"
+            dependsOn("mpvAssemble$macosTarget")
+            layout.buildDirectory.dir("mpv-output/$macosTarget/lib").get().asFile
+        }
+
+        else -> {
+            dependsOn(compileJniDevMacos)
+            devNativeDir.get().asFile
+        }
+    }
     systemProperty("mediamp.mpv.dev.native.dir", testNativeDir.absolutePath)
     // CI 上防静默跳过: -Pmediamp.mpv.test.required=true 时环境缺失会 fail 而不是 skip
     systemProperty("mediamp.mpv.test.required", getPropertyOrNull("mediamp.mpv.test.required") ?: "false")
