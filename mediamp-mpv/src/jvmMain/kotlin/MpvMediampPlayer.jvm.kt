@@ -226,6 +226,29 @@ abstract class JvmMpvMediampPlayer(
             else -> {}
         }
 
+        when (currentPlatform()) {
+            is Platform.Windows, is Platform.MacOS, is Platform.Linux -> {
+                // HDR -> SDR tone-mapping. The desktop render API (render_d3d11.cpp /
+                // render_macos.mm) draws into an 8-bit SDR (sRGB) texture. By default
+                // mpv's renderer enters "dumb mode" (a fast passthrough blit) and writes
+                // HDR (PQ/bt2020) frames untonemapped — everything but the brightest
+                // highlights is crushed to black (symptom: an HDR video plays with audio
+                // but a near-black picture). check_dumb_mode() only inspects scaling /
+                // debanding / shaders, never the target colorspace, so the target-*
+                // options below cannot leave dumb mode on their own; gpu-dumb-mode=no
+                // forces the full color-management path. target-prim/target-trc then
+                // declare an SDR output so HDR is tone-mapped down to it. Values use
+                // libplacebo naming ("bt.709", not "bt709"). This is a no-op for SDR
+                // sources (target matches source). Android/iOS are excluded: Android
+                // uses vo=gpu-next, which does its own HDR handling.
+                handle.option("gpu-dumb-mode", "no")
+                handle.option("target-prim", "bt.709")
+                handle.option("target-trc", "srgb")
+            }
+
+            else -> {}
+        }
+
         handle.option("hwdec", "auto")
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         handle.option("input-default-bindings", "no")
