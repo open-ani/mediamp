@@ -51,10 +51,13 @@ class MpvMediampPlayerSmokeTest {
      * cannot degrade into a permanently-green no-op.
      */
     private fun skip(reason: String): Boolean {
+        // Print the reason unconditionally (stderr is always shown in CI) so that on a
+        // required runner the failure reveals WHY setup was skipped, instead of only an
+        // opaque IllegalStateException at this line.
+        System.err.println("[SmokeTest] setup skipped: $reason")
         check(System.getProperty("mediamp.mpv.test.required") != "true") {
             "mpv smoke tests are required on this runner but would be skipped: $reason"
         }
-        println("[SmokeTest] skipped: $reason")
         return false
     }
 
