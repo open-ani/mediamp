@@ -1,3 +1,4 @@
+#include <clocale>
 #include <iostream>
 #include <atomic>
 #include <limits>
@@ -328,10 +329,17 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     jvm_ = global_jvm;
     jni_cache_classes(env);
     event_loop_request_exit.store(false, std::memory_order_release);
+
+    // libmpv hard-requires LC_NUMERIC == "C": mp_create() returns NULL on any other numeric
+    // locale (mpv/client.h remark; mpv/player/main.c check_locale). The JVM may run under a
+    // non-C locale (observed on macOS CI), which previously made mpv_create() fail silently
+    // and mpv never work at all. Force it here, under global_guard, before mpv_create(). This
+    // affects only C number parsing/formatting, not java.util.Locale.
+    setlocale(LC_NUMERIC, "C");
     handle_ = mpv_create();
     if (!handle_) {
         throw std::runtime_error("cannot create mpv handle: mpv_create() returned null "
-                                 "(out of memory or mpv initialization error)");
+                                 "(out of memory, or LC_NUMERIC is not \"C\")");
     }
 
     // use terminal log level but request verbose messages
