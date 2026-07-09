@@ -37,6 +37,15 @@ UTIL_EXTERN jclass jni_mediamp_clazz_android_Surface;
 
 void jni_cache_classes(JNIEnv *env);
 
+// Raises a Java exception of `class_name` (e.g. "java/lang/IllegalStateException") carrying
+// `message`. The native method must return promptly afterwards; the exception is delivered
+// when control returns to the JVM. No-op when `env` is null or an exception is already
+// pending, so an in-flight failure (e.g. OutOfMemoryError from a failed JNI allocation) is
+// never clobbered by a less specific one.
+void throw_java_exception(JNIEnv *env, const char *class_name, const char *message);
+void throw_illegal_state(JNIEnv *env, const char *message);
+void throw_illegal_argument(JNIEnv *env, const char *message);
+
 } // namespace mediampv
 
 #endif //MEDIAMP_METHOD_CACHE_H

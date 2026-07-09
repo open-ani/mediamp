@@ -91,6 +91,9 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     }
 
     fun registerSeekableInput(input: SeekableInput, uri: String): String {
+        // On failure the native layer throws a specific IllegalArgumentException /
+        // IllegalStateException with the concrete reason, so it normally does not return
+        // false; the check remains only as a defensive fallback.
         if (!nRegisterSeekableInput(ptr, input, uri, input.size)) {
             error("Failed to register SeekableInput for mpv stream_cb: $uri")
         }

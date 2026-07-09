@@ -189,6 +189,20 @@ abstract class JvmMpvMediampPlayer(
     }
 
     init {
+        // Resolve the native handle now: if its creation fails, nMake throws with nothing
+        // to release. If any later configuration step fails (e.g. initialize() throwing),
+        // close the handle so a failed construction never leaks the native mpv instance,
+        // then rethrow for the caller to handle.
+        val nativeHandle = handle
+        try {
+            configureNativeHandle(nativeHandle)
+        } catch (e: Throwable) {
+            nativeHandle.close()
+            throw e
+        }
+    }
+
+    private fun configureNativeHandle(handle: MPVHandle) {
         handle.setEventListener(eventListener)
 
         handle.option("config", "no")

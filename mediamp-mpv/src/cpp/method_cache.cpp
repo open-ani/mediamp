@@ -61,6 +61,32 @@ void delete_global_ref(JNIEnv *env, jclass &clazz) {
 
 } // namespace
 
+void throw_java_exception(JNIEnv *env, const char *class_name, const char *message) {
+    if (!env || env->ExceptionCheck()) {
+        // Never overwrite an exception that is already pending (e.g. an OutOfMemoryError
+        // from a failed JNI allocation); it is more specific and must win.
+        return;
+    }
+    jclass clazz = env->FindClass(class_name);
+    if (!clazz) {
+        // FindClass itself failed and left its own exception pending; there is nothing more
+        // we can do but report it to the log sink.
+        env->ExceptionClear();
+        LOGE("throw_java_exception: cannot resolve %s to report: %s", class_name, message ? message : "");
+        return;
+    }
+    env->ThrowNew(clazz, message ? message : "");
+    env->DeleteLocalRef(clazz);
+}
+
+void throw_illegal_state(JNIEnv *env, const char *message) {
+    throw_java_exception(env, "java/lang/IllegalStateException", message);
+}
+
+void throw_illegal_argument(JNIEnv *env, const char *message) {
+    throw_java_exception(env, "java/lang/IllegalArgumentException", message);
+}
+
 void jni_cache_classes(JNIEnv *env) {
     if (!env) {
         return;

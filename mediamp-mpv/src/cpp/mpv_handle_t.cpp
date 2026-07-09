@@ -2,6 +2,7 @@
 #include <atomic>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <mpv/render_gl.h>
 #include "mpv_handle_t.h"
@@ -307,17 +308,18 @@ void seekable_stream_cancel(void *cookie_ptr) {
 } // namespace
 
 void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
+    // Unrecoverable construction failures throw a C++ exception carrying the concrete
+    // reason; nMake translates it into a JVM exception. Do not log here — the exception is
+    // the single, authoritative report, and logging it too would duplicate the message.
     if (!env) {
-        LOGE("JNI env is null when %s", __FUNCTION__);
-        return;
+        throw std::runtime_error("cannot create mpv handle: JNI env is null");
     }
 
     LOCK(global_guard);
 
     if (!global_jvm) {
         if (env->GetJavaVM(&global_jvm) != JNI_OK || !global_jvm) {
-            LOGE("failed to get current jvm");
-            return;
+            throw std::runtime_error("cannot create mpv handle: failed to obtain the JavaVM");
         }
 
         av_jni_set_java_vm(global_jvm, &app_context);
@@ -328,8 +330,8 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     event_loop_request_exit.store(false, std::memory_order_release);
     handle_ = mpv_create();
     if (!handle_) {
-        LOGE("failed to create mpv handle");
-        return;
+        throw std::runtime_error("cannot create mpv handle: mpv_create() returned null "
+                                 "(out of memory or mpv initialization error)");
     }
 
     // use terminal log level but request verbose messages
@@ -343,20 +345,23 @@ mpv_handle_t::~mpv_handle_t() {
 }
 
 bool mpv_handle_t::initialize() {
-
-    if (!handle_) return false;
+    // Initialization is a one-time, unrecoverable step: on failure throw a C++ exception
+    // (translated to a JVM exception by nInitialize) instead of collapsing distinct causes
+    // into a bare false. Not logged here — the exception carries the reason.
+    if (!handle_) {
+        throw std::runtime_error("cannot initialize: the mpv handle has already been destroyed");
+    }
     if (event_thread_) return true;
-    if (mpv_initialize(handle_) < 0) {
-        LOGE("failed to initialize mpv");
-        return false;
+    const int rc = mpv_initialize(handle_);
+    if (rc < 0) {
+        throw std::runtime_error(std::string("mpv_initialize() failed: ") + mpv_error_string(rc));
     }
 
     event_loop_request_exit.store(false, std::memory_order_release);
     event_thread_ = std::make_shared<mediampv::compatible_thread>([this] { event_loop(nullptr); });
     if (!event_thread_->create()) {
-        LOGE("failed to create event thread");
         event_thread_.reset();
-        return false;
+        throw std::runtime_error("failed to start the mpv event-loop thread");
     }
 
     return true;
@@ -507,43 +512,51 @@ bool mpv_handle_t::ensure_stream_protocol_registered() {
 }
 
 bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, const char *uri, int64_t size) {
+    // Registering the input source is a precondition for playback: every failure here is
+    // unrecoverable, so raise a specific JVM exception (precondition -> IllegalArgument,
+    // invalid state -> IllegalState) rather than collapsing them all into a bare false and
+    // losing the reason. These throws replace the previous logs (no duplicate reporting).
     if (!handle_) {
-        LOGW("mpv handle is not created when %s", __FUNCTION__);
+        throw_illegal_state(env, "cannot register a seekable input: the mpv handle has been destroyed");
         return false;
     }
     if (!seekable_input) {
-        LOGE("seekable input is null when %s", __FUNCTION__);
+        throw_illegal_argument(env, "cannot register a seekable input: the input is null");
         return false;
     }
     if (!jvm_) {
-        LOGE("JVM is not initialized when %s", __FUNCTION__);
+        throw_illegal_state(env, "cannot register a seekable input: the JavaVM is not initialized");
         return false;
     }
     if (!uri || uri[0] == '\0') {
-        LOGE("seekable input uri is null or empty when %s", __FUNCTION__);
+        throw_illegal_argument(env, "cannot register a seekable input: the uri is null or empty");
         return false;
     }
 
     jni_cache_classes(env);
-    if (env->IsInstanceOf(seekable_input, mediampv::jni_mediamp_clazz_SeekableInput) != JNI_TRUE) {
-        LOGE("seekable input is not an instance of SeekableInput");
+    if (!jni_mediamp_clazz_SeekableInput ||
+        env->IsInstanceOf(seekable_input, jni_mediamp_clazz_SeekableInput) != JNI_TRUE) {
+        throw_illegal_argument(env, "cannot register a seekable input: the object is not a SeekableInput");
         return false;
     }
 
     LOCK(stream_registry_lock);
     if (!ensure_stream_protocol_registered()) {
+        throw_illegal_state(env, "cannot register a seekable input: failed to register the mpv stream-cb protocol");
         return false;
     }
 
     jobject global_input = env->NewGlobalRef(seekable_input);
-    if (!global_input || clear_jni_exception(env, "NewGlobalRef(SeekableInput)")) {
+    if (!global_input) {
+        // NewGlobalRef failure is an out-of-memory condition; leave the pending
+        // OutOfMemoryError to propagate rather than swallowing it or masking it.
         return false;
     }
 
     const std::string stream_uri(uri);
     if (seekable_streams_.find(stream_uri) != seekable_streams_.end()) {
-        LOGW("seekable input uri is already registered: %s", uri);
         env->DeleteGlobalRef(global_input);
+        throw_illegal_state(env, (std::string("cannot register a seekable input: uri is already registered: ") + uri).c_str());
         return false;
     }
 

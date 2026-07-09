@@ -5,6 +5,7 @@
 #include <jni.h>
 #include <cstdio>
 #include "mpv_handle_t.h"
+#include "method_cache.h"
 
 #define FN(name) Java_org_openani_mediamp_mpv_MPVHandleKt_##name
 #define FN_ANDROID(name) Java_org_openani_mediamp_mpv_MPVHandleAndroid_##name
@@ -124,20 +125,31 @@ JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context
         auto* handle = new mediampv::mpv_handle_t(env, app_context);
         return reinterpret_cast<jlong>(handle);
     } catch (const std::exception &e) {
-        // A C++ exception (e.g. std::bad_alloc from the constructor) unwinding across the
-        // JNI boundary is undefined behavior and typically aborts the VM. Log it and return
-        // 0 so the Kotlin side (which already checks for 0) fails cleanly instead.
-        LOGE("nMake: failed to create native mpv handle: %s", e.what());
+        // A C++ exception unwinding across the JNI boundary is undefined behavior. Translate
+        // it into an IllegalStateException carrying the concrete reason (out of memory, mpv
+        // init error, ...) so the JVM caller learns exactly why creation failed instead of
+        // seeing a bare 0. Not logged: the exception is the single report of the failure.
+        mediampv::throw_illegal_state(env, e.what());
         return 0;
     } catch (...) {
-        LOGE("nMake: failed to create native mpv handle (unknown exception)");
+        mediampv::throw_illegal_state(env, "failed to create native mpv handle (unknown error)");
         return 0;
     }
 }
 
 JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance ? instance->initialize() : JNI_FALSE;
+    if (!instance) {
+        mediampv::throw_illegal_state(env, "cannot initialize: native mpv handle is not available");
+        return JNI_FALSE;
+    }
+    try {
+        return instance->initialize();
+    } catch (const std::exception &e) {
+        // initialize() throws on unrecoverable init failure; surface the concrete reason.
+        mediampv::throw_illegal_state(env, e.what());
+        return JNI_FALSE;
+    }
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetEventListener)
