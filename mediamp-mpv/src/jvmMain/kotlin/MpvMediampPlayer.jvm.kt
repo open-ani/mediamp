@@ -318,10 +318,8 @@ abstract class JvmMpvMediampPlayer(
             val headers = data.headers.toMutableMap()
             headers.remove("User-Agent")?.let { handle.option("user-agent", it) }
             headers.remove("Referer")?.let { handle.option("referrer", it) }
-            handle.option("http-header-fields-clr", "")
-            headers.forEach { (key, value) ->
-                handle.option("http-header-fields-add", "$key: $value")
-            }
+            val headerFields = headers.entries.joinToString(",") { (key, value) -> "$key: $value" }
+            handle.option("http-header-fields", headerFields)
 
             MPVPlayerData(data, data.uri)
         }
