@@ -149,6 +149,20 @@ private val windowsD3d11vaFlags: List<String> = listOf(
     "--enable-hwaccel=av1_d3d11va2",
 )
 
+// VideoToolbox hardware decoding: hwcontext_videotoolbox for mpv's hwdec=videotoolbox
+// (--disable-everything/--disable-autodetect strip these otherwise; without them
+// av_hwdevice_ctx_create(AV_HWDEVICE_TYPE_VIDEOTOOLBOX) returns AVERROR(ENOMEM) —
+// libavutil's hw_table has no videotoolbox entry — and mpv falls back to software
+// decoding on macOS. mpv itself is built with -Dvideotoolbox-gl=enabled, so the GL
+// interop loads fine; only the ffmpeg hwdevice was missing.
+private val macosVideotoolboxFlags: List<String> = listOf(
+    "--enable-videotoolbox",
+    "--enable-hwaccel=h264_videotoolbox",
+    "--enable-hwaccel=hevc_videotoolbox",
+    "--enable-hwaccel=vp9_videotoolbox",
+    "--enable-hwaccel=av1_videotoolbox",
+)
+
 private val linuxRuntimeSearchPathFlags: List<String> = listOf(
     "--extra-ldflags=-Wl,-rpath,'${'$'}ORIGIN'",
 )
@@ -250,7 +264,7 @@ private fun macosTarget(name: String, arch: String): FfmpegBuildTarget = FfmpegB
         "--cxx=clang++",
         "--extra-cflags=-arch $arch -mmacosx-version-min=12.0",
         "--extra-ldflags=-arch $arch -mmacosx-version-min=12.0",
-    ) + secureTransportHttpTlsFlags,
+    ) + secureTransportHttpTlsFlags + macosVideotoolboxFlags,
     libExtension = "dylib",
     jniWrapperName = "libffmpegkitjni.dylib",
     jniWrapperLinkFlags = listOf("-dynamiclib", "-Wl,-install_name,@loader_path/libffmpegkitjni.dylib"),
