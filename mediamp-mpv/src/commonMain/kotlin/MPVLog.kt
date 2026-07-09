@@ -11,38 +11,94 @@ package org.openani.mediamp.mpv
 import kotlin.concurrent.Volatile
 
 /**
- * A parsed mpv log line emitted by `MPV_EVENT_LOG_MESSAGE`.
+ * A single log line emitted by the mpv backend. Sources:
+ *  - mpv itself (`MPV_EVENT_LOG_MESSAGE`), keeping mpv's own [prefix] and level;
+ *  - the mediamp native (JNI) layer, with prefix `mediampv`;
+ *  - mediamp Kotlin code, with prefix `mediamp`.
+ *
+ * [level] follows mpv's `mpv_log_level` scale, where a *lower* number is more severe
+ * (see [MPVLog]).
  */
 public class MPVLogMessage(
     public val level: Int,
     public val prefix: String,
     public val line: String,
 ) {
-    public val isError: Boolean get() = level <= 20
+    /** True for fatal/error lines (mpv scale <= [MPVLog.ERROR]). */
+    public val isError: Boolean get() = level in MPVLog.FATAL..MPVLog.ERROR
+
+    override fun toString(): String = "[$prefix] $line"
 }
 
 public fun interface MPVLogHandler {
     public fun onLog(message: MPVLogMessage)
 }
 
-@Volatile
-private var configuredLogHandler: MPVLogHandler? = null
+/**
+ * Central log sink for the whole mpv backend: mpv's own messages, the native JNI layer,
+ * and mediamp Kotlin code all funnel through here so a single [MPVLogHandler] (installed
+ * via [MPVHandle.setLogHandler]) observes everything on one scale.
+ *
+ * Levels mirror mpv's `mpv_log_level` (client.h): **lower is more severe**.
+ */
+public object MPVLog {
+    public const val FATAL: Int = 10 // critical, aborting errors
+    public const val ERROR: Int = 20 // simple errors
+    public const val WARN: Int = 30  // possible problems
+    public const val INFO: Int = 40  // informational messages
+    public const val V: Int = 50     // noisy informational messages
+    public const val DEBUG: Int = 60 // very noisy technical detail
+    public const val TRACE: Int = 70 // extremely noisy
 
-internal fun setMPVLogHandler(handler: MPVLogHandler?) {
-    configuredLogHandler = handler
+    /** Prefix used for lines originating in mediamp Kotlin code. */
+    public const val PREFIX: String = "mediamp"
+
+    @Volatile
+    private var handler: MPVLogHandler? = null
+
+    internal fun setHandler(handler: MPVLogHandler?) {
+        this.handler = handler
+    }
+
+    /**
+     * Emits a log line. [throwable], when present, is appended as its full stack trace so
+     * exception detail is never swallowed. When no handler is installed, warnings and
+     * errors still surface via [println] so real problems are not lost silently; quieter
+     * levels are dropped.
+     */
+    public fun log(level: Int, message: String, throwable: Throwable? = null, prefix: String = PREFIX) {
+        val body = if (throwable == null) {
+            message
+        } else {
+            buildString {
+                append(message)
+                append('\n')
+                append(throwable.stackTraceToString())
+            }
+        }
+        val normalized = body.trimEnd('\r', '\n')
+        if (normalized.isEmpty()) {
+            return
+        }
+
+        val current = handler
+        if (current != null) {
+            current.onLog(MPVLogMessage(level, prefix, normalized))
+        } else if (level <= WARN) {
+            // No sink installed: don't silently swallow problems.
+            println("[$prefix] $normalized")
+        }
+    }
+
+    public fun fatal(message: String, throwable: Throwable? = null): Unit = log(FATAL, message, throwable)
+    public fun error(message: String, throwable: Throwable? = null): Unit = log(ERROR, message, throwable)
+    public fun warn(message: String, throwable: Throwable? = null): Unit = log(WARN, message, throwable)
+    public fun info(message: String, throwable: Throwable? = null): Unit = log(INFO, message, throwable)
+    public fun debug(message: String, throwable: Throwable? = null): Unit = log(DEBUG, message, throwable)
+    public fun verbose(message: String, throwable: Throwable? = null): Unit = log(V, message, throwable)
 }
 
-@Suppress("unused") // Called from JNI.
+@Suppress("unused") // Called from JNI as MPVLogKt.onNativeLog(int, String, String).
 public fun onNativeLog(level: Int, prefix: String, message: String) {
-    val normalizedLine = message.trimEnd('\r', '\n')
-    if (normalizedLine.isEmpty()) {
-        return
-    }
-    configuredLogHandler?.onLog(
-        MPVLogMessage(
-            level = level,
-            prefix = prefix,
-            line = normalizedLine,
-        ),
-    )
+    MPVLog.log(level, message, prefix = prefix)
 }

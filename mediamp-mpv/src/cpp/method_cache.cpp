@@ -16,9 +16,11 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
         return false;
     }
 
-    LOG("JNI exception in %s\n", context);
+    // Describe + clear before logging: the log dispatcher makes JNI calls, which must not
+    // run with an exception pending.
     env->ExceptionDescribe();
     env->ExceptionClear();
+    LOGE("JNI exception in %s", context);
     return true;
 }
 
@@ -81,6 +83,10 @@ void jni_cache_classes(JNIEnv *env) {
         || !surface_class
 #endif
     ) {
+        // A missing class breaks the entire native<->Kotlin bridge (events, logs, stream
+        // callbacks); surface it loudly instead of silently degrading.
+        LOGE("jni_cache_classes: failed to resolve one or more mediamp JNI classes; "
+             "the native mpv bridge will not function");
         delete_global_ref(env, event_listener_class);
         delete_global_ref(env, render_update_listener_class);
         delete_global_ref(env, mpv_log_class);
@@ -128,6 +134,8 @@ void jni_cache_classes(JNIEnv *env) {
         !seekable_input_read ||
         !seekable_input_seek_to ||
         !seekable_input_close) {
+        LOGE("jni_cache_classes: failed to resolve one or more mediamp JNI methods; "
+             "the native mpv bridge will not function");
         delete_global_ref(env, event_listener_class);
         delete_global_ref(env, render_update_listener_class);
         delete_global_ref(env, mpv_log_class);

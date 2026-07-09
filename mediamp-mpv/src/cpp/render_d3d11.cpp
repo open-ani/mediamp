@@ -82,22 +82,22 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
 
     // A real DirectXDevice* is at least pointer-aligned; a misaligned value is not one.
     if (skiko_device_ptr & static_cast<int64_t>(sizeof(void *) - 1)) {
-        LOG("Skiko device pointer %lld is misaligned; not a DirectXDevice\n",
+        LOGE("Skiko device pointer %lld is misaligned; not a DirectXDevice",
             static_cast<long long>(skiko_device_ptr));
         return nullptr;
     }
     auto *slots = reinterpret_cast<void *const *>(static_cast<uintptr_t>(skiko_device_ptr));
     // Need slots[0..8] readable (9 pointers).
     if (IsBadReadPtr(slots, 9 * sizeof(void *))) {
-        LOG("Skiko device pointer span is not readable; not a DirectXDevice\n");
+        LOGE("Skiko device pointer span is not readable; not a DirectXDevice");
         return nullptr;
     }
 
     void *device_a = slots[2], *device_b = slots[6];
     void *queue_a = slots[3], *queue_b = slots[8];
     if (!device_a || device_a != device_b || !queue_a || queue_a != queue_b) {
-        LOG("Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
-            "video will not be wrapped for Skia\n",
+        LOGE("Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
+            "video will not be wrapped for Skia",
             device_a, device_b, queue_a, queue_b);
         return nullptr;
     }
@@ -106,7 +106,7 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
     // so a non-COM but coincidentally-agreeing pointer does not jump through garbage.
     if (IsBadReadPtr(device_a, sizeof(void *)) ||
         IsBadReadPtr(*reinterpret_cast<void *const *>(device_a), sizeof(void *))) {
-        LOG("Skiko device candidate has no readable vtable; not a COM object\n");
+        LOGE("Skiko device candidate has no readable vtable; not a COM object");
         return nullptr;
     }
 
@@ -114,7 +114,7 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
     HRESULT hr = static_cast<IUnknown *>(device_a)
                      ->QueryInterface(__uuidof(ID3D12Device), reinterpret_cast<void **>(&device));
     if (FAILED(hr) || !device) {
-        LOG("Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)\n", hr);
+        LOGE("Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)", hr);
         return nullptr;
     }
     return device;  // AddRef'd by QueryInterface; caller owns.
@@ -139,8 +139,10 @@ struct scoped_co_init final {
 namespace mediampv {
 
 bool mpv_handle_t::create_render_context() {
-    FP;
-    if (!handle_) return false;
+    if (!handle_) {
+        LOGE("create_render_context: mpv handle is null");
+        return false;
+    }
     if (render_context_) return true;
 
     // VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to
@@ -170,14 +172,14 @@ bool mpv_handle_t::create_render_context() {
             if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
                 // Headless CI / no GPU: WARP renders in software but supports the full
                 // API, including shared resources (Windows 8+).
-                LOG("D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)\n",
+                LOGW("D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)",
                     (int) driver_type, flags, hr);
             }
         }
         if (SUCCEEDED(hr)) break;
     }
     if (FAILED(hr) || !device || !context) {
-        LOG("D3D11CreateDevice failed: 0x%lx\n", hr);
+        LOGE("D3D11CreateDevice failed: 0x%lx", hr);
         safe_release(context);
         safe_release(device);
         return false;
@@ -194,7 +196,7 @@ bool mpv_handle_t::create_render_context() {
 
     D3D11_QUERY_DESC query_desc{D3D11_QUERY_EVENT, 0};
     if (FAILED(device->CreateQuery(&query_desc, &flush_query_))) {
-        LOG("CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush\n");
+        LOGW("CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
         flush_query_ = nullptr;
     }
 
@@ -206,7 +208,7 @@ bool mpv_handle_t::create_render_context() {
     };
     int create_result = mpv_render_context_create(&render_context_, handle_, params);
     if (create_result < 0) {
-        LOG("mpv_render_context_create(d3d11) failed: %s\n", mpv_error_string(create_result));
+        LOGE("mpv_render_context_create(d3d11) failed: %s", mpv_error_string(create_result));
         render_context_ = nullptr;
         safe_release(flush_query_);
         safe_release(context);
@@ -222,13 +224,11 @@ bool mpv_handle_t::create_render_context() {
 }
 
 bool mpv_handle_t::destroy_render_context() {
-    FP;
     cleanup_render_resources();
     return true;
 }
 
 bool mpv_handle_t::set_surface_config(int width, int height, int64_t skiko_device_ptr) {
-    FP;
     if (!render_thread_) return false;
     {
         std::lock_guard<std::mutex> guard(render_mutex_);
@@ -419,7 +419,7 @@ bool mpv_handle_t::apply_config_locked() {
         ok = allocate_buffer(buffers_[i], width, height);
     }
     if (!ok) {
-        LOG("buffer ring allocation failed (%dx%d)\n", width, height);
+        LOGE("buffer ring allocation failed (%dx%d)", width, height);
         destroy_buffer_ring(buffers_);
         latest_index_ = -1;
         buffer_width_ = buffer_height_ = 0;
@@ -436,7 +436,7 @@ bool mpv_handle_t::apply_config_locked() {
     latest_index_ = -1;
     ++buffer_generation_;
     publish_state_locked();
-    LOG("buffer ring allocated %dx%d gen=%u d3d12=%d\n",
+    LOGI("buffer ring allocated %dx%d gen=%u d3d12=%d",
         width, height, buffer_generation_, skia_device_ ? 1 : 0);
     return true;
 }
@@ -460,7 +460,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
     ID3D11Texture2D *texture = nullptr;
     HRESULT hr = d3d_device_->CreateTexture2D(&desc, nullptr, &texture);
     if (FAILED(hr) || !texture) {
-        LOG("CreateTexture2D(%dx%d shared) failed: 0x%lx\n", width, height, hr);
+        LOGE("CreateTexture2D(%dx%d shared) failed: 0x%lx", width, height, hr);
         return false;
     }
 
@@ -475,7 +475,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
         dxgi_resource->Release();
     }
     if (FAILED(hr) || !shared_handle) {
-        LOG("CreateSharedHandle failed: 0x%lx\n", hr);
+        LOGE("CreateSharedHandle failed: 0x%lx", hr);
         texture->Release();
         return false;
     }
@@ -485,7 +485,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
         hr = skia_device_->OpenSharedHandle(
             shared_handle, __uuidof(ID3D12Resource), reinterpret_cast<void **>(&d3d12_resource));
         if (FAILED(hr) || !d3d12_resource) {
-            LOG("ID3D12Device::OpenSharedHandle failed: 0x%lx\n", hr);
+            LOGE("ID3D12Device::OpenSharedHandle failed: 0x%lx", hr);
             CloseHandle(shared_handle);
             texture->Release();
             return false;
@@ -556,12 +556,12 @@ bool mpv_handle_t::wait_for_gpu() {
         HRESULT hr = d3d_context_->GetData(flush_query_, nullptr, 0, 0);
         if (hr == S_OK) return true;
         if (FAILED(hr)) {
-            LOG("flush query GetData failed: 0x%lx\n", hr);
+            LOGE("flush query GetData failed: 0x%lx", hr);
             return false;
         }
         if (GetTickCount64() - start_tick >= timeout_ms) {
             HRESULT removed = d3d_device_ ? d3d_device_->GetDeviceRemovedReason() : S_OK;
-            LOG("wait_for_gpu timed out after %llums (device removed reason: 0x%lx)\n",
+            LOGE("wait_for_gpu timed out after %llums (device removed reason: 0x%lx)",
                 timeout_ms, removed);
             return false;
         }
@@ -638,14 +638,14 @@ bool mpv_handle_t::save_surface_png(const char *path) {
 
     ID3D11Texture2D *staging = nullptr;
     if (FAILED(d3d_device_->CreateTexture2D(&desc, nullptr, &staging)) || !staging) {
-        LOG("staging texture creation failed\n");
+        LOGE("staging texture creation failed");
         return false;
     }
     d3d_context_->CopyResource(staging, source);
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     if (FAILED(d3d_context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
-        LOG("Map(staging) failed\n");
+        LOGE("Map(staging) failed");
         staging->Release();
         return false;
     }
@@ -664,7 +664,7 @@ bool mpv_handle_t::save_surface_png(const char *path) {
 
     scoped_co_init com;
     if (!com.usable) {
-        LOG("CoInitializeEx failed\n");
+        LOGE("CoInitializeEx failed");
         return false;
     }
     bool ok = false;
@@ -697,7 +697,7 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     safe_release(encoder);
     safe_release(stream);
     safe_release(factory);
-    if (!ok) LOG("save_surface_png failed for %s\n", path);
+    if (!ok) LOGE("save_surface_png failed for %s", path);
     return ok;
 }
 

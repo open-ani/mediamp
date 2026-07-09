@@ -18,6 +18,7 @@ import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nAckRetiredBuffersD3D11
 import org.openani.mediamp.mpv.nAckRetiredBuffersMacos
 import org.openani.mediamp.mpv.nCreateRenderContextD3D11
@@ -247,9 +248,9 @@ internal class MpvSurfaceRing(
                     colorFormat = backend.wrapColorFormat,
                     colorSpace = ColorSpace.sRGB,
                 )
-            }.onFailure { logOnce("wrapping buffer $i as Skia surface failed: $it") }.getOrNull()
+            }.onFailure { logOnce("wrapping buffer $i as Skia surface failed", MPVLog.ERROR, it) }.getOrNull()
             if (surface == null) {
-                logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})")
+                logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})", MPVLog.ERROR)
                 target.close()
                 closeWraps()
                 return false
@@ -261,9 +262,9 @@ internal class MpvSurfaceRing(
         // drawn zero-copy onto the Compose canvas, so no frame ever crosses the CPU.
         blitSurface = runCatching {
             Surface.makeRenderTarget(directContext, false, ImageInfo.makeN32Premul(width, height))
-        }.onFailure { logOnce("blit surface creation failed: $it") }.getOrNull()
+        }.onFailure { logOnce("blit surface creation failed", MPVLog.ERROR, it) }.getOrNull()
         if (blitSurface == null) {
-            logOnce("blit surface unavailable (${width}x${height})")
+            logOnce("blit surface unavailable (${width}x${height})", MPVLog.ERROR)
             closeWraps()
             return false
         }
@@ -295,8 +296,8 @@ internal class MpvSurfaceRing(
     }
 
     private val loggedStates = mutableSetOf<String>()
-    private fun logOnce(message: String) {
-        if (loggedStates.add(message)) println("[MpvSurfaceRing] $message")
+    private fun logOnce(message: String, level: Int = MPVLog.WARN, throwable: Throwable? = null) {
+        if (loggedStates.add(message)) MPVLog.log(level, message, throwable)
     }
 
     fun release() {

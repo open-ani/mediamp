@@ -139,7 +139,7 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
         }
 
         public fun setLogHandler(handler: MPVLogHandler?) {
-            setMPVLogHandler(handler)
+            MPVLog.setHandler(handler)
         }
     }
 

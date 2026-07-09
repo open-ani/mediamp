@@ -18,11 +18,11 @@ extern "C" {
 }
 
 #define CHECK_HANDLE() if (!handle_) { \
-    LOG("mpv handle is not created when %s", __FUNCTION__); \
+    LOGW("mpv handle is not created when %s", __FUNCTION__); \
     return false; \
 }
 #define CHECK_HANDLE_RETURN_INT() if (!handle_) { \
-    LOG("mpv handle is not created when %s", __FUNCTION__); \
+    LOGW("mpv handle is not created when %s", __FUNCTION__); \
     return 0; \
 }
 
@@ -85,9 +85,11 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
         return false;
     }
 
-    LOG("JNI exception in %s\n", context);
+    // Describe + clear before logging: the log dispatcher makes JNI calls, which must not
+    // run with an exception pending.
     env->ExceptionDescribe();
     env->ExceptionClear();
+    LOGE("JNI exception in %s", context);
     return true;
 }
 
@@ -305,9 +307,8 @@ void seekable_stream_cancel(void *cookie_ptr) {
 } // namespace
 
 void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
-    FP;
     if (!env) {
-        LOG("JNI env is null when %s\n", __FUNCTION__);
+        LOGE("JNI env is null when %s", __FUNCTION__);
         return;
     }
 
@@ -315,7 +316,7 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
 
     if (!global_jvm) {
         if (env->GetJavaVM(&global_jvm) != JNI_OK || !global_jvm) {
-            LOG("failed to get current jvm");
+            LOGE("failed to get current jvm");
             return;
         }
 
@@ -327,7 +328,7 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     event_loop_request_exit.store(false, std::memory_order_release);
     handle_ = mpv_create();
     if (!handle_) {
-        LOG("failed to create mpv handle");
+        LOGE("failed to create mpv handle");
         return;
     }
 
@@ -342,19 +343,18 @@ mpv_handle_t::~mpv_handle_t() {
 }
 
 bool mpv_handle_t::initialize() {
-    FP;
 
     if (!handle_) return false;
     if (event_thread_) return true;
     if (mpv_initialize(handle_) < 0) {
-        LOG("failed to initialize mpv");
+        LOGE("failed to initialize mpv");
         return false;
     }
 
     event_loop_request_exit.store(false, std::memory_order_release);
     event_thread_ = std::make_shared<mediampv::compatible_thread>([this] { event_loop(nullptr); });
     if (!event_thread_->create()) {
-        LOG("failed to create event thread");
+        LOGE("failed to create event thread");
         event_thread_.reset();
         return false;
     }
@@ -376,7 +376,6 @@ void mpv_handle_t::on_render_update(void *context) {
 }
 
 bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
-    FP;
     if (!env || !listener) {
         return false;
     }
@@ -387,7 +386,7 @@ bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
     }
 
     if (env->IsInstanceOf(listener, mediampv::jni_mediamp_clazz_EventListener) != JNI_TRUE) {
-        LOG("listener is not an instance of EventListener");
+        LOGE("listener is not an instance of EventListener");
         return false;
     }
 
@@ -402,7 +401,6 @@ bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
 }
 
 bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
-    FP;
     if (!env) {
         return false;
     }
@@ -410,7 +408,7 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
     mediampv::jni_cache_classes(env);
     if (listener && (!mediampv::jni_mediamp_clazz_RenderUpdateListener ||
         env->IsInstanceOf(listener, mediampv::jni_mediamp_clazz_RenderUpdateListener) != JNI_TRUE)) {
-        LOG("listener is not an instance of RenderUpdateListener");
+        LOGE("listener is not an instance of RenderUpdateListener");
         return false;
     }
 
@@ -430,51 +428,66 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
 }
 
 bool mpv_handle_t::command(const char **args) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
     if (!args) {
         return false;
     }
-    return mpv_command(handle_, args) >= 0;
+    const int rc = mpv_command(handle_, args);
+    if (rc < 0) {
+        LOGW("mpv_command(%s) failed: %s", args[0] ? args[0] : "?", mpv_error_string(rc));
+    }
+    return rc >= 0;
 }
 
 bool mpv_handle_t::set_option(const char *key, const char *value) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
     if (!key || !value) {
         return false;
     }
-    return mpv_set_option_string(handle_, key, value) >= 0;
+    const int rc = mpv_set_option_string(handle_, key, value);
+    if (rc < 0) {
+        LOGW("mpv_set_option_string(%s=%s) failed: %s", key, value, mpv_error_string(rc));
+    }
+    return rc >= 0;
 }
 
 bool mpv_handle_t::get_property(const char *name, mpv_format format, void *out_result) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
     return mpv_get_property(handle_, name, format, out_result) >= 0;
 }
 
 bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_value) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
-    return mpv_set_property(handle_, name, format, in_value) >= 0;
+    const int rc = mpv_set_property(handle_, name, format, in_value);
+    if (rc < 0) {
+        LOGW("mpv_set_property(%s) failed: %s", name ? name : "?", mpv_error_string(rc));
+    }
+    return rc >= 0;
 }
 
 bool mpv_handle_t::observe_property(const char *property, mpv_format format, uint64_t reply_data) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
-    return mpv_observe_property(handle_, reply_data, property, format) >= 0;
+    const int rc = mpv_observe_property(handle_, reply_data, property, format);
+    if (rc < 0) {
+        LOGW("mpv_observe_property(%s) failed: %s", property ? property : "?", mpv_error_string(rc));
+    }
+    return rc >= 0;
 }
 
 bool mpv_handle_t::unobserve_property(uint64_t reply_data) {
-    FP;
     LOCK(handle_lock);
     CHECK_HANDLE()
-    return mpv_unobserve_property(handle_, reply_data) >= 0;
+    const int rc = mpv_unobserve_property(handle_, reply_data);
+    if (rc < 0) {
+        LOGW("mpv_unobserve_property(reply_data=%llu) failed: %s",
+             (unsigned long long) reply_data, mpv_error_string(rc));
+    }
+    return rc >= 0;
 }
 
 bool mpv_handle_t::ensure_stream_protocol_registered() {
@@ -485,7 +498,7 @@ bool mpv_handle_t::ensure_stream_protocol_registered() {
 
     const int result = mpv_stream_cb_add_ro(handle_, kSeekableInputProtocol, this, &mpv_handle_t::open_seekable_stream);
     if (result < 0) {
-        LOG("failed to register mpv stream callback protocol: %d\n", result);
+        LOGE("failed to register mpv stream callback protocol: %d", result);
         return false;
     }
 
@@ -494,27 +507,26 @@ bool mpv_handle_t::ensure_stream_protocol_registered() {
 }
 
 bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, const char *uri, int64_t size) {
-    FP;
     if (!handle_) {
-        LOG("mpv handle is not created when %s", __FUNCTION__);
+        LOGW("mpv handle is not created when %s", __FUNCTION__);
         return false;
     }
     if (!seekable_input) {
-        LOG("seekable input is null when %s\n", __FUNCTION__);
+        LOGE("seekable input is null when %s", __FUNCTION__);
         return false;
     }
     if (!jvm_) {
-        LOG("JVM is not initialized when %s\n", __FUNCTION__);
+        LOGE("JVM is not initialized when %s", __FUNCTION__);
         return false;
     }
     if (!uri || uri[0] == '\0') {
-        LOG("seekable input uri is null or empty when %s\n", __FUNCTION__);
+        LOGE("seekable input uri is null or empty when %s", __FUNCTION__);
         return false;
     }
 
     jni_cache_classes(env);
     if (env->IsInstanceOf(seekable_input, mediampv::jni_mediamp_clazz_SeekableInput) != JNI_TRUE) {
-        LOG("seekable input is not an instance of SeekableInput\n");
+        LOGE("seekable input is not an instance of SeekableInput");
         return false;
     }
 
@@ -530,7 +542,7 @@ bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, 
 
     const std::string stream_uri(uri);
     if (seekable_streams_.find(stream_uri) != seekable_streams_.end()) {
-        LOG("seekable input uri is already registered: %s\n", uri);
+        LOGW("seekable input uri is already registered: %s", uri);
         env->DeleteGlobalRef(global_input);
         return false;
     }
@@ -540,7 +552,6 @@ bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, 
 }
 
 bool mpv_handle_t::unregister_seekable_input(const char *uri) {
-    FP;
     CHECK_HANDLE()
     if (!uri) {
         return false;
@@ -575,7 +586,7 @@ int mpv_handle_t::open_seekable_stream(const char *uri, mpv_stream_cb_info *info
         LOCK(stream_registry_lock);
         auto iterator = seekable_streams_.find(uri);
         if (iterator == seekable_streams_.end()) {
-            LOG("no registered seekable stream for uri %s\n", uri);
+            LOGE("no registered seekable stream for uri %s", uri);
             return MPV_ERROR_LOADING_FAILED;
         }
         entry = iterator->second;
@@ -585,7 +596,7 @@ int mpv_handle_t::open_seekable_stream(const char *uri, mpv_stream_cb_info *info
         return MPV_ERROR_LOADING_FAILED;
     }
     if (entry->opened.exchange(true, std::memory_order_acq_rel)) {
-        LOG("seekable stream %s has already been opened\n", uri);
+        LOGW("seekable stream %s has already been opened", uri);
         return MPV_ERROR_LOADING_FAILED;
     }
 
@@ -613,7 +624,6 @@ int mpv_handle_t::open_seekable_stream(void *user_data, char *uri, mpv_stream_cb
 CREATE_LOCK(surface_access_lock);
 
 bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
-    FP;
     LOCK(surface_access_lock);
     CHECK_HANDLE()
 
@@ -627,7 +637,7 @@ bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
     }
     if (surface_attached_ || surface_) clear_android_surface(env);
     if (env->IsInstanceOf(surface, mediampv::jni_mediamp_clazz_android_Surface) != JNI_TRUE) {
-        LOG("surface is not instance of android.view.Surface");
+        LOGE("surface is not instance of android.view.Surface");
         return false;
     }
 
@@ -645,13 +655,12 @@ bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
     surface_ = ref;
     return surface_attached_;
 #else
-    LOG("attach_android_surface is only implemented on Android");
+    LOGE("attach_android_surface is only implemented on Android");
     return false;
 #endif
 }
 
 bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
-    FP;
     LOCK(surface_access_lock);
     CHECK_HANDLE()
 
@@ -664,20 +673,18 @@ bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
 
     return result;
 #else
-    LOG("detach_android_surface is only implemented on Android");
+    LOGE("detach_android_surface is only implemented on Android");
     return false;
 #endif
 }
 
 #ifdef __ANDROID__
 bool mpv_handle_t::attach_window_surface(int64_t wid) {
-    FP;
     CHECK_HANDLE();
     return mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
 }
 
 bool mpv_handle_t::detach_window_surface() {
-    FP;
     CHECK_HANDLE();
     int64_t wid = 0;
     return mpv_set_option(handle_, "wid", MPV_FORMAT_INT64, &wid) >= 0;
@@ -685,7 +692,6 @@ bool mpv_handle_t::detach_window_surface() {
 #endif
 
 bool mpv_handle_t::destroy(JNIEnv *env) {
-    FP;
     event_loop_request_exit.store(true, std::memory_order_release);
     if (handle_) {
         mpv_wakeup(handle_);

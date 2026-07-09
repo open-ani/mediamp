@@ -123,10 +123,14 @@ JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context
     try {
         auto* handle = new mediampv::mpv_handle_t(env, app_context);
         return reinterpret_cast<jlong>(handle);
-    } catch (...) {
+    } catch (const std::exception &e) {
         // A C++ exception (e.g. std::bad_alloc from the constructor) unwinding across the
-        // JNI boundary is undefined behavior and typically aborts the VM. Return 0 so the
-        // Kotlin side (which already checks for 0) fails cleanly instead.
+        // JNI boundary is undefined behavior and typically aborts the VM. Log it and return
+        // 0 so the Kotlin side (which already checks for 0) fails cleanly instead.
+        LOGE("nMake: failed to create native mpv handle: %s", e.what());
+        return 0;
+    } catch (...) {
+        LOGE("nMake: failed to create native mpv handle (unknown exception)");
         return 0;
     }
 }
@@ -156,7 +160,7 @@ JNIEXPORT jboolean JNICALL FN(nCommand)(JNIEnv *env, jclass clazz, jlong ptr, jo
 
     const jsize len = env->GetArrayLength(args);
     if (len >= 128) {
-        LOG("arguments are too long (>128)");
+        LOGE("nCommand: too many arguments (%d >= 128)", len);
         return JNI_FALSE;
     }
 

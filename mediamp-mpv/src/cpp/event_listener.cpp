@@ -45,9 +45,12 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
         return false;
     }
 
-    LOG("JNI exception in %s\n", context);
+    // Describe + clear first, then log: logging goes through the JNI dispatcher, which
+    // cannot run while an exception is pending. This surfaces the failure to the Kotlin
+    // sink instead of silently swallowing it.
     env->ExceptionDescribe();
     env->ExceptionClear();
+    LOGE("JNI exception in %s", context);
     return true;
 }
 
@@ -56,8 +59,7 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
 static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject event_listener) {
     // jni_cache_classes is all-or-nothing, so a non-null class implies all the
     // onPropertyChange method IDs are non-null; checking it here keeps the CallVoidMethod
-    // calls below from ever passing a null jmethodID (which would abort), matching the
-    // guards in emit_log_message / the onEndFile path.
+    // calls below from ever passing a null jmethodID (which would abort).
     if (!env || !prop || !prop->name || !event_listener || !jni_mediamp_clazz_EventListener) {
         return;
     }
@@ -67,14 +69,12 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
 
     switch (prop->format) {
         case MPV_FORMAT_NONE:
-            LOG("[event_loop] property change: %s\n", prop->name);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_NONE,
                                 prop_name);
             break;
         case MPV_FORMAT_FLAG:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %i\n", prop->name, *(int *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_FLAG,
                                 prop_name,
@@ -82,7 +82,6 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_INT64:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %lld\n", prop->name, *(int64_t *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_INT64,
                                 prop_name,
@@ -90,7 +89,6 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_DOUBLE:
             if (!prop->data) break;
-            LOG("[event_loop] property change: %s, %f\n", prop->name, *(double *) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_DOUBLE,
                                 prop_name,
@@ -98,7 +96,6 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
             break;
         case MPV_FORMAT_STRING:
             if (!prop->data || !*(const char **) prop->data) break;
-            LOG("[event_loop] property change: %s, %s\n", prop->name, *(const char **) prop->data);
             value = env->NewStringUTF(*(const char **) prop->data);
             env->CallVoidMethod(event_listener,
                                 jni_mediamp_method_EventListener_onPropertyChange_STRING,
@@ -106,7 +103,7 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
                                 value);
             break;
         default:
-            LOG("emit_property_change: Unknown property update format received in callback: %d\n", prop->format);
+            LOGD("emit_property_change: unhandled property format %d for %s", prop->format, prop->name);
             break;
     }
     clear_jni_exception(env, "EventListener.onPropertyChange");
@@ -115,54 +112,35 @@ static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject 
     if (value) env->DeleteLocalRef(value);
 }
 
-static void emit_log_message(JNIEnv *env, mpv_event_log_message *message) {
-    if (!env || !message || !jni_mediamp_clazz_MPVLogKt || !jni_mediamp_method_MPVLogKt_onNativeLog) {
+// Forwards an mpv log message (MPV_EVENT_LOG_MESSAGE) to the Kotlin sink, preserving mpv's
+// own prefix and log level (already on the shared mpv_log_level scale).
+static void emit_log_message(mpv_event_log_message *message) {
+    if (!message) {
         return;
     }
-
-    const char *prefix_chars = message->prefix ? message->prefix : "";
-    const char *text_chars = message->text ? message->text : "";
-
-    jstring prefix = env->NewStringUTF(prefix_chars);
-    jstring text = env->NewStringUTF(text_chars);
-    if (!prefix || !text) {
-        clear_jni_exception(env, "NewStringUTF(MPV log)");
-        if (prefix) env->DeleteLocalRef(prefix);
-        if (text) env->DeleteLocalRef(text);
-        return;
-    }
-
-    env->CallStaticVoidMethod(
-        jni_mediamp_clazz_MPVLogKt,
-        jni_mediamp_method_MPVLogKt_onNativeLog,
-        static_cast<jint>(message->log_level),
-        prefix,
-        text
-    );
-    clear_jni_exception(env, "MPVLogKt.onNativeLog");
-
-    env->DeleteLocalRef(prefix);
-    env->DeleteLocalRef(text);
+    log_forward(message->log_level,
+                message->prefix ? message->prefix : "",
+                message->text ? message->text : "");
 }
 
 void *(mpv_handle_t::event_loop)(void *arg) {
     if (!jvm_ || !handle_) {
-        LOG("[event_loop] jvm or mpv handle_ is not initialized, event loop will not start");
+        LOGE("[event_loop] jvm or mpv handle is not initialized; event loop will not start");
         return nullptr;
     }
 
     attached_jni_env attached_env(jvm_);
     JNIEnv *env = attached_env.env;
     if (!env) {
-        LOG("[event_loop] failed to attach current thread");
+        LOGE("[event_loop] failed to attach current thread; event loop will not start");
         return nullptr;
     }
     jni_cache_classes(env);
 
-    LOG("[event_loop] event loop is started.");
+    LOGV("[event_loop] started");
     while (!event_loop_request_exit.load(std::memory_order_acquire)) {
         if (!handle_) {
-            LOG("[event_loop] mpv handle_ is destroyed, event loop will stop");
+            LOGV("[event_loop] mpv handle destroyed; event loop will stop");
             break;
         }
 
@@ -182,14 +160,15 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 break;
             case MPV_EVENT_LOG_MESSAGE:
                 log_message = (mpv_event_log_message *) event->data;
-                emit_log_message(env, log_message);
+                emit_log_message(log_message);
                 break;
             case MPV_EVENT_IDLE:
-                LOG("[event_loop] idle");
                 break;
             case MPV_EVENT_END_FILE: {
                 auto *end_file = (mpv_event_end_file *) event->data;
-                LOG("[event_loop] end-file: reason=%d error=%s\n",
+                // reason != EOF/STOP with a non-zero error is a real playback failure.
+                const int level = end_file->error != 0 ? LOG_LEVEL_WARN : LOG_LEVEL_INFO;
+                LOG(level, "[event_loop] end-file: reason=%d error=%s",
                     end_file->reason, mpv_error_string(end_file->error));
                 if (event_listener_ && jni_mediamp_method_EventListener_onEndFile) {
                     env->CallVoidMethod(
@@ -202,15 +181,15 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 break;
             }
             case MPV_EVENT_SHUTDOWN:
-                LOG("[event_loop] shutdown");
+                LOGV("[event_loop] shutdown");
                 return nullptr;
             default:
-                LOG("[event_loop] unhandled event: %d", event->event_id);
+                LOGT("[event_loop] unhandled event: %d", event->event_id);
                 break;
         }
 
     }
-    LOG("[event_loop] event loop is stopped.");
+    LOGV("[event_loop] stopped");
     return nullptr;
 }
 

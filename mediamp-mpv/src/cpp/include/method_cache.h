@@ -10,7 +10,12 @@ namespace mediampv {
 #ifndef UTIL_EXTERN
 #define UTIL_EXTERN extern
 #endif
-    
+
+// The process-wide JavaVM, captured in mpv_handle_t::create(). Null until the first handle
+// is created; the log dispatcher reads it and falls back to stderr while it is null. Plain
+// `extern` (not UTIL_EXTERN): the single definition lives in mpv_handle_t.cpp.
+extern JavaVM *global_jvm;
+
 UTIL_EXTERN jclass jni_mediamp_clazz_EventListener;
 UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_NONE;
 UTIL_EXTERN jmethodID jni_mediamp_method_EventListener_onPropertyChange_FLAG;

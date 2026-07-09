@@ -34,6 +34,7 @@ import org.jetbrains.skia.SamplingMode
 import org.jetbrains.skiko.OS
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
 import org.openani.mediamp.mpv.utils.SkiaMetalInterop
@@ -71,12 +72,12 @@ private fun MpvMediampPlayerSurfaceRing(
     val window = LocalWindow.current
     val interop: SkiaRenderDeviceInterop? = remember(window) {
         if (window == null) {
-            log("LocalWindow.current is null; cannot locate SkiaLayer")
+            MPVLog.warn("LocalWindow.current is null; cannot locate SkiaLayer, video stays black")
             return@remember null
         }
         val layer = window.findSkiaLayer()
         if (layer == null) {
-            log("no SkiaLayer found in window $window")
+            MPVLog.warn("no SkiaLayer found in window $window; video stays black")
             return@remember null
         }
         runCatching {
@@ -86,7 +87,7 @@ private fun MpvMediampPlayerSurfaceRing(
                 else -> null
             }
         }
-            .onFailure { log("Skia device interop failed: $it") }
+            .onFailure { MPVLog.error("Skia device interop init failed; video stays black", it) }
             .getOrNull()
     }
     val frameTick = remember { mutableLongStateOf(0L) }
@@ -95,8 +96,8 @@ private fun MpvMediampPlayerSurfaceRing(
     // loadfile); this composable only owns the surface config and the frame listener.
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
-    fun logOnce(state: String) {
-        if (loggedStates.add(state)) log(state)
+    fun logOnce(state: String, level: Int = MPVLog.DEBUG) {
+        if (loggedStates.add(state)) MPVLog.log(level, state)
     }
 
     DisposableEffect(player) {
@@ -144,7 +145,7 @@ private fun MpvMediampPlayerSurfaceRing(
             return@Canvas
         }
         if (interop == null) {
-            logOnce("skia interop unavailable; video stays black (frames are drained)")
+            logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
             return@Canvas
         }
         val directContext = interop.directContext
@@ -161,7 +162,7 @@ private fun MpvMediampPlayerSurfaceRing(
             player.refreshDeviceIfChanged(it)
         }
 
-        logOnce("rendering ${width}x${height} via ${if (hostOs == OS.MacOS) "Metal" else "D3D12"} surface")
+        logOnce("rendering ${width}x${height} via ${if (hostOs == OS.MacOS) "Metal" else "D3D12"} surface", MPVLog.INFO)
         // Draw through Compose so the op survives RenderNode display-list recording
         // (raw nativeCanvas draws are dropped there). The image is a Skia-owned texture:
         // snapshots of the BRT-wrapped surface itself do not render. The frame normally
@@ -196,8 +197,4 @@ private fun MpvMediampPlayerSurfaceRing(
             }
         }
     }
-}
-
-private fun log(message: String) {
-    println("[MpvMediampPlayerSurface] $message")
 }
