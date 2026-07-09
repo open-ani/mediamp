@@ -24,13 +24,18 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
 
 jclass find_global_class(JNIEnv *env, const char *name) {
     jclass local_class = env->FindClass(name);
-    if (!local_class || clear_jni_exception(env, name)) {
+    // FindClass raises a pending exception (NoClassDefFoundError) on failure. Clear it
+    // UNCONDITIONALLY before returning: the previous `!local_class || clear(...)`
+    // short-circuited past the clear when local_class was null, leaving the exception
+    // pending, and the next JNI call (the following FindClass) with a pending exception
+    // is undefined behavior that can abort the VM.
+    if (clear_jni_exception(env, name) || !local_class) {
         return nullptr;
     }
 
     auto global_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_class));
     env->DeleteLocalRef(local_class);
-    if (!global_class || clear_jni_exception(env, name)) {
+    if (clear_jni_exception(env, name) || !global_class) {
         return nullptr;
     }
 

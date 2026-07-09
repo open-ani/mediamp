@@ -431,6 +431,7 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
 
 bool mpv_handle_t::command(const char **args) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     if (!args) {
         return false;
@@ -440,6 +441,7 @@ bool mpv_handle_t::command(const char **args) {
 
 bool mpv_handle_t::set_option(const char *key, const char *value) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     if (!key || !value) {
         return false;
@@ -449,24 +451,28 @@ bool mpv_handle_t::set_option(const char *key, const char *value) {
 
 bool mpv_handle_t::get_property(const char *name, mpv_format format, void *out_result) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     return mpv_get_property(handle_, name, format, out_result) >= 0;
 }
 
 bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_value) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     return mpv_set_property(handle_, name, format, in_value) >= 0;
 }
 
 bool mpv_handle_t::observe_property(const char *property, mpv_format format, uint64_t reply_data) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     return mpv_observe_property(handle_, reply_data, property, format) >= 0;
 }
 
 bool mpv_handle_t::unobserve_property(uint64_t reply_data) {
     FP;
+    LOCK(handle_lock);
     CHECK_HANDLE()
     return mpv_unobserve_property(handle_, reply_data) >= 0;
 }
@@ -692,19 +698,27 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
 
     attached_jni_env attached_env(env ? nullptr : jvm_);
     JNIEnv *cleanup_env = env ? env : attached_env.env;
+#if defined(_WIN32) || defined(__APPLE__)
+    // Stop the render thread FIRST: it calls notify_render_update() (which touches
+    // render_update_listener_) on every frame, so no callback may still be running
+    // when we delete that global ref below.
+    cleanup_render_resources();
+#endif
     clear_event_listener(cleanup_env);
     clear_render_update_listener(cleanup_env);
 #ifdef __ANDROID__
     clear_android_surface(cleanup_env);
 #endif
-#if defined(_WIN32) || defined(__APPLE__)
-    cleanup_render_resources();
-#endif
     clear_seekable_streams();
 
-    if (handle_) {
-        mpv_terminate_destroy(handle_);
-        handle_ = nullptr;
+    // Mutually exclusive with the hot methods' mpv_* calls (they hold handle_lock),
+    // so a call either completes before the handle is torn down or sees handle_==null.
+    {
+        LOCK(handle_lock);
+        if (handle_) {
+            mpv_terminate_destroy(handle_);
+            handle_ = nullptr;
+        }
     }
     stream_protocol_registered_ = false;
 
@@ -717,6 +731,10 @@ void mpv_handle_t::clear_event_listener(JNIEnv *env) {
 }
 
 void mpv_handle_t::clear_render_update_listener(JNIEnv *env) {
+    // Serialize with notify_render_update(), which reads render_update_listener_ under
+    // this same lock before CallVoidMethod; without it the render thread could invoke a
+    // freed global ref during teardown.
+    LOCK(render_update_listener_lock);
     attached_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, render_update_listener_);
 }

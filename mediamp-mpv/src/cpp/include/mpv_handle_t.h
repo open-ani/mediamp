@@ -132,6 +132,14 @@ public:
 private:
     JavaVM *jvm_ = nullptr;
     mpv_handle *handle_ = nullptr;
+    // Serializes the simple hot methods (command/set_option/get/set/observe/unobserve
+    // property) that read handle_ and call mpv_* against destroy()'s
+    // mpv_terminate_destroy + handle_=nullptr, closing the TOCTOU/use-after-free window
+    // when teardown races an in-flight native call. Recursive (CREATE_LOCK), but never
+    // nested with another lock in those methods to avoid lock-order inversions (the
+    // seekable-stream methods intentionally do NOT take it — they are ordered under
+    // stream_registry_lock instead).
+    CREATE_LOCK(handle_lock);
 
     jobject event_listener_ = nullptr;
     jobject render_update_listener_ = nullptr;

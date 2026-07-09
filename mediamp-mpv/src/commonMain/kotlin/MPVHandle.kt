@@ -9,18 +9,20 @@
 package org.openani.mediamp.mpv
 
 import org.openani.mediamp.io.SeekableInput
-import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
-@OptIn(ExperimentalStdlibApi::class)
+@OptIn(ExperimentalStdlibApi::class, ExperimentalAtomicApi::class)
 class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
     private var renderUpdateListener: RenderUpdateListener? = null
-    @Volatile
-    private var nativePtr: Long = ptr
+    // Atomic so close() can claim the pointer exactly once: concurrent close() calls
+    // must not both reach nFinalize (that would double-delete the native instance).
+    private val nativePtr = AtomicLong(ptr)
 
     internal val ptr: Long
-        get() = nativePtr.takeIf { it != 0L } ?: error("MPVHandle has already been closed")
+        get() = nativePtr.load().takeIf { it != 0L } ?: error("MPVHandle has already been closed")
 
     constructor(context: Any) : this(createHandle(context)) {
         if (ptr == 0L) throw IllegalStateException("Failed to create native mpv handle")
@@ -105,7 +107,7 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
      * You will not expect to call any method except [close] after calling this function.
      */
     fun destroy(): Boolean {
-        val currentPtr = nativePtr
+        val currentPtr = nativePtr.load()
         if (currentPtr == 0L) {
             return false
         }
@@ -113,11 +115,12 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     }
 
     override fun close() {
-        val currentPtr = nativePtr
+        // Claim the pointer atomically; only the caller that observes the non-zero value
+        // proceeds to nFinalize, so the native instance is deleted at most once.
+        val currentPtr = nativePtr.exchange(0L)
         if (currentPtr == 0L) {
             return
         }
-        nativePtr = 0L
         nFinalize(currentPtr)
     }
 

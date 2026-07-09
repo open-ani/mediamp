@@ -72,7 +72,26 @@ void safe_release(T *&object) {
 // the result must survive QueryInterface(ID3D12Device) before it is used.
 ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
     if (skiko_device_ptr == 0) return nullptr;
+
+    // Defense-in-depth around trusting a reflected pointer plus an inferred struct layout.
+    // We build with MinGW g++, which has no MSVC __try/__except, so we validate reads with
+    // IsBadReadPtr instead of catching an access violation. This cannot detect a
+    // mapped-but-wrong region, so the two-slot agreement and the final QueryInterface stay
+    // as the real validation — IsBadReadPtr only turns the most likely upgrade failure (a
+    // shrunk/moved struct whose slots land on unmapped memory) into a graceful null.
+
+    // A real DirectXDevice* is at least pointer-aligned; a misaligned value is not one.
+    if (skiko_device_ptr & static_cast<int64_t>(sizeof(void *) - 1)) {
+        LOG("Skiko device pointer %lld is misaligned; not a DirectXDevice\n",
+            static_cast<long long>(skiko_device_ptr));
+        return nullptr;
+    }
     auto *slots = reinterpret_cast<void *const *>(static_cast<uintptr_t>(skiko_device_ptr));
+    // Need slots[0..8] readable (9 pointers).
+    if (IsBadReadPtr(slots, 9 * sizeof(void *))) {
+        LOG("Skiko device pointer span is not readable; not a DirectXDevice\n");
+        return nullptr;
+    }
 
     void *device_a = slots[2], *device_b = slots[6];
     void *queue_a = slots[3], *queue_b = slots[8];
@@ -80,6 +99,14 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
         LOG("Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
             "video will not be wrapped for Skia\n",
             device_a, device_b, queue_a, queue_b);
+        return nullptr;
+    }
+
+    // Before the virtual QueryInterface call, verify device_a has a readable vtable slot,
+    // so a non-COM but coincidentally-agreeing pointer does not jump through garbage.
+    if (IsBadReadPtr(device_a, sizeof(void *)) ||
+        IsBadReadPtr(*reinterpret_cast<void *const *>(device_a), sizeof(void *))) {
+        LOG("Skiko device candidate has no readable vtable; not a COM object\n");
         return nullptr;
     }
 
@@ -518,6 +545,11 @@ bool mpv_handle_t::wait_for_gpu() {
         return true;
     }
     d3d_context_->End(flush_query_);
+    // Bound the spin: on a GPU hang / TDR the query never retires, and an unbounded loop
+    // would peg a core forever and wedge the render thread so teardown can never join it.
+    // 2s is far beyond any real frame; past it we treat the device as lost and bail.
+    const ULONGLONG start_tick = GetTickCount64();
+    const ULONGLONG timeout_ms = 2000;
     for (int spins = 0;; ++spins) {
         // GetData with flags 0 implicitly flushes; returns S_OK once the GPU has
         // retired everything submitted before End().
@@ -525,6 +557,12 @@ bool mpv_handle_t::wait_for_gpu() {
         if (hr == S_OK) return true;
         if (FAILED(hr)) {
             LOG("flush query GetData failed: 0x%lx\n", hr);
+            return false;
+        }
+        if (GetTickCount64() - start_tick >= timeout_ms) {
+            HRESULT removed = d3d_device_ ? d3d_device_->GetDeviceRemovedReason() : S_OK;
+            LOG("wait_for_gpu timed out after %llums (device removed reason: 0x%lx)\n",
+                timeout_ms, removed);
             return false;
         }
         if (spins < 64) {

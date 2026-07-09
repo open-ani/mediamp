@@ -120,8 +120,15 @@ JNIEXPORT jboolean JNICALL FN(nGlobalInit)(JNIEnv *env, jclass clazz) {
 }
 
 JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context) {
-    auto* handle = new mediampv::mpv_handle_t(env, app_context);
-    return reinterpret_cast<jlong>(handle);
+    try {
+        auto* handle = new mediampv::mpv_handle_t(env, app_context);
+        return reinterpret_cast<jlong>(handle);
+    } catch (...) {
+        // A C++ exception (e.g. std::bad_alloc from the constructor) unwinding across the
+        // JNI boundary is undefined behavior and typically aborts the VM. Return 0 so the
+        // Kotlin side (which already checks for 0) fails cleanly instead.
+        return 0;
+    }
 }
 
 JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr) {
@@ -446,13 +453,16 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv * env, jclass cla
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
     auto *instance = get_instance(ptr);
-    if (!instance || !path) {
+    if (!instance) {
         return JNI_FALSE;
     }
-    const char *path_chars = env->GetStringUTFChars(path, nullptr);
-    bool ok = instance->save_surface_png(path_chars);
-    env->ReleaseStringUTFChars(path, path_chars);
-    return ok;
+    // GetStringUTFChars can return null (OOM); scoped_utf_chars.valid() guards it and
+    // pairs the release, matching the Windows nSaveSurfacePngD3D11 path.
+    scoped_utf_chars path_chars(env, path);
+    if (!path_chars.valid()) {
+        return JNI_FALSE;
+    }
+    return instance->save_surface_png(path_chars.get());
 }
 
 #endif

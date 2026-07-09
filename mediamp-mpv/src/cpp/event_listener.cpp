@@ -54,7 +54,11 @@ bool clear_jni_exception(JNIEnv *env, const char *context) {
 } // namespace
 
 static void emit_property_change(JNIEnv *env, mpv_event_property *prop, jobject event_listener) {
-    if (!env || !prop || !prop->name || !event_listener) {
+    // jni_cache_classes is all-or-nothing, so a non-null class implies all the
+    // onPropertyChange method IDs are non-null; checking it here keeps the CallVoidMethod
+    // calls below from ever passing a null jmethodID (which would abort), matching the
+    // guards in emit_log_message / the onEndFile path.
+    if (!env || !prop || !prop->name || !event_listener || !jni_mediamp_clazz_EventListener) {
         return;
     }
 
