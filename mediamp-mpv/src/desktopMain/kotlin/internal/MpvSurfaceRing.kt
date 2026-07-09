@@ -199,7 +199,14 @@ internal class MpvSurfaceRing(
         // on the first frame when sampled into another surface.
         source.notifyContentWillChange(ContentChangeMode.DISCARD)
         // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
-        // texture), so blit into a Skia-owned surface and snapshot that instead.
+        // texture), so blit into a Skia-owned GPU surface and snapshot that. The snapshot
+        // is a GPU image on the current DirectContext; the caller draws it straight onto
+        // the Compose canvas with nativeCanvas.drawImage (see MpvMediampPlayerSurface),
+        // a zero-copy GPU->GPU draw. Do NOT convert it with toComposeImageBitmap(): that
+        // reads the GPU image back to a CPU bitmap every frame, which both costs a full
+        // GPU->CPU transfer (a ~20ms stall at 4K that pins the whole Compose scene, and
+        // the danmaku overlay with it, to ~40fps) and crashes on window resize (the
+        // readback runs inside reshape()'s redraw against a stale swapchain context).
         source.draw(blit.canvas, 0, 0, null)
         cachedFrame?.close()
         cachedFrame = blit.makeImageSnapshot()
@@ -250,6 +257,8 @@ internal class MpvSurfaceRing(
             wrappedTargets[i] = target
             wrappedSurfaces[i] = surface
         }
+        // A GPU (render-target) blit surface: the blit is GPU->GPU and its snapshot is
+        // drawn zero-copy onto the Compose canvas, so no frame ever crosses the CPU.
         blitSurface = runCatching {
             Surface.makeRenderTarget(directContext, false, ImageInfo.makeN32Premul(width, height))
         }.onFailure { logOnce("blit surface creation failed: $it") }.getOrNull()

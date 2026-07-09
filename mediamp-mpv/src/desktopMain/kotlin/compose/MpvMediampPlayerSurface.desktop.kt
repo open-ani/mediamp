@@ -21,15 +21,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.LocalWindow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
+import org.jetbrains.skia.Rect
+import org.jetbrains.skia.SamplingMode
 import org.jetbrains.skiko.OS
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
@@ -166,23 +167,33 @@ private fun MpvMediampPlayerSurfaceRing(
         // snapshots of the BRT-wrapped surface itself do not render. The frame normally
         // matches the composable size; during a resize settle it is the old size, so fit
         // it preserving aspect (letterbox) instead of stretching.
+        // Draw the GPU-backed frame image straight onto the Compose canvas via the Skia
+        // nativeCanvas — a zero-copy GPU->GPU draw on the current DirectContext. This
+        // deliberately does NOT go through toComposeImageBitmap()/drawImage(ImageBitmap):
+        // that reads the GPU image back to a CPU bitmap every frame, which stalls the
+        // whole Compose scene (~20ms at 4K, dragging any overlay such as danmaku down to
+        // ~40fps) and crashes on resize. The frame normally matches the composable size;
+        // during a resize settle it is the old size, so fit it preserving aspect
+        // (letterbox) instead of stretching.
         player.currentFrameImage(directContext)?.let { frame ->
             val scale = minOf(
                 size.width / frame.width.toFloat(),
                 size.height / frame.height.toFloat(),
             )
-            val dstWidth = (frame.width * scale).toInt()
-            val dstHeight = (frame.height * scale).toInt()
-            drawImage(
-                frame.toComposeImageBitmap(),
-                srcSize = IntSize(frame.width, frame.height),
-                dstOffset = IntOffset(
-                    (width - dstWidth) / 2,
-                    (height - dstHeight) / 2,
-                ),
-                dstSize = IntSize(dstWidth, dstHeight),
-                filterQuality = FilterQuality.High,
-            )
+            val dstWidth = frame.width * scale
+            val dstHeight = frame.height * scale
+            val dx = (size.width - dstWidth) / 2f
+            val dy = (size.height - dstHeight) / 2f
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawImageRect(
+                    image = frame,
+                    src = Rect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
+                    dst = Rect.makeXYWH(dx, dy, dstWidth, dstHeight),
+                    samplingMode = SamplingMode.LINEAR,
+                    paint = null,
+                    strict = true,
+                )
+            }
         }
     }
 }
