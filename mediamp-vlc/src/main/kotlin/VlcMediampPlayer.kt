@@ -38,6 +38,7 @@ import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
@@ -151,6 +152,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private val audioLevelController = VlcAudioLevelController(player)
     private val mediaMetadata = VlcMediaMetadata()
     private val videoAspectRatio = VlcVideoAspectRatio()
+    private val framePreview = VlcFramePreview { openResource.value?.mediaData }
 
     @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
@@ -160,9 +162,17 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         add(PlaybackSpeed.Key, playbackSpeed)
         add(MediaMetadata, mediaMetadata)
         add(VideoAspectRatio.Key, videoAspectRatio)
+        add(FramePreview.Key, framePreview)
     }
 
     init {
+        backgroundScope.launch {
+            // Tear down the preview decoder when the media changes or playback stops,
+            // so it never outlives the media data it reads from.
+            mediaData.collect {
+                framePreview.onMediaDataChanged(it)
+            }
+        }
         // NOTE: must not call native player in a event
         player.events().addMediaEventListener(
             object : MediaEventAdapter() {
@@ -550,6 +560,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         lastMedia?.onClose() // 在调用 VLC 之前停止阻塞线程
         lastMedia = null
         backgroundScope.launch(NonCancellable) {
+            framePreview.closeSuspending()
             player.release()
             backgroundScope.cancel()
         }
@@ -596,7 +607,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     }
 
     public companion object {
-        private val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
+        internal val createPlayerLock = ReentrantLock() // 如果同时加载可能会 SIGSEGV
 
         public fun prepareLibraries() {
             createPlayerLock.withLock {

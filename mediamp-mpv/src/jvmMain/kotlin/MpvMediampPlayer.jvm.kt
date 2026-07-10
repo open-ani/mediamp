@@ -17,6 +17,7 @@ import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.mpv.internal.MpvPlaybackStateMachine
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
@@ -81,6 +82,7 @@ abstract class JvmMpvMediampPlayer(
     private val screenshots = MpvScreenshots { path -> takeScreenshotImpl(path) }
     private val videoAspectRatio = MpvVideoAspectRatio(handle)
     private val mediaMetadata = MpvMediaMetadata(handle)
+    private val framePreview: FramePreview? = createMpvFramePreview(this, context, parentCoroutineContext)
 
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(PlaybackSpeed.Key, playbackSpeed)
@@ -89,6 +91,7 @@ abstract class JvmMpvMediampPlayer(
         add(Screenshots.Key, screenshots)
         add(VideoAspectRatio.Key, videoAspectRatio)
         add(MediaMetadata, mediaMetadata)
+        framePreview?.let { add(FramePreview.Key, it) }
     }
 
     private val eventListener = object : EventListener {
@@ -397,13 +400,45 @@ abstract class JvmMpvMediampPlayer(
     }
 
     override fun closeImpl() {
+        (framePreview as? AutoCloseable)?.close()
         clearPlaybackSession(resetPosition = true)
         handle.command("stop")
         handle.destroy()
         handle.close()
         playbackState.value = PlaybackState.DESTROYED
     }
+
+    /**
+     * Returns the media currently set via [setMediaData], or `null`.
+     * Used by the frame-preview decoder to mirror the main player's media.
+     */
+    internal fun currentMediaDataOrNull(): MediaData? = openResource.value?.mediaData
+
+    /**
+     * Loads the media previously set via [setMediaData] into mpv with playback paused,
+     * WITHOUT transitioning the public [playbackState]. mpv decodes and displays the first
+     * frame, then stays paused. Used by the frame-preview decoder instance, which drives
+     * the handle directly and never "plays".
+     */
+    internal fun commandLoadFilePaused(): Boolean {
+        val media = openResource.value ?: return false
+        handle.setPropertyBoolean("pause", true)
+        return handle.command("loadfile", media.loadTarget, "replace")
+    }
 }
+
+/**
+ * Creates the platform [FramePreview] implementation for this player, or `null` when the
+ * platform has no frame-preview support (e.g. Android, which uses ExoPlayer in practice).
+ *
+ * Called during the player's construction: implementations must only capture references and
+ * must not call back into [player] until the first frame request.
+ */
+internal expect fun createMpvFramePreview(
+    player: JvmMpvMediampPlayer,
+    context: Any,
+    parentCoroutineContext: CoroutineContext,
+): FramePreview?
 
 private fun formatSeconds(seconds: Double): String {
     // mpv parses decimal seconds; String.format would be locale-sensitive.
