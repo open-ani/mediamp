@@ -1,43 +1,50 @@
-//
-// Created by StageGuard on 12/28/2024.
-//
+#pragma once
 
 #ifndef MEDIAMP_LOG_H
 #define MEDIAMP_LOG_H
 
-#define ENABLE_LOGGING
+namespace mediampv {
 
-#ifdef ENABLE_LOGGING
-#define LOG_TAG "mediampv"
-#if (defined(__APPLE__) && defined(__MACH__)) || (defined(__linux__) && !defined(__ANDROID__)) || (defined(_WIN32) || defined(_WIN64))
-#include <cstdio>
-#define LOG(...) printf(__VA_ARGS__)
-#else
-#include <android/log.h>
-#define LOG(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
-#endif // defined(__APPLE__) && defined(__MACH__) || (defined(__linux__) && !defined(__ANDROID__))
-#else
-#define LOG(...) ((void *) 0)
-#endif // ENABLE_LOGGING
-
-#include <iostream>
-struct function_printer_t {
-#ifdef ENABLE_LOGGING
-    std::string name;
-    explicit function_printer_t(const std::string &name) : name(name) {
-        LOG("Function %s started", name.c_str());
-    }
-#else
-    explicit function_printer_t(const std::string &_) {}
-#endif
-
-    ~function_printer_t() {
-#ifdef ENABLE_LOGGING
-        LOG("Function %s ended", name.c_str());
-#endif
-    }
+// Log levels mirror mpv's mpv_log_level scale (client.h): lower value == more severe.
+// mediamp's own native logs, mpv's MPV_EVENT_LOG_MESSAGE lines, and the Kotlin logs all
+// share this one scale so a single MPVLogHandler on the Kotlin side can filter uniformly.
+enum log_level {
+    LOG_LEVEL_FATAL = 10, // critical, aborting errors
+    LOG_LEVEL_ERROR = 20, // simple errors
+    LOG_LEVEL_WARN = 30,  // possible problems
+    LOG_LEVEL_INFO = 40,  // informational messages
+    LOG_LEVEL_V = 50,     // noisy informational messages
+    LOG_LEVEL_DEBUG = 60, // very noisy technical detail
+    LOG_LEVEL_TRACE = 70, // extremely noisy
 };
 
-#define FP function_printer_t _fp(__FUNCTION__)
+// Formats a mediamp native log line (prefix "mediampv") and dispatches it to the Kotlin
+// MPVLog sink via JNI (MPVLogKt.onNativeLog). Safe to call from any thread and at any
+// time: it attaches the calling thread if needed and falls back to stderr when the JVM /
+// JNI cache is not ready, when a JNI exception is already pending, or when the dispatch
+// itself fails. It never throws and never leaves a JNI exception pending.
+void log_print(int level, const char *format, ...)
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 2, 3)))
+#endif
+        ;
 
-#endif //MEDIAMP_LOG_H
+// Forwards an already-formatted line that carries its own prefix (used for mpv's own log
+// messages from MPV_EVENT_LOG_MESSAGE). Same dispatch and fallback behaviour as log_print.
+void log_forward(int level, const char *prefix, const char *text);
+
+} // namespace mediampv
+
+// Canonical form: LOG(level, fmt, ...) with an explicit mediampv::LOG_LEVEL_* level.
+#define LOG(level, ...) ::mediampv::log_print((level), __VA_ARGS__)
+
+// Level-tagged conveniences (preferred at call sites; each encodes the level in its name).
+#define LOGF(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_FATAL, __VA_ARGS__)
+#define LOGE(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_ERROR, __VA_ARGS__)
+#define LOGW(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_WARN, __VA_ARGS__)
+#define LOGI(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_INFO, __VA_ARGS__)
+#define LOGV(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_V, __VA_ARGS__)
+#define LOGD(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_DEBUG, __VA_ARGS__)
+#define LOGT(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_TRACE, __VA_ARGS__)
+
+#endif // MEDIAMP_LOG_H

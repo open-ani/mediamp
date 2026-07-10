@@ -17,12 +17,10 @@ internal fun pathForShell(file: File, windowsMsys: Boolean): String =
 internal fun shellQuote(value: String): String =
     "'${value.replace("'", "'\"'\"'")}'"
 
+/** `-I` flags for the host JDK's JNI headers (include/ + the platform subdirectory). */
 internal fun jniIncludeFlags(
-    targetName: String,
     windowsMsys: Boolean,
 ): List<String> {
-    @Suppress("UNUSED_VARIABLE")
-    val ignoredTargetName = targetName
     val javaHome = System.getenv("JAVA_HOME")
         ?.takeIf { it.isNotBlank() }
         ?.let(::File)

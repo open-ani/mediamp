@@ -27,7 +27,7 @@ include(":mediamp-api")
 include(":mediamp-vlc")
 include(":mediamp-vlc-loader")
 include(":mediamp-exoplayer")
-// include(":mediamp-mpv")
+include(":mediamp-mpv")
 include(":mediamp-avkit")
 
 include(":mediamp-ffmpeg")
@@ -38,6 +38,7 @@ include(":mediamp-test")
 include(":mediamp-web-preview")
 
 //include(":mediamp-preview")
+include(":mediamp-mpv-demo") // macOS-only prototype: mpv hwdec + Compose overlay
 include(":mediamp-source-ktxio")
 
 include(":ci-helper")

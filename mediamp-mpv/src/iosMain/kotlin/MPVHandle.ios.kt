@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -7,6 +7,8 @@
  */
 
 package org.openani.mediamp.mpv
+
+import org.openani.mediamp.InternalMediampApi
 
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
     TODO("Not yet implemented")

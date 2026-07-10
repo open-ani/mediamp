@@ -30,6 +30,9 @@ kotlin {
             implementation(libs.jna)
             implementation(libs.jna.platform)
         }
+        getByName("desktopTest").dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 

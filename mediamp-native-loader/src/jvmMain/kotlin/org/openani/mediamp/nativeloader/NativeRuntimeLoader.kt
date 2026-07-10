@@ -26,8 +26,7 @@ public class NativeClasspathRuntime(
  * Shared runtime loader for JNI/native wrapper libraries.
  */
 public object NativeRuntimeLoader {
-    private val loadLock: Any = Any()
-    private val loadedRuntimeDirs: MutableMap<String, String> = mutableMapOf()
+    private val default: NativeRuntimeLoading = NativeRuntimeLoading(::loadRuntimeWrapperLibrary)
 
     /**
      * Configure and immediately load a native runtime.
@@ -38,6 +37,26 @@ public object NativeRuntimeLoader {
      * @param validate verify that the main wrapper library exists in [path] after optional extraction.
      */
     public fun setRuntimeDirectory(
+        runtime: NativeClasspathRuntime,
+        path: File,
+        doExtract: Boolean,
+        validate: Boolean,
+    ) {
+        default.setRuntimeDirectory(runtime, path, doExtract, validate)
+    }
+}
+
+/**
+ * Instantiable core of [NativeRuntimeLoader]. The wrapper-library loading step is injected
+ * so unit tests can exercise every branch without `System.load`ing real native binaries.
+ */
+internal class NativeRuntimeLoading(
+    private val loadWrapper: (runtimeDir: File, libraryName: String) -> Unit,
+) {
+    private val loadLock: Any = Any()
+    private val loadedRuntimeDirs: MutableMap<String, String> = mutableMapOf()
+
+    fun setRuntimeDirectory(
         runtime: NativeClasspathRuntime,
         path: File,
         doExtract: Boolean,
@@ -56,7 +75,7 @@ public object NativeRuntimeLoader {
             val wrapperFile = runtimeDir.resolve(nativeLibraryFileName(runtime.libraryName))
 
             if (validate && wrapperFile.isFile) {
-                loadRuntimeWrapperLibrary(runtimeDir, runtime.libraryName)
+                loadWrapper(runtimeDir, runtime.libraryName)
                 loadedRuntimeDirs[runtime.libraryName] = runtimeDir.absolutePath
                 return
             }
@@ -71,7 +90,7 @@ public object NativeRuntimeLoader {
                 }
             }
 
-            loadRuntimeWrapperLibrary(runtimeDir, runtime.libraryName)
+            loadWrapper(runtimeDir, runtime.libraryName)
             loadedRuntimeDirs[runtime.libraryName] = runtimeDir.absolutePath
         }
     }
@@ -112,7 +131,6 @@ public object NativeRuntimeLoader {
             }
         }
     }
-
 }
 
 internal fun nativeLibraryFileName(libraryName: String): String {

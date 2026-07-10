@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -18,23 +18,15 @@ plugins {
     kotlin("multiplatform")
     id("com.android.kotlin.multiplatform.library")
 
+    kotlin("plugin.compose")
+    id("org.jetbrains.compose")
+
     `mpp-lib-targets`
     id(libs.plugins.vanniktech.mavenPublish.get().pluginId)
     idea
 }
 
 description = "MediaMP backend using MPV"
-
-val archs = buildList {
-    val abis = getPropertyOrNull("ani.android.abis")?.trim()
-    if (!abis.isNullOrEmpty()) {
-        addAll(abis.split(",").map { it.trim() })
-    } else {
-        add("arm64-v8a")
-        add("armeabi-v7a")
-        add("x86_64")
-    }
-}
 
 kotlin {
     androidLibrary {
@@ -54,10 +46,79 @@ kotlin {
         getByName("jvmMain").dependencies {
             implementation(projects.mediampNativeLoader)
         }
+        getByName("desktopTest").dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 
 configureMediampMpvModule()
+
+// Dev-only fast path (macOS): compile the JNI wrapper against a system (Homebrew) libmpv
+// so the module can be developed/tested without the full meson mpv build. The output
+// directory is meant for MpvMediampPlayer.prepareLibraries(dir, extractRuntimeLibrary = false).
+val devNativeDir = layout.buildDirectory.dir("dev-native")
+val devMpvPrefix = getPropertyOrNull("mediamp.mpv.dev.prefix") ?: "/opt/homebrew"
+val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
+    group = "mediamp"
+    description = "Compile libmediampv.dylib against Homebrew libmpv (macOS dev only)"
+    // CI runners don't have Homebrew mpv headers; the real runtime is built via meson
+    // (mpvAssemble*) there, so silently skip this dev convenience when headers are absent.
+    onlyIf { getOs() == Os.MacOS && file("$devMpvPrefix/include/mpv/client.h").isFile }
+    val srcDir = layout.projectDirectory.dir("src/cpp")
+    val outputFile = devNativeDir.map { it.file("libmediampv.dylib") }
+    inputs.dir(srcDir)
+    outputs.file(outputFile)
+    val mpvPrefix = devMpvPrefix
+    commandLine(
+        "/bin/zsh", "-c",
+        buildString {
+            append("mkdir -p \"\$(dirname ${outputFile.get().asFile.absolutePath})\" && ")
+            append("JAVA_HOME=\"\${JAVA_HOME:-\$(/usr/libexec/java_home)}\" && ")
+            append("clang++ -std=c++17 -fPIC -fobjc-arc -O2 -dynamiclib ")
+            append("-I ${srcDir.asFile.absolutePath}/include ")
+            append("-I \"\$JAVA_HOME/include\" -I \"\$JAVA_HOME/include/darwin\" ")
+            append("-I $mpvPrefix/include -L $mpvPrefix/lib -lmpv -lavcodec ")
+            append("-framework Foundation -framework Metal -framework IOSurface ")
+            append("-framework OpenGL -framework QuartzCore -framework CoreGraphics -framework ImageIO ")
+            append("${srcDir.asFile.absolutePath}/*.cpp ${srcDir.asFile.absolutePath}/*.mm ")
+            append("-o ${outputFile.get().asFile.absolutePath}")
+        },
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    // Where MpvMediampPlayerSmokeTest loads the native runtime from:
+    // - Windows: the assembled meson runtime (no system libmpv exists, and the D3D11
+    //     render API needs our patched build anyway) — mpv-output/WindowsX64/bin.
+    // - macOS on a required runner (self-hosted, full environment): the assembled meson
+    //     runtime — mpv-output/<target>/lib, which includes libmediampv.dylib. That
+    //     runner has no Homebrew libmpv, so the dev fast-path below would skip and, under
+    //     required mode, fail; and it is the one place that builds the real runtime, so
+    //     the smoke test should exercise exactly what ships.
+    // - macOS local dev: the JNI wrapper compiled against Homebrew libmpv (fast loop,
+    //     no full meson build required).
+    val mpvTestRequired = getPropertyOrNull("mediamp.mpv.test.required") == "true"
+    val testNativeDir = when {
+        getOs() == Os.Windows ->
+            layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
+
+        getOs() == Os.MacOS && mpvTestRequired -> {
+            val macosTarget = if (getArch() == Arch.AARCH64) "MacosArm64" else "MacosX64"
+            dependsOn("mpvAssemble$macosTarget")
+            layout.buildDirectory.dir("mpv-output/$macosTarget/lib").get().asFile
+        }
+
+        else -> {
+            dependsOn(compileJniDevMacos)
+            devNativeDir.get().asFile
+        }
+    }
+    systemProperty("mediamp.mpv.dev.native.dir", testNativeDir.absolutePath)
+    // CI 上防静默跳过: -Pmediamp.mpv.test.required=true 时环境缺失会 fail 而不是 skip
+    systemProperty("mediamp.mpv.test.required", getPropertyOrNull("mediamp.mpv.test.required") ?: "false")
+}
+
 val hostMpvTargetName = when (getOs()) {
     Os.Windows -> "WindowsX64"
     Os.Linux -> "LinuxX64"
@@ -118,6 +179,27 @@ val copyNativeJarForCurrentPlatform = tasks.register("copyNativeJarForCurrentPla
 
 tasks.named("assemble") {
     dependsOn(copyNativeJarForCurrentPlatform)
+}
+
+// In-repo zero-config verification: runs MpvZeroConfigTest in a fresh JVM with the platform
+// runtime jar (natives + per-platform manifest) on the classpath and WITHOUT prepareLibraries —
+// exactly the contract consumers get from runtimeOnly("org.openani.mediamp:mediamp-mpv-runtime").
+// A separate Test task because the native loader keeps global state per JVM.
+val hostMpvRuntimeJarTaskName = hostMpvTargetName?.let { "mpvRuntimeJar$it" }
+if (hostMpvRuntimeJarTaskName != null && hostMpvRuntimeJarTaskName in tasks.names) {
+    tasks.register<Test>("zeroConfigTest") {
+        group = "mediamp"
+        description = "Verifies zero-config native loading with the mpv runtime jar on the classpath"
+        val testCompilation = kotlin.targets.getByName("desktop").compilations.getByName("test")
+        testClassesDirs = testCompilation.output.classesDirs
+        classpath = files(
+            testCompilation.output.allOutputs,
+            testCompilation.runtimeDependencyFiles,
+            tasks.named<org.gradle.jvm.tasks.Jar>(hostMpvRuntimeJarTaskName).flatMap { it.archiveFile },
+        )
+        filter { includeTestsMatching("*ZeroConfig*") }
+        systemProperty("mediamp.mpv.zeroconfig", "true")
+    }
 }
 
 mavenPublishing {
