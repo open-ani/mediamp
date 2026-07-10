@@ -127,9 +127,13 @@ internal class MpvTrackGroup<T : Track>(
     override val candidates: MutableStateFlow<List<T>> = MutableStateFlow(emptyList())
 
     override fun select(track: T?): Boolean {
-        if (!selectTrack(track)) return false
-        selected.value = track
-        return true
+        // Do not write `selected` optimistically here. mpv may reject the selection
+        // asynchronously (e.g. no decoder for the track's codec), in which case an
+        // optimistic value flashes on and is then reverted by the "track-list" change
+        // notification. Native `track-list/*/selected` is the source of truth: a
+        // successful property write triggers a "track-list" event and refreshTracks()
+        // publishes the confirmed selection (open-ani/animeko#1128).
+        return selectTrack(track)
     }
 
     fun update(tracks: List<T>, selectedTrack: T?) {

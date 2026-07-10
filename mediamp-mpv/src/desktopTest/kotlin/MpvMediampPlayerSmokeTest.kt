@@ -9,7 +9,9 @@
 package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.openani.mediamp.ExperimentalMediampApi
@@ -116,6 +118,28 @@ class MpvMediampPlayerSmokeTest {
     }
 
     /**
+     * Container with two SRT subtitle tracks. SRT requires the FFmpeg subrip decoder,
+     * which the bundled FFmpeg build must include (open-ani/animeko#1128).
+     */
+    private fun generateDualSubtitleVideo(): File? {
+        val tmpDir = File(System.getProperty("java.io.tmpdir"))
+        val target = File(tmpDir, "mediamp-mpv-test-dualsub.mkv")
+        if (target.isFile && target.length() > 0) return target
+        val sub1 = File(tmpDir, "mediamp-mpv-test-sub1.srt")
+        val sub2 = File(tmpDir, "mediamp-mpv-test-sub2.srt")
+        sub1.writeText("1\n00:00:00,500 --> 00:00:09,000\nFirst subtitle track\n")
+        sub2.writeText("1\n00:00:00,500 --> 00:00:09,000\nSecond subtitle track\n")
+        val ok = runFfmpeg(
+            "-f", "lavfi", "-i", "color=c=blue:size=320x240:rate=24:duration=10",
+            "-i", sub1.absolutePath, "-i", sub2.absolutePath,
+            "-map", "0:v", "-map", "1:s", "-map", "2:s",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:s", "srt",
+            target.absolutePath,
+        )
+        return target.takeIf { ok }
+    }
+
+    /**
      * With vo=libmpv, frames are only consumed when a render context drains them; without
      * one, playback never advances. The native render thread does all rendering; this
      * just configures a headless buffer ring (device ptr 0 = system default MTLDevice on
@@ -213,6 +237,87 @@ class MpvMediampPlayerSmokeTest {
         }
     }
 
+    /**
+     * Selecting a non-default SRT subtitle track must survive pause, resume, and seek,
+     * and turning subtitles off must stick as well.
+     *
+     * Regression test for open-ani/animeko#1128: the bundled FFmpeg used to lack all
+     * subtitle decoders, so libmpv rejected the selection asynchronously via a
+     * "track-list" rewrite; MpvTrackGroup additionally published an optimistic selection
+     * that native state then overwrote, which surfaced in the UI as "subtitles reset
+     * after pausing".
+     */
+    @OptIn(InternalMediampApi::class)
+    @Test
+    fun `subtitle selection persists across pause resume and seek`() {
+        if (!prepareOrSkip()) return
+        val video = generateDualSubtitleVideo()
+            ?: run { skip("ffmpeg unavailable or dual-subtitle video generation failed"); return }
+
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val renderer = startHeadlessRenderer(player)
+            try {
+                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+                player.resume()
+                player.playbackState.await(PlaybackState.PLAYING)
+
+                val metadata = assertNotNull(player.features[MediaMetadata])
+                val subtitles = assertNotNull(metadata.subtitleTracks)
+                val candidates = withTimeout(10_000) {
+                    subtitles.candidates.first { it.size == 2 }
+                }
+                val second = candidates.first { it.internalId == "2" }
+                val handle = player.impl as MPVHandle
+
+                assertTrue(subtitles.select(second))
+                // `selected` is confirmed asynchronously from mpv's track-list. It must
+                // converge to the requested track (decode success), not flash and revert.
+                withTimeout(10_000) {
+                    subtitles.selected.collectUntil { it?.internalId == "2" }
+                }
+                assertEquals("2", handle.getPropertyString("sid"))
+
+                suspend fun assertStillSelected(what: String) {
+                    delay(1_000) // time for mpv to emit any track-list rewrites
+                    assertEquals("2", subtitles.selected.value?.internalId, "selection lost $what")
+                    assertEquals("2", handle.getPropertyString("sid"), "native sid lost $what")
+                }
+
+                player.pause()
+                player.playbackState.await(PlaybackState.PAUSED)
+                assertStillSelected("after pause")
+
+                player.resume()
+                player.playbackState.await(PlaybackState.PLAYING)
+                assertStillSelected("after resume")
+
+                player.seekTo(5_000)
+                withTimeout(10_000) {
+                    player.currentPositionMillis.collectUntil { it in 4_500..8_000 }
+                }
+                assertStillSelected("after seek")
+
+                // Turning subtitles off must stick through playback controls too.
+                assertTrue(subtitles.select(null))
+                withTimeout(10_000) {
+                    subtitles.selected.collectUntil { it == null }
+                }
+                player.pause()
+                player.playbackState.await(PlaybackState.PAUSED)
+                delay(1_000)
+                assertEquals(null, subtitles.selected.value, "subtitles re-enabled after pause")
+                assertEquals("no", handle.getPropertyString("sid"))
+
+                player.stopPlayback()
+                player.playbackState.await(PlaybackState.FINISHED)
+            } finally {
+                renderer.close()
+                player.close()
+            }
+        }
+    }
+
     /** Average color of the center 20x20 region of the current frame, read back via [Screenshots]. */
     private suspend fun captureCenterColor(screenshots: Screenshots): Triple<Int, Int, Int> {
         val file = File.createTempFile("mediamp-mpv-shot", ".png")
@@ -245,6 +350,7 @@ class MpvMediampPlayerSmokeTest {
             while (true) {
                 val color = captureCenterColor(screenshots)
                 if (predicate(color)) return@withTimeout color
+                System.err.println("[SmokeTest] awaiting $what, sampled $color")
                 last = color
                 kotlinx.coroutines.delay(200)
             }
