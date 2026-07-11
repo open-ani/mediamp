@@ -48,8 +48,10 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.exoplayer.internal.ExoFramePreview
 import org.openani.mediamp.exoplayer.internal.ExoPlaybackStateMapper
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
+import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
@@ -247,6 +249,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     private val playbackSpeed = PlaybackSpeedImpl(exoPlayer)
     private val playbackStateMapper = ExoPlaybackStateMapper()
     private val videoAspectRatio = ExoPlayerVideoAspectRatio()
+    private val framePreview = ExoFramePreview { openResource.value?.mediaData }
 
     override val currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0)
 
@@ -256,6 +259,7 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         add(Buffering, buffering)
         add(MediaMetadata, mediaMetadataFeature)
         add(VideoAspectRatio, videoAspectRatio)
+        add(FramePreview.Key, framePreview)
     }
 
     override fun getCurrentMediaProperties(): MediaProperties? {
@@ -291,6 +295,13 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                 currentPositionMillis.value = exoPlayer.currentPosition
                 buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
                 delay(0.1.seconds) // 10 tps
+            }
+        }
+        backgroundScope.launch {
+            // Tear down the preview decoder when the media changes or playback stops,
+            // so it never outlives the media data it reads from.
+            mediaData.collect {
+                framePreview.onMediaDataChanged(it)
             }
         }
         backgroundScope.launch(Dispatchers.Main) {
@@ -415,6 +426,9 @@ class ExoPlayerMediampPlayer @UiThread constructor(
         exoPlayer.removeListener(mediaListener)
         exoPlayer.stop()
         exoPlayer.release()
+        backgroundScope.launch(kotlinx.coroutines.NonCancellable) {
+            framePreview.closeSuspending()
+        }
     }
 
     private fun Tracks.Group.getSubtitleTracks() = sequence {
