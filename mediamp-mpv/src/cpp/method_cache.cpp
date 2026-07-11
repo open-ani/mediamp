@@ -145,6 +145,8 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
             find_method(env, instance_handle, event_listener_class, "onPropertyChange", "(Ljava/lang/String;D)V");
     jmethodID on_property_change_string =
             find_method(env, instance_handle, event_listener_class, "onPropertyChange", "(Ljava/lang/String;Ljava/lang/String;)V");
+    jmethodID on_event =
+            find_method(env, instance_handle, event_listener_class, "onEvent", "(I)V");
     jmethodID on_end_file =
             find_method(env, instance_handle, event_listener_class, "onEndFile", "(II)V");
     jmethodID on_render_update =
@@ -166,6 +168,7 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
         !on_property_change_int64 ||
         !on_property_change_double ||
         !on_property_change_string ||
+        !on_event ||
         !on_end_file ||
         !on_render_update ||
         !on_native_log ||
@@ -191,6 +194,7 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
     jni_mediamp_method_EventListener_onPropertyChange_INT64 = on_property_change_int64;
     jni_mediamp_method_EventListener_onPropertyChange_DOUBLE = on_property_change_double;
     jni_mediamp_method_EventListener_onPropertyChange_STRING = on_property_change_string;
+    jni_mediamp_method_EventListener_onEvent = on_event;
     jni_mediamp_method_EventListener_onEndFile = on_end_file;
     jni_mediamp_clazz_RenderUpdateListener = render_update_listener_class;
     jni_mediamp_method_RenderUpdateListener_onRenderUpdate = on_render_update;

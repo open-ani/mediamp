@@ -171,6 +171,25 @@ enum class MPVFormat {
     MPV_FORMAT_BYTE_ARRAY,
 }
 
+@Suppress("unused")
+object MPVEvent {
+    const val NONE: Int = 0
+    const val SHUTDOWN: Int = 1
+    const val GET_PROPERTY_REPLY: Int = 3
+    const val SET_PROPERTY_REPLY: Int = 4
+    const val COMMAND_REPLY: Int = 5
+    const val START_FILE: Int = 6
+    const val END_FILE: Int = 7
+    const val FILE_LOADED: Int = 8
+    const val CLIENT_MESSAGE: Int = 16
+    const val VIDEO_RECONFIG: Int = 17
+    const val AUDIO_RECONFIG: Int = 18
+    const val SEEK: Int = 20
+    const val PLAYBACK_RESTART: Int = 21
+    const val QUEUE_OVERFLOW: Int = 24
+    const val HOOK: Int = 25
+}
+
 private external fun nGlobalInit(): Boolean
 private external fun nMake(context: Any): Long
 private external fun nInitialize(ptr: Long): Boolean

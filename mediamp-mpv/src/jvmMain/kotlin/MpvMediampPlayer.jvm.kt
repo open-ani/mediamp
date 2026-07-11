@@ -158,6 +158,9 @@ abstract class JvmMpvMediampPlayer(
             }
         }
 
+        override fun onEvent(event: Int) {
+        }
+
         override fun onEndFile(reason: Int, mpvError: Int) {
             stateMachine.onEndFile(reason, playbackState.value)?.let { playbackState.value = it }
         }
