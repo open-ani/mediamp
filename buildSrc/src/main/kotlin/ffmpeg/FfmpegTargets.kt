@@ -78,6 +78,22 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-decoder=opus")
     add("--enable-decoder=mp3")
     add("--enable-decoder=flac")
+    // Subtitle decoders. The Matroska/mov demuxers still enumerate subtitle streams
+    // without these, so track pickers list tracks that then fail to open — mpv logs
+    // "Could not find subtitle decoder for format 'subrip'" and silently deselects
+    // the track (open-ani/animeko#1128).
+    add("--enable-decoder=ass")
+    add("--enable-decoder=ssa")
+    add("--enable-decoder=srt")
+    add("--enable-decoder=subrip")
+    add("--enable-decoder=text")
+    add("--enable-decoder=webvtt")
+    // configure component names come from ff_<name>_decoder symbols: the MP4 timed-text
+    // decoder is "movtext" here even though `ffmpeg -decoders` lists it as "mov_text"
+    // (unknown --enable-decoder values are silently ignored).
+    add("--enable-decoder=movtext")
+    add("--enable-decoder=pgssub")
+    add("--enable-decoder=dvdsub")
     add("--enable-muxer=mp4")
     add("--enable-muxer=matroska")
     add("--enable-muxer=mpegts")
@@ -89,6 +105,10 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-demuxer=ogg")
     add("--enable-demuxer=aac")
     add("--enable-demuxer=concat")
+    // External subtitle files (mpv loads them through libavformat).
+    add("--enable-demuxer=ass")
+    add("--enable-demuxer=srt")
+    add("--enable-demuxer=webvtt")
     // Local encrypted HLS still needs the HLS demuxer so FFmpeg can interpret
     // EXT-X-KEY metadata instead of treating segments as plain concatenated TS.
     add("--enable-demuxer=hls")

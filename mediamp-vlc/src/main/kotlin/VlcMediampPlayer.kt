@@ -577,10 +577,20 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
                     listOf(TrackLabel(null, it.description())),
                 )
             }
-        // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
-        if (mediaMetadata.subtitleTracks.candidates.value != newSubtitleTracks) {
+        // 只有候选列表真正变化时才更新（Track 有值相等语义，重新创建的对象不会误判为变化）。
+        // 变化时按 id 恢复原选择：用户选中的轨道仍存在则保持；用户已关闭字幕则保持关闭；
+        // 只有首次出现候选时才默认选择第一轨 (open-ani/animeko#1128)。
+        // 本函数会在每次进入 playing（含暂停后恢复）时被调用，绝不能无条件重置选择。
+        val oldSubtitleTracks = mediaMetadata.subtitleTracks.candidates.value
+        if (oldSubtitleTracks != newSubtitleTracks) {
+            val previousSelected = mediaMetadata.subtitleTracks.selected.value
             mediaMetadata.subtitleTracks.candidates.value = newSubtitleTracks
-            mediaMetadata.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
+            mediaMetadata.subtitleTracks.selected.value = when {
+                oldSubtitleTracks.isEmpty() -> newSubtitleTracks.firstOrNull()
+                previousSelected == null -> null
+                else -> newSubtitleTracks.firstOrNull { it.id == previousSelected.id }
+                    ?: newSubtitleTracks.firstOrNull()
+            }
         }
     }
 

@@ -173,10 +173,19 @@ class ExoPlayerMediampPlayer @UiThread constructor(
                         group.getSubtitleTracks()
                     }
                     .toList()
-            // 新的字幕轨道和原来不同时才会更改，同时将 current 设置为新字幕轨道列表的第一个
-            if (newSubtitleTracks != mediaMetadataFeature.subtitleTracks.candidates.value) {
+            // 只有候选列表真正变化时才更新（Track 有值相等语义，重新创建的对象不会误判为变化）。
+            // 变化时按 id 恢复原选择：用户选中的轨道仍存在则保持；用户已关闭字幕则保持关闭；
+            // 只有首次出现候选时才默认选择第一轨 (open-ani/animeko#1128)。
+            val oldSubtitleTracks = mediaMetadataFeature.subtitleTracks.candidates.value
+            if (newSubtitleTracks != oldSubtitleTracks) {
+                val previousSelected = mediaMetadataFeature.subtitleTracks.selected.value
                 mediaMetadataFeature.subtitleTracks.candidates.value = newSubtitleTracks
-                mediaMetadataFeature.subtitleTracks.selected.value = newSubtitleTracks.firstOrNull()
+                mediaMetadataFeature.subtitleTracks.selected.value = when {
+                    oldSubtitleTracks.isEmpty() -> newSubtitleTracks.firstOrNull()
+                    previousSelected == null -> null
+                    else -> newSubtitleTracks.firstOrNull { it.id == previousSelected.id }
+                        ?: newSubtitleTracks.firstOrNull()
+                }
             }
 
             mediaMetadataFeature.audioTracks.candidates.value =
