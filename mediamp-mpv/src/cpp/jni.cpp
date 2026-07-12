@@ -4,6 +4,16 @@
 #include <vector>
 #include <jni.h>
 #include <cstdio>
+#if defined(__linux__) && !defined(__ANDROID__)
+#define GL_GLEXT_PROTOTYPES 1
+#include <dlfcn.h>
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <GL/glx.h>
+#include <X11/Xlib.h>
+#include <jawt.h>
+#include <jawt_md.h>
+#endif
 #include "mpv_handle_t.h"
 #include "method_cache.h"
 
@@ -102,6 +112,20 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+#endif
+
+#if defined(__linux__) && !defined(__ANDROID__)
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jobject component, jlong share_context, jlong drawable, jlong window);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong consumer_environment_ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jint JNICALL FN_DESKTOP(nCreateOpenGLConsumerFbo)(JNIEnv *env, jclass clazz, jlong texture_name);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDeleteOpenGLConsumerFbo)(JNIEnv *env, jclass clazz, jint fbo);
 #endif
 
 	/**
@@ -479,6 +503,135 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass claz
         return JNI_FALSE;
     }
     return instance->save_surface_png(path_chars.get());
+}
+
+#endif
+
+#if defined(__linux__) && !defined(__ANDROID__)
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
+        JNIEnv *env, jclass, jlong ptr, jobject component,
+        jlong share_context, jlong drawable, jlong window) {
+    auto *instance = get_instance(ptr);
+    if (!instance || !component || !share_context || !drawable) return JNI_FALSE;
+
+    // Resolve JAWT lazily so the JNI wrapper does not acquire a deployment-time
+    // dependency on one particular JDK installation path.
+    using jawt_get_awt_fn = jboolean (JNICALL *)(JNIEnv *, JAWT *);
+    static void *const jawt_library = dlopen("libjawt.so", RTLD_NOW | RTLD_LOCAL);
+    static auto get_awt = reinterpret_cast<jawt_get_awt_fn>(
+        dlsym(RTLD_DEFAULT, "JAWT_GetAWT"));
+    if (!get_awt && jawt_library) {
+        get_awt = reinterpret_cast<jawt_get_awt_fn>(dlsym(jawt_library, "JAWT_GetAWT"));
+    }
+    if (!get_awt) return JNI_FALSE;
+
+    JAWT awt{};
+    awt.version = JAWT_VERSION_1_4;
+    if (get_awt(env, &awt) == JNI_FALSE) return JNI_FALSE;
+    JAWT_DrawingSurface *surface = awt.GetDrawingSurface(env, component);
+    if (!surface) return JNI_FALSE;
+    const jint lock_result = surface->Lock(surface);
+    if ((lock_result & JAWT_LOCK_ERROR) != 0) {
+        awt.FreeDrawingSurface(surface);
+        return JNI_FALSE;
+    }
+    JAWT_DrawingSurfaceInfo *surface_info = surface->GetDrawingSurfaceInfo(surface);
+    auto *x11 = surface_info
+        ? static_cast<JAWT_X11DrawingSurfaceInfo *>(surface_info->platformInfo)
+        : nullptr;
+    const bool matches_live_layer = x11 && x11->display &&
+        static_cast<jlong>(x11->drawable) == drawable;
+    const int screen = matches_live_layer ? DefaultScreen(x11->display) : 0;
+    // Skiko 0.9.37.4 stores LinuxOpenGLRedrawer.context as a native GLXContext*
+    // allocation. Its own makeCurrent/destroyContext JNI entry points dereference that
+    // slot before calling GLX; mirror that ABI here instead of passing the slot address
+    // to the driver as though it were a GLXContext.
+    auto *share_context_slot = reinterpret_cast<GLXContext *>(
+        static_cast<uintptr_t>(share_context));
+    const GLXContext actual_share_context = share_context_slot ? *share_context_slot : nullptr;
+    const uint64_t identity =
+        static_cast<uint64_t>(share_context) ^
+        (static_cast<uint64_t>(drawable) << 17) ^
+        (static_cast<uint64_t>(window) << 33);
+    const bool attached = matches_live_layer && actual_share_context && identity != 0 &&
+        instance->attach_opengl_render_environment(
+            reinterpret_cast<int64_t>(x11->display),
+            reinterpret_cast<int64_t>(actual_share_context), screen, identity);
+    if (surface_info) surface->FreeDrawingSurfaceInfo(surface_info);
+    surface->Unlock(surface);
+    awt.FreeDrawingSurface(surface);
+    return attached ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance && instance->create_render_context() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance && instance->destroy_render_context() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigOpenGL)(
+        JNIEnv *, jclass, jlong ptr, jint width, jint height, jlong) {
+    auto *instance = get_instance(ptr);
+    return instance && instance->set_surface_config(width, height) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateOpenGL)(JNIEnv *, jclass, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? static_cast<jlong>(instance->get_frame_state())
+                    : static_cast<jlong>(0xFULL << 44);
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *, jclass, jlong ptr, jint index) {
+    auto *instance = get_instance(ptr);
+    return instance ? static_cast<jlong>(instance->get_buffer_texture(index)) : 0;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *, jclass, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance && instance->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *, jclass, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance && instance->has_opengl_surface() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass, jlong ptr, jstring path) {
+    auto *instance = get_instance(ptr);
+    if (!instance) return JNI_FALSE;
+    scoped_utf_chars path_chars(env, path);
+    return path_chars.valid() && instance->save_surface_png(path_chars.get()) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL FN_DESKTOP(nCreateOpenGLConsumerFbo)(JNIEnv *, jclass, jlong texture_name) {
+    if (!texture_name || !glXGetCurrentContext()) return 0;
+    GLint previous_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_fbo);
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+        static_cast<GLuint>(texture_name), 0);
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
+    if (!complete || glGetError() != GL_NO_ERROR) {
+        if (fbo) glDeleteFramebuffers(1, &fbo);
+        return 0;
+    }
+    return static_cast<jint>(fbo);
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDeleteOpenGLConsumerFbo)(JNIEnv *, jclass, jint fbo) {
+    if (fbo <= 0 || !glXGetCurrentContext()) return JNI_FALSE;
+    const GLuint name = static_cast<GLuint>(fbo);
+    glDeleteFramebuffers(1, &name);
+    return glGetError() == GL_NO_ERROR ? JNI_TRUE : JNI_FALSE;
 }
 
 #endif

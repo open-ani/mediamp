@@ -12,6 +12,7 @@ import org.jetbrains.skia.BackendRenderTarget
 import org.jetbrains.skia.ColorSpace
 import org.jetbrains.skia.ContentChangeMode
 import org.jetbrains.skia.DirectContext
+import org.jetbrains.skia.FramebufferFormat
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
@@ -21,37 +22,69 @@ import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nAckRetiredBuffersD3D11
 import org.openani.mediamp.mpv.nAckRetiredBuffersMacos
+import org.openani.mediamp.mpv.nAckRetiredBuffersOpenGL
 import org.openani.mediamp.mpv.nCreateRenderContextD3D11
 import org.openani.mediamp.mpv.nCreateRenderContextMacos
+import org.openani.mediamp.mpv.nCreateRenderContextOpenGL
+import org.openani.mediamp.mpv.nCreateOpenGLConsumerFbo
+import org.openani.mediamp.mpv.nDeleteOpenGLConsumerFbo
 import org.openani.mediamp.mpv.nDestroyRenderContextD3D11
 import org.openani.mediamp.mpv.nDestroyRenderContextMacos
+import org.openani.mediamp.mpv.nDestroyRenderContextOpenGL
 import org.openani.mediamp.mpv.nGetBufferTextureD3D11
 import org.openani.mediamp.mpv.nGetBufferTextureMacos
+import org.openani.mediamp.mpv.nGetBufferTextureOpenGL
 import org.openani.mediamp.mpv.nGetFrameStateD3D11
 import org.openani.mediamp.mpv.nGetFrameStateMacos
+import org.openani.mediamp.mpv.nGetFrameStateOpenGL
 import org.openani.mediamp.mpv.nHasD3D11Surface
 import org.openani.mediamp.mpv.nHasMetalSurface
+import org.openani.mediamp.mpv.nHasOpenGLSurface
 import org.openani.mediamp.mpv.nSaveSurfacePng
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
+import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
+import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
+import org.openani.mediamp.mpv.nAttachRenderEnvironmentOpenGL
+import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
 
 internal const val SURFACE_RING_BUFFER_COUNT = 3
+
+/** A Skia descriptor plus any GPU resource created in the consumer context. */
+internal class MpvConsumerRenderTarget(
+    val skiaRenderTarget: BackendRenderTarget,
+    private val releaseOwnedResource: () -> Unit = {},
+) {
+    fun close() {
+        try {
+            skiaRenderTarget.close()
+        } finally {
+            releaseOwnedResource()
+        }
+    }
+
+    /** Closes the Skia descriptor after its consumer context has already been lost. */
+    fun abandon() {
+        skiaRenderTarget.close()
+    }
+}
 
 /**
  * Platform half of the native surface-ring render path: the JNI entry points plus how
  * a ring buffer's native texture is wrapped for Skia. The consumer state machine on top
- * ([MpvSurfaceRing]) is identical on macOS (Metal/IOSurface, render_macos.mm) and
- * Windows (D3D11/D3D12 shared textures, render_d3d11.cpp).
+ * ([MpvSurfaceRing]) is capability-based: Metal/IOSurface on macOS, D3D11/D3D12 shared
+ * textures on Windows, and shared OpenGL textures on Linux/GLX.
  */
 internal interface MpvSurfaceRingBackend {
     fun createRenderContext(ptr: Long): Boolean
     fun destroyRenderContext(ptr: Long): Boolean
 
     /**
-     * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS, a
-     * pointer to Skiko's native DirectXDevice struct on Windows; 0 requests a
-     * consumer-less (headless) ring.
+     * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
+     * pointer to Skiko's native DirectXDevice struct on Windows. OpenGL attaches its GLX
+     * environment separately and ignores this value. 0 requests a consumer-less ring
+     * where that platform supports one.
      */
     fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long): Boolean
     fun getFrameState(ptr: Long): Long
@@ -60,8 +93,9 @@ internal interface MpvSurfaceRingBackend {
     fun hasSurface(ptr: Long): Boolean
     fun saveSurfacePng(ptr: Long, path: String): Boolean
 
-    fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget
+    fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long): MpvConsumerRenderTarget
     val wrapColorFormat: SurfaceColorFormat
+    val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.TOP_LEFT
 }
 
 @OptIn(InternalMediampApi::class)
@@ -77,8 +111,8 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
 
-    override fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget =
-        BackendRenderTarget.makeMetal(width, height, texturePtr)
+    override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
+        MpvConsumerRenderTarget(BackendRenderTarget.makeMetal(width, height, texturePtr))
 
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.BGRA_8888
 }
@@ -98,7 +132,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
 
-    override fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget =
+    override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) = MpvConsumerRenderTarget(
         BackendRenderTarget.makeDirect3D(
             width = width,
             height = height,
@@ -107,12 +141,74 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
             sampleCnt = 1,
             levelCnt = 1,
         )
+    )
 
     // RGB_888x would sidestep the alpha channel entirely, but Skia's D3D backend
     // refuses to wrap render targets with a non-renderable color type (returns null),
     // so wrap as RGBA_8888. mpv's d3d11 renderer writes alpha=1 for opaque video
     // (verified by the demo pixel readback), so premultiplied sampling is safe.
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
+}
+
+/**
+ * Contract half of the shared-texture OpenGL backend. The producer FBO is context-local
+ * to the native GLX context, so [nGetBufferTextureOpenGL] returns a shared texture name,
+ * not an FBO. Consumer FBOs are created while Skiko's context is current before calling
+ * `BackendRenderTarget.makeGL`. They are not share-group objects: they
+ * are created and deleted by JNI while Skiko context A is current, while the producer
+ * remains the sole owner of the shared texture names.
+ */
+@OptIn(InternalMediampApi::class)
+internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
+    override fun createRenderContext(ptr: Long) = nCreateRenderContextOpenGL(ptr)
+    override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextOpenGL(ptr)
+    override fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long) =
+        nSetSurfaceConfigOpenGL(ptr, width, height, devicePtr)
+
+    override fun getFrameState(ptr: Long) = nGetFrameStateOpenGL(ptr)
+    override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureOpenGL(ptr, index)
+    override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersOpenGL(ptr)
+    override fun hasSurface(ptr: Long) = nHasOpenGLSurface(ptr)
+    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngOpenGL(ptr, path)
+
+    fun attachRenderEnvironment(ptr: Long, environment: OpenGLRenderEnvironment): Boolean =
+        nAttachRenderEnvironmentOpenGL(
+            ptr,
+            environment.component,
+            environment.shareContext,
+            environment.drawable,
+            environment.window,
+        )
+
+    override fun makeConsumerRenderTarget(
+        width: Int,
+        height: Int,
+        texturePtr: Long,
+    ): MpvConsumerRenderTarget {
+        val fbo = nCreateOpenGLConsumerFbo(texturePtr)
+        check(fbo != 0) { "Could not create consumer FBO for shared OpenGL texture $texturePtr" }
+        return try {
+            // Unlike Metal/D3D, this wrapper also owns the consumer-context FBO.
+            MpvConsumerRenderTarget(
+                BackendRenderTarget.makeGL(
+                    width = width,
+                    height = height,
+                    sampleCnt = 1,
+                    stencilBits = 0,
+                    fbId = fbo,
+                    fbFormat = FramebufferFormat.GR_GL_RGBA8,
+                ),
+            ) {
+                check(nDeleteOpenGLConsumerFbo(fbo)) { "Could not delete OpenGL consumer FBO $fbo" }
+            }
+        } catch (failure: Throwable) {
+            nDeleteOpenGLConsumerFbo(fbo)
+            throw failure
+        }
+    }
+
+    override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
+    override val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.BOTTOM_LEFT
 }
 
 /**
@@ -126,7 +222,7 @@ internal class MpvSurfaceRing(
     private val backend: MpvSurfaceRingBackend,
 ) {
     private val wrappedSurfaces = arrayOfNulls<Surface>(SURFACE_RING_BUFFER_COUNT)
-    private val wrappedTargets = arrayOfNulls<BackendRenderTarget>(SURFACE_RING_BUFFER_COUNT)
+    private val consumerTargets = arrayOfNulls<MpvConsumerRenderTarget>(SURFACE_RING_BUFFER_COUNT)
     private var blitSurface: Surface? = null
     private var wrappedGeneration = -1
     private var surfaceContext: DirectContext? = null
@@ -163,6 +259,24 @@ internal class MpvSurfaceRing(
         if (requestedWidth > 0 && devicePtr != requestedDevicePtr) {
             requestSurface(requestedWidth, requestedHeight, devicePtr)
         }
+    }
+
+    /**
+     * Drops consumer-side Skia objects before the producer replaces its GLX share group.
+     * A replaced GLX context destroys its context-local FBOs itself; their shared texture
+     * names must never be reused by the new context.
+     */
+    fun invalidateForRenderEnvironmentChange() {
+        cachedFrame?.close()
+        cachedFrame = null
+        cachedState = 0L
+        // The old context may already be gone. Its context-local FBOs are then reclaimed
+        // with it; never issue glDeleteFramebuffer through the new Skiko context because
+        // the same numeric name could belong to an unrelated new object.
+        abandonWraps()
+        surfaceContext = null
+        backend.ackRetiredBuffers(handlePtr)
+        requestedDevicePtr = 0L
     }
 
     /**
@@ -221,13 +335,14 @@ internal class MpvSurfaceRing(
         height: Int,
         directContext: DirectContext,
     ): Boolean {
-        if (surfaceContext !== directContext) {
+        val contextChanged = surfaceContext !== null && surfaceContext !== directContext
+        if (contextChanged) {
             // Images from a dead/replaced DirectContext must not be drawn again.
             cachedFrame?.close()
             cachedFrame = null
             cachedState = 0L
         }
-        closeWraps()
+        if (contextChanged) abandonWraps() else closeWraps()
         // Our references to the previous generation are gone; the render thread may
         // free those buffers now.
         backend.ackRetiredBuffers(handlePtr)
@@ -239,23 +354,23 @@ internal class MpvSurfaceRing(
                 closeWraps()
                 return false
             }
-            val target = backend.makeRenderTarget(width, height, texture)
+            val consumerTarget = backend.makeConsumerRenderTarget(width, height, texture)
             val surface = runCatching {
                 Surface.makeFromBackendRenderTarget(
                     context = directContext,
-                    rt = target,
-                    origin = SurfaceOrigin.TOP_LEFT,
+                    rt = consumerTarget.skiaRenderTarget,
+                    origin = backend.skiaSurfaceOrigin,
                     colorFormat = backend.wrapColorFormat,
                     colorSpace = ColorSpace.sRGB,
                 )
             }.onFailure { logOnce("wrapping buffer $i as Skia surface failed", MPVLog.ERROR, it) }.getOrNull()
             if (surface == null) {
                 logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})", MPVLog.ERROR)
-                target.close()
+                consumerTarget.close()
                 closeWraps()
                 return false
             }
-            wrappedTargets[i] = target
+            consumerTargets[i] = consumerTarget
             wrappedSurfaces[i] = surface
         }
         // A GPU (render-target) blit surface: the blit is GPU->GPU and its snapshot is
@@ -284,11 +399,25 @@ internal class MpvSurfaceRing(
     }
 
     private fun closeWraps() {
+        clearWraps(abandonOwnedResources = false)
+    }
+
+    // The old GL context reclaims its context-local FBOs; deleting their numeric names
+    // through the new context could delete unrelated objects.
+    private fun abandonWraps() {
+        clearWraps(abandonOwnedResources = true)
+    }
+
+    private fun clearWraps(abandonOwnedResources: Boolean) {
         for (i in 0 until SURFACE_RING_BUFFER_COUNT) {
             wrappedSurfaces[i]?.close()
             wrappedSurfaces[i] = null
-            wrappedTargets[i]?.close()
-            wrappedTargets[i] = null
+            if (abandonOwnedResources) {
+                consumerTargets[i]?.abandon()
+            } else {
+                consumerTargets[i]?.close()
+            }
+            consumerTargets[i] = null
         }
         blitSurface?.close()
         blitSurface = null

@@ -23,6 +23,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
@@ -31,6 +33,7 @@ import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
+import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.imageio.ImageIO
@@ -117,11 +120,14 @@ internal class MpvFramePreview(
             if (existing.originalData === data) return existing
             discardSessionLocked()
         }
+        // A new Linux preview player needs a GLX environment before vo=libmpv can load.
+        val renderEnvironment = (mainPlayer as? MpvMediampPlayer)?.currentOpenGLRenderEnvironment()
+        if (hostOs == OS.Linux && renderEnvironment == null) return null
         return try {
             // NonCancellable: session creation is expensive shared state; a cancelled first
             // request must not abort it half-way (the next request reuses the session).
             withContext(NonCancellable) {
-                PreviewSession.create(context, parentCoroutineContext, data, maxWidth, maxHeight)
+                PreviewSession.create(context, parentCoroutineContext, data, maxWidth, maxHeight, renderEnvironment)
             }.also { session = it }
         } catch (e: Exception) {
             null
@@ -259,6 +265,7 @@ internal class MpvFramePreview(
                 data: MediaData,
                 maxWidth: Int,
                 maxHeight: Int,
+                renderEnvironment: OpenGLRenderEnvironment?,
             ): PreviewSession {
                 val previewData: MediaData = when (data) {
                     is SeekableInputMediaData -> NonClosingSeekableInputMediaData(data)
@@ -268,6 +275,12 @@ internal class MpvFramePreview(
                 val renderCounter = MutableStateFlow(0L)
                 val player = MpvMediampPlayer(MpvFramePreviewContextMarker(context), parentCoroutineContext)
                 try {
+                    if (hostOs == OS.Linux) {
+                        checkNotNull(renderEnvironment) { "Linux frame preview requires the main player's GLX environment" }
+                        check(player.attachOpenGLRenderEnvironment(renderEnvironment)) {
+                            "Could not attach the main player's GLX environment to the preview decoder"
+                        }
+                    }
                     val handle = player.handle
                     // Keep the preview decoder lightweight: no audio, no subtitles.
                     handle.setPropertyString("aid", "no")

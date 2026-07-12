@@ -9,10 +9,13 @@
 
 package org.openani.mediamp.mpv
 
+import java.awt.Component
 import org.openani.mediamp.InternalMediampApi
 
-// macOS render path (render_macos.mm): a native render thread drives mpv into a ring
-// of IOSurface-backed FBOs, each also wrapped as an MTLTexture for Skia.
+// Desktop surface-ring render paths. Each native render thread drives mpv into a ring
+// of GPU textures that the platform-specific Kotlin backend wraps for Skia. The native
+// implementation owns the producer context and textures; Skia only borrows consumer
+// views of them.
 
 @InternalMediampApi
 external fun nCreateRenderContextMacos(ptr: Long): Boolean
@@ -92,6 +95,74 @@ external fun nHasD3D11Surface(ptr: Long): Boolean
 @InternalMediampApi
 external fun nSaveSurfacePngD3D11(ptr: Long, path: String): Boolean
 
+// OpenGL render path (Linux/GLX): a native render thread
+// render into shared GL_TEXTURE_2D objects. The `consumerEnvironmentPtr` is an opaque
+// native description of Skiko's live GLX environment, not a producer FBO or a texture
+// ID. It is supplied only after the Compose consumer has attached a live OpenGL context.
+//
+// These declarations are the Kotlin/native contract for the later native renderer. The
+// native code resolves the matching Display through JAWT without retaining the component.
+
+/**
+ * Attaches the live Skiko GLX share context before creating libmpv's OpenGL render
+ * context. [component] is Skiko's AWT HardwareLayer; native code uses JAWT only while
+ * this call is active to obtain the matching X11 Display. It must not retain the Java
+ * object. [shareContext], [drawable], and [window] are GLX/X11 identities observed from
+ * the same live LinuxOpenGLRedrawer. A changed identity requires a fresh attachment.
+ */
+@InternalMediampApi
+external fun nAttachRenderEnvironmentOpenGL(
+    ptr: Long,
+    component: Component,
+    shareContext: Long,
+    drawable: Long,
+    window: Long,
+): Boolean
+
+@InternalMediampApi
+external fun nCreateRenderContextOpenGL(ptr: Long): Boolean
+
+@InternalMediampApi
+external fun nDestroyRenderContextOpenGL(ptr: Long): Boolean
+
+@InternalMediampApi
+external fun nSetSurfaceConfigOpenGL(
+    ptr: Long,
+    width: Int,
+    height: Int,
+    consumerEnvironmentPtr: Long,
+): Boolean
+
+/** Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) | height(14) | serial(16). */
+@InternalMediampApi
+external fun nGetFrameStateOpenGL(ptr: Long): Long
+
+/** Shared GL_TEXTURE_2D name of ring buffer [index], or 0 when no active ring exists. */
+@InternalMediampApi
+external fun nGetBufferTextureOpenGL(ptr: Long, index: Int): Long
+
+/** Signals that Skia no longer references the retired shared-texture generation. */
+@InternalMediampApi
+external fun nAckRetiredBuffersOpenGL(ptr: Long): Boolean
+
+@InternalMediampApi
+external fun nHasOpenGLSurface(ptr: Long): Boolean
+
+/** Saves the latest producer texture through native debug readback. */
+@InternalMediampApi
+external fun nSaveSurfacePngOpenGL(ptr: Long, path: String): Boolean
+
+/**
+ * Creates a consumer-context FBO and attaches [textureName]. This must be called only
+ * while Skiko's GLX context is current. The producer owns the texture; Kotlin owns and
+ * later deletes the returned FBO in the same consumer context.
+ */
+@InternalMediampApi
+external fun nCreateOpenGLConsumerFbo(textureName: Long): Int
+
+/** Deletes a consumer FBO previously returned by [nCreateOpenGLConsumerFbo]. */
+@InternalMediampApi
+external fun nDeleteOpenGLConsumerFbo(fbo: Int): Boolean
 @OptIn(InternalMediampApi::class)
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {
     error("only implemented on Android")

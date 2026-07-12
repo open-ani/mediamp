@@ -78,7 +78,21 @@ class MpvZeroConfigTest {
                         extraFiles = MediaExtraFiles.EMPTY,
                     ),
                 )
-                player.resume()
+                if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {
+                    // Linux public playback intentionally waits for a live Skiko GLX
+                    // environment before loadfile. This zero-config case only probes the
+                    // bundled runtime's HTTP/header support against an intentional 404;
+                    // the real public playback path is covered by the GLX validation lane.
+                    assertTrue(
+                        player.handle.command(
+                            "loadfile",
+                            "http://127.0.0.1:${server.address.port}/video.mp4",
+                            "replace",
+                        ),
+                    )
+                } else {
+                    player.resume()
+                }
 
                 val didOpenHttpStream = withContext(Dispatchers.IO) {
                     requestSeen.await(10, TimeUnit.SECONDS)

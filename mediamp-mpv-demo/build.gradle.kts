@@ -55,15 +55,16 @@ tasks.matching { it.name == "run" }.configureEach {
     dependsOn(compileNativeBridge)
 }
 
-// Production mediamp-mpv path (Windows D3D11 / macOS Metal) against a locally
+// Production mediamp-mpv path (Windows D3D11 / macOS Metal / Linux GLX) against a locally
 // assembled runtime: ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
 tasks.register<JavaExec>("runD3D11") {
     group = "mediamp"
-    description = "Run the production mediamp-mpv demo (D3D11 on Windows, Metal on macOS)"
+    description = "Run the production mediamp-mpv demo (D3D11 on Windows, Metal on macOS, GLX on Linux)"
     mainClass = "org.openani.mediamp.mpvdemo.MpvD3D11MainKt"
     classpath = sourceSets["main"].runtimeClasspath
     val runtimeTarget = when {
         System.getProperty("os.name").contains("Windows") -> "WindowsX64"
+        System.getProperty("os.name").contains("Linux") -> "LinuxX64"
         System.getProperty("os.arch") == "aarch64" -> "MacosArm64"
         else -> "MacosX64"
     }

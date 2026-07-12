@@ -216,9 +216,20 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
     mesonOptions = commonMesonOptions + listOf(
         "-Dgl=enabled",
         "-Dgl-x11=enabled",
+        // Keep the existing libmpv EGL-X11 build capability. mediamp's Compose surface
+        // bridge implemented in this module supports GLX only; it does not use EGL.
         "-Degl=enabled",
         "-Degl-x11=enabled",
         "-Dx11=enabled",
+        // Override the conservative common defaults for Linux. This compiles mpv's
+        // CUDA hwdevice and CUDA/OpenGL mapper so NVDEC frames can be registered
+        // directly in the GLX producer context without a CPU frame copy.
+        "-Dcuda-hwaccel=enabled",
+        "-Dcuda-interop=enabled",
+        // Enables Intel/AMD VAAPI device creation and the explicit vaapi-copy
+        // fallback. Direct VAAPI/OpenGL import is not used by the GLX producer.
+        "-Dvaapi=enabled",
+        "-Dvaapi-x11=enabled",
         "-Dd3d11=disabled",
         "-Ddirect3d=disabled",
         "-Dwasapi=disabled",
@@ -229,7 +240,9 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
     jni = MpvJniToolchain(
         compilerCommand = jniCompilerFallback(this, default = "g++"),
         compilerArgs = listOf("-pthread", CPP_STANDARD_FLAG, "-fPIC", "-shared"),
-        linkerArgs = listOf("-pthread", "-Wl,-rpath,\$ORIGIN"),
+        // GLX producer context/pbuffer bridge (glx_context_provider.cpp). libmpv's GL
+        // renderer resolves entry points through libGL/dl, while debug PNG output uses zlib.
+        linkerArgs = listOf("-pthread", "-Wl,-rpath,\$ORIGIN", "-lGL", "-lX11", "-ldl", "-lz"),
         outputFileName = "libmediampv.so",
         sourceExtensions = setOf("cpp"),
         useJdkIncludes = true,

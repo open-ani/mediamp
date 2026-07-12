@@ -34,8 +34,8 @@ import org.openani.mediamp.source.UriMediaData
 
 /**
  * Smoke-test entry for the production mediamp-mpv render path (Windows D3D11 / macOS
- * Metal): the real [MpvMediampPlayer] + [MpvMediampPlayerSurface], loading the native
- * runtime from a local mpv assemble output.
+ * Metal / Linux GLX): the real [MpvMediampPlayer] + [MpvMediampPlayerSurface], loading
+ * the native runtime from a local mpv assemble output.
  *
  * Run: ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
  * Plays mpv's built-in lavfi test source when no video is given.
@@ -45,13 +45,20 @@ fun main(args: Array<String>) {
         ?: System.getProperty("mpvdemo.video")
         ?: "av://lavfi:testsrc2=size=1280x720:rate=60"
 
+    val hostRuntimeTask = when {
+        System.getProperty("os.name").contains("Windows") -> "mpvAssembleWindowsX64"
+        System.getProperty("os.name").contains("Linux") -> "mpvAssembleLinuxX64"
+        System.getProperty("os.arch") == "aarch64" -> "mpvAssembleMacosArm64"
+        else -> "mpvAssembleMacosX64"
+    }
     val runtimeDir = requireNotNull(System.getProperty("mediamp.mpv.runtime.dir")) {
-        "mediamp.mpv.runtime.dir must point at the mpv runtime (run :mediamp-mpv:mpvAssembleWindowsX64 first)"
+        "mediamp.mpv.runtime.dir must point at an assembled mpv runtime " +
+            "(run :mediamp-mpv:$hostRuntimeTask first)"
     }
     MpvMediampPlayer.prepareLibraries(runtimeDir, extractRuntimeLibrary = false)
 
     singleWindowApplication(
-        title = "mediamp mpv D3D11",
+        title = "mediamp mpv production renderer (D3D11 / Metal / GLX)",
         state = WindowState(size = DpSize(1280.dp, 800.dp)),
     ) {
         val player = remember { MpvMediampPlayer(Any(), Dispatchers.Default) }
@@ -91,7 +98,7 @@ fun main(args: Array<String>) {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 MpvMediampPlayerSurface(player, Modifier.fillMaxSize())
                 DemoOverlay(
-                    title = "mediamp-mpv production path (D3D11/Metal)",
+                    title = "mediamp-mpv production path (D3D11/Metal/GLX)",
                     statusLine = loadError
                         ?: "state: $playbackState   uri: $videoUri",
                     statusOk = loadError == null && playbackState == org.openani.mediamp.PlaybackState.PLAYING,
