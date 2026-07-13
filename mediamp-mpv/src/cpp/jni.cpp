@@ -175,7 +175,7 @@ JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr)
         return instance->initialize();
     } catch (const std::exception &e) {
         // initialize() throws on unrecoverable init failure; surface the concrete reason.
-        mediampv::throw_illegal_state(env, e.what());
+        mediampv::throw_illegal_state(env, e.what(), instance);
         return JNI_FALSE;
     }
 }
@@ -200,7 +200,7 @@ JNIEXPORT jboolean JNICALL FN(nCommand)(JNIEnv *env, jclass clazz, jlong ptr, jo
 
     const jsize len = env->GetArrayLength(args);
     if (len >= 128) {
-        LOGE("nCommand: too many arguments (%d >= 128)", len);
+        LOG(instance, mediampv::LOG_LEVEL_ERROR, "nCommand: too many arguments (%d >= 128)", len);
         return JNI_FALSE;
     }
 

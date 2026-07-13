@@ -67,7 +67,7 @@ namespace mediampv {
 
 bool mpv_handle_t::create_render_context() {
     if (!handle_) {
-        LOGE("create_render_context: mpv handle is null");
+        LOG(this, LOG_LEVEL_ERROR, "create_render_context: mpv handle is null");
         return false;
     }
     if (render_context_) return true;
@@ -82,19 +82,19 @@ bool mpv_handle_t::create_render_context() {
     GLint num_pixel_formats = 0;
     CGLError cgl_err = CGLChoosePixelFormat(attrs, &pixel_format, &num_pixel_formats);
     if (cgl_err != kCGLNoError || !pixel_format) {
-        LOGE("CGLChoosePixelFormat failed: %d", cgl_err);
+        LOG(this, LOG_LEVEL_ERROR, "CGLChoosePixelFormat failed: %d", cgl_err);
         return false;
     }
     CGLContextObj context = nullptr;
     cgl_err = CGLCreateContext(pixel_format, nullptr, &context);
     CGLDestroyPixelFormat(pixel_format);
     if (cgl_err != kCGLNoError || !context) {
-        LOGE("CGLCreateContext failed: %d", cgl_err);
+        LOG(this, LOG_LEVEL_ERROR, "CGLCreateContext failed: %d", cgl_err);
         return false;
     }
 
     CGLSetCurrentContext(context);
-    LOGI("mpv render GL: %s / %s",
+    LOG(this, LOG_LEVEL_INFO, "mpv render GL: %s / %s",
         (const char *) glGetString(GL_VERSION), (const char *) glGetString(GL_RENDERER));
 
     mpv_opengl_init_params gl_init_params{
@@ -109,7 +109,8 @@ bool mpv_handle_t::create_render_context() {
     int create_result = mpv_render_context_create(&render_context_, handle_, params);
     CGLSetCurrentContext(nullptr);
     if (create_result < 0) {
-        LOGE("mpv_render_context_create failed: %s", mpv_error_string(create_result));
+        LOG(this, LOG_LEVEL_ERROR,
+            "mpv_render_context_create failed: %s", mpv_error_string(create_result));
         render_context_ = nullptr;
         CGLDestroyContext(context);
         return false;
@@ -314,7 +315,7 @@ bool mpv_handle_t::apply_config_locked() {
         ok = allocate_buffer(buffers_[i], width, height, (__bridge void *) device);
     }
     if (!ok) {
-        LOGE("buffer ring allocation failed (%dx%d)", width, height);
+        LOG(this, LOG_LEVEL_ERROR, "buffer ring allocation failed (%dx%d)", width, height);
         destroy_buffer_ring(buffers_);
         latest_index_ = -1;
         buffer_width_ = buffer_height_ = 0;
@@ -331,7 +332,8 @@ bool mpv_handle_t::apply_config_locked() {
     latest_index_ = -1;
     ++buffer_generation_;
     publish_state_locked();
-    LOGI("buffer ring allocated %dx%d gen=%u", width, height, buffer_generation_);
+    LOG(this, LOG_LEVEL_INFO,
+        "buffer ring allocated %dx%d gen=%u", width, height, buffer_generation_);
     return true;
 }
 
@@ -344,7 +346,7 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
     };
     IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) surface_props);
     if (!surface) {
-        LOGE("IOSurfaceCreate failed (%dx%d)", width, height);
+        LOG(this, LOG_LEVEL_ERROR, "IOSurfaceCreate failed (%dx%d)", width, height);
         return false;
     }
 
@@ -357,7 +359,7 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
         GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, surface, 0);
     glBindTexture(GL_TEXTURE_RECTANGLE, 0);
     if (cgl_err != kCGLNoError) {
-        LOGE("CGLTexImageIOSurface2D failed: %d", cgl_err);
+        LOG(this, LOG_LEVEL_ERROR, "CGLTexImageIOSurface2D failed: %d", cgl_err);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
         return false;
@@ -370,7 +372,7 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
     GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
-        LOGE("IOSurface FBO incomplete: 0x%x", fbo_status);
+        LOG(this, LOG_LEVEL_ERROR, "IOSurface FBO incomplete: 0x%x", fbo_status);
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
@@ -389,7 +391,7 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
                                                           iosurface:surface
                                                               plane:0];
     if (!metal_texture) {
-        LOGE("newTextureWithDescriptor:iosurface: failed");
+        LOG(this, LOG_LEVEL_ERROR, "newTextureWithDescriptor:iosurface: failed");
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
@@ -513,7 +515,7 @@ bool mpv_handle_t::read_surface_pixels(
     if (!surface) return false;
 
     if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
-        LOGE("read_surface_pixels: IOSurfaceLock failed");
+        LOG(this, LOG_LEVEL_ERROR, "read_surface_pixels: IOSurfaceLock failed");
         return false;
     }
     const auto *base = (const uint8_t *) IOSurfaceGetBaseAddress(surface);
@@ -539,17 +541,17 @@ bool mpv_handle_t::read_surface_pixels(
 bool mpv_handle_t::save_surface_png(const char *path) {
     std::lock_guard<std::mutex> guard(render_mutex_);
     if (!buffers_allocated_ || latest_index_ < 0 || !path) {
-        LOGW("save_surface_png: no surface/frame available");
+        LOG(this, LOG_LEVEL_WARN, "save_surface_png: no surface/frame available");
         return false;
     }
     auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
     if (!surface) {
-        LOGE("save_surface_png: IOSurface is null");
+        LOG(this, LOG_LEVEL_ERROR, "save_surface_png: IOSurface is null");
         return false;
     }
 
     if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
-        LOGE("IOSurfaceLock failed");
+        LOG(this, LOG_LEVEL_ERROR, "IOSurfaceLock failed");
         return false;
     }
     bool ok = false;
@@ -578,7 +580,7 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     CGDataProviderRelease(provider);
     CGColorSpaceRelease(color_space);
     IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
-    if (!ok) LOGE("save_surface_png failed for %s", path);
+    if (!ok) LOG(this, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
     return ok;
 }
 

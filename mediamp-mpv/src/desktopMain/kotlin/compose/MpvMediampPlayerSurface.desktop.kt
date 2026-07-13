@@ -72,12 +72,12 @@ private fun MpvMediampPlayerSurfaceRing(
     val window = LocalWindow.current
     val interop: SkiaRenderDeviceInterop? = remember(window) {
         if (window == null) {
-            MPVLog.warn("LocalWindow.current is null; cannot locate SkiaLayer, video stays black")
+            MPVLog.warn(player.handle.ptr, "LocalWindow.current is null; cannot locate SkiaLayer, video stays black")
             return@remember null
         }
         val layer = window.findSkiaLayer()
         if (layer == null) {
-            MPVLog.warn("no SkiaLayer found in window $window; video stays black")
+            MPVLog.warn(player.handle.ptr, "no SkiaLayer found in window $window; video stays black")
             return@remember null
         }
         runCatching {
@@ -87,7 +87,7 @@ private fun MpvMediampPlayerSurfaceRing(
                 else -> null
             }
         }
-            .onFailure { MPVLog.error("Skia device interop init failed; video stays black", it) }
+            .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
     }
     val frameTick = remember { mutableLongStateOf(0L) }
@@ -97,7 +97,7 @@ private fun MpvMediampPlayerSurfaceRing(
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
     fun logOnce(state: String, level: Int = MPVLog.DEBUG) {
-        if (loggedStates.add(state)) MPVLog.log(level, state)
+        if (loggedStates.add(state)) MPVLog.log(player.handle.ptr, level, state)
     }
 
     DisposableEffect(player) {

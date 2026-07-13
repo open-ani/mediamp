@@ -321,7 +321,7 @@ internal class MpvSurfaceRing(
 
     private val loggedStates = mutableSetOf<String>()
     private fun logOnce(message: String, level: Int = MPVLog.WARN, throwable: Throwable? = null) {
-        if (loggedStates.add(message)) MPVLog.log(level, message, throwable)
+        if (loggedStates.add(message)) MPVLog.log(handlePtr, level, message, throwable)
     }
 
     fun release() {

@@ -29,14 +29,27 @@ void log_print(int level, const char *format, ...)
 #endif
         ;
 
+// Instance-aware overload. instance_handle is the address of the owning mpv_handle_t;
+// Kotlin receives the same address as onNativeLog(instanceHandle, ...). A null handle is
+// reported as 0L and is reserved for process-wide logs that do not belong to one instance.
+void log_print(const void *instance_handle, int level, const char *format, ...)
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 3, 4)))
+#endif
+        ;
+
 // Forwards an already-formatted line that carries its own prefix (used for mpv's own log
 // messages from MPV_EVENT_LOG_MESSAGE). Same dispatch and fallback behaviour as log_print.
 void log_forward(int level, const char *prefix, const char *text);
+void log_forward(const void *instance_handle, int level, const char *prefix, const char *text);
 
 } // namespace mediampv
 
-// Canonical form: LOG(level, fmt, ...) with an explicit mediampv::LOG_LEVEL_* level.
-#define LOG(level, ...) ::mediampv::log_print((level), __VA_ARGS__)
+// Canonical forms, selected by the overloaded log_print function:
+//   LOG(level, fmt, ...)
+//   LOG(instanceHandle, level, fmt, ...)
+// instanceHandle must be the owning mpv_handle_t pointer (or another const void *).
+#define LOG(...) ::mediampv::log_print(__VA_ARGS__)
 
 // Level-tagged conveniences (preferred at call sites; each encodes the level in its name).
 #define LOGF(...) ::mediampv::log_print(::mediampv::LOG_LEVEL_FATAL, __VA_ARGS__)
