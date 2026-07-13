@@ -17,6 +17,8 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nAckRetiredBuffersD3D11
@@ -39,6 +41,17 @@ import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 
 internal const val SURFACE_RING_BUFFER_COUNT = 3
+
+/**
+ * The native surface-ring backend for the current host: macOS renders through
+ * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures
+ * (render_d3d11.cpp). Returns `null` where no render path exists (Linux, TODO).
+ */
+internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs) {
+    OS.MacOS -> MacosSurfaceRingBackend
+    OS.Windows -> D3D11SurfaceRingBackend
+    else -> null
+}
 
 /**
  * Platform half of the native surface-ring render path: the JNI entry points plus how

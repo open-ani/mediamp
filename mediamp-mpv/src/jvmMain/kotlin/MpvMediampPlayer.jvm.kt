@@ -413,18 +413,6 @@ abstract class JvmMpvMediampPlayer(
      * Used by the frame-preview decoder to mirror the main player's media.
      */
     internal fun currentMediaDataOrNull(): MediaData? = openResource.value?.mediaData
-
-    /**
-     * Loads the media previously set via [setMediaData] into mpv with playback paused,
-     * WITHOUT transitioning the public [playbackState]. mpv decodes and displays the first
-     * frame, then stays paused. Used by the frame-preview decoder instance, which drives
-     * the handle directly and never "plays".
-     */
-    internal fun commandLoadFilePaused(): Boolean {
-        val media = openResource.value ?: return false
-        handle.setPropertyBoolean("pause", true)
-        return handle.command("loadfile", media.loadTarget, "replace")
-    }
 }
 
 /**
