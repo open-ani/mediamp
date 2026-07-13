@@ -63,12 +63,13 @@ tasks.register<JavaExec>("runD3D11") {
     mainClass = "org.openani.mediamp.mpvdemo.MpvD3D11MainKt"
     classpath = sourceSets["main"].runtimeClasspath
     val runtimeTarget = when {
-        System.getProperty("os.name").contains("Windows") -> "WindowsX64"
+        System.getProperty("os.name").contains("Windows") ->
+            if (System.getProperty("os.arch") == "aarch64") "WindowsArm64" else "WindowsX64"
         System.getProperty("os.name").contains("Linux") -> "LinuxX64"
         System.getProperty("os.arch") == "aarch64" -> "MacosArm64"
         else -> "MacosX64"
     }
-    val runtimeSubdir = if (runtimeTarget == "WindowsX64") "bin" else "lib"
+    val runtimeSubdir = if (runtimeTarget.startsWith("Windows")) "bin" else "lib"
     systemProperty(
         "mediamp.mpv.runtime.dir",
         project(":mediamp-mpv").layout.buildDirectory

@@ -9,6 +9,7 @@
 package mpv
 
 import Os
+import Arch
 import getPropertyOrNull
 import nativebuild.AndroidAbi
 import nativebuild.androidTargetName
@@ -81,6 +82,8 @@ internal data class MpvBuildTarget(
     val wrapDependencies: List<String> = emptyList(),
     val wrapFiles: Map<String, String> = emptyMap(),
     val msys2Packages: List<String> = emptyList(),
+    /** MSYS2 subsystem prefix used by Windows targets (`ucrt64` or `clangarm64`). */
+    val msysSubsystem: String? = null,
     /**
      * Version probe command lines identifying the meson toolchain and the system
      * libraries mpv links against (see [nativebuild.ToolchainFingerprintValueSource]).
@@ -159,28 +162,61 @@ private fun jniCompilerFallback(context: MpvBuildContext, default: String): Stri
 // Windows
 // ---------------------------------------------------------------------------------------
 
-internal fun MpvBuildContext.windowsTarget(): MpvBuildTarget {
+internal fun MpvBuildContext.windowsTarget(): MpvBuildTarget = when (hostArch) {
+    Arch.AARCH64 -> windowsTarget(
+        name = "WindowsArm64",
+        ffmpegTargetName = "WindowsArm64",
+        msystem = "CLANGARM64",
+        msysSubsystem = "clangarm64",
+        packagePrefix = "mingw-w64-clang-aarch64",
+        compilerExecutable = "clang++.exe",
+        compilerPackage = "clang",
+    )
+
+    Arch.X86_64 -> windowsTarget(
+        name = "WindowsX64",
+        ffmpegTargetName = "WindowsX64",
+        msystem = "UCRT64",
+        msysSubsystem = "ucrt64",
+        packagePrefix = "mingw-w64-ucrt-x86_64",
+        compilerExecutable = "g++.exe",
+        compilerPackage = "gcc",
+    )
+
+    Arch.UNKNOWN -> error("Failed to configure mpv tasks, unknown Windows host architecture.")
+}
+
+private fun MpvBuildContext.windowsTarget(
+    name: String,
+    ffmpegTargetName: String,
+    msystem: String,
+    msysSubsystem: String,
+    packagePrefix: String,
+    compilerExecutable: String,
+    compilerPackage: String,
+): MpvBuildTarget {
     val msys2Root = project.resolveMsys2Dir()
     val msys2Packages = listOf(
         "git",
-        "mingw-w64-ucrt-x86_64-ca-certificates",
-        "mingw-w64-ucrt-x86_64-gcc",
-        "mingw-w64-ucrt-x86_64-libass",
-        "mingw-w64-ucrt-x86_64-libplacebo",
-        "mingw-w64-ucrt-x86_64-meson",
-        "mingw-w64-ucrt-x86_64-ninja",
-        "mingw-w64-ucrt-x86_64-pkgconf",
-        "mingw-w64-ucrt-x86_64-python-certifi",
-        "mingw-w64-ucrt-x86_64-python",
-        "mingw-w64-ucrt-x86_64-shaderc",
-        "mingw-w64-ucrt-x86_64-spirv-cross",
+        "$packagePrefix-ca-certificates",
+        "$packagePrefix-$compilerPackage",
+        "$packagePrefix-libass",
+        "$packagePrefix-libplacebo",
+        "$packagePrefix-meson",
+        "$packagePrefix-ninja",
+        "$packagePrefix-pkgconf",
+        "$packagePrefix-python-certifi",
+        "$packagePrefix-python",
+        "$packagePrefix-shaderc",
+        "$packagePrefix-spirv-cross",
     )
     return MpvBuildTarget(
-        name = "WindowsX64",
+        name = name,
         family = "windows",
-        ffmpegTargetName = "WindowsX64",
+        ffmpegTargetName = ffmpegTargetName,
         shell = msys2Root.resolve("usr/bin/bash.exe").absolutePath,
-        env = mapOf("MSYSTEM" to "UCRT64"),
+        env = mapOf("MSYSTEM" to msystem),
+        msysSubsystem = msysSubsystem,
         msys2Packages = msys2Packages,
         toolchainProbes = listOf(
             listOf(msys2Root.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages,
@@ -204,7 +240,7 @@ internal fun MpvBuildContext.windowsTarget(): MpvBuildTarget {
             "-Daaudio=disabled",
         ),
         jni = MpvJniToolchain(
-            compilerCommand = pathForShell(msys2Root.resolve("ucrt64/bin/g++.exe"), true),
+            compilerCommand = pathForShell(msys2Root.resolve("$msysSubsystem/bin/$compilerExecutable"), true),
             compilerArgs = listOf(CPP_STANDARD_FLAG, "-fPIC", "-shared", "-D_WIN32_WINNT=0x0A00"),
             // D3D11 render path (render_d3d11.cpp); windowscodecs/ole32 are for the WIC PNG readback.
             linkerArgs = listOf("-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid", "-lwindowscodecs", "-lole32"),
@@ -433,6 +469,7 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
         androidAbi = abi,
         shell = if (hostOs == Os.Windows) project.resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath else "bash",
         env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
+        msysSubsystem = if (hostOs == Os.Windows) "ucrt64" else null,
         toolchainProbes = toolchainProbes,
         wrapDependencies = listOf(
             "expat",

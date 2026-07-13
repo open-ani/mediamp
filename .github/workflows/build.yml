@@ -125,12 +125,21 @@ jobs:
         msystem: 'CLANGARM64'
         update: 'true'
         install: |-
+          git
           mingw-w64-clang-aarch64-clang
           mingw-w64-clang-aarch64-lld
+          mingw-w64-clang-aarch64-libass
+          mingw-w64-clang-aarch64-libplacebo
+          mingw-w64-clang-aarch64-meson
+          mingw-w64-clang-aarch64-ninja
           mingw-w64-clang-aarch64-pkgconf
           mingw-w64-clang-aarch64-nasm
           mingw-w64-clang-aarch64-openssl
           mingw-w64-clang-aarch64-ca-certificates
+          mingw-w64-clang-aarch64-python-certifi
+          mingw-w64-clang-aarch64-python
+          mingw-w64-clang-aarch64-shaderc
+          mingw-w64-clang-aarch64-spirv-cross
     - id: 'step-5'
       name: 'Configure MSYS2 root'
       run: |-
@@ -147,14 +156,21 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-8'
-      name: 'Build FFmpeg artifacts'
-      run: './gradlew :mediamp-ffmpeg:ffmpegBuildAll "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+      name: 'Check'
+      uses: 'nick-fields/retry@v2'
+      with:
+        timeout_minutes: '60'
+        max_attempts: '2'
+        command: './gradlew :mediamp-mpv:desktopTest "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-9'
-      name: 'Build FFmpeg runtime jar'
-      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+      name: 'Build FFmpeg artifacts'
+      run: './gradlew :mediamp-ffmpeg:ffmpegBuildAll "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-10'
+      name: 'Build FFmpeg runtime jar'
+      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
+    - id: 'step-11'
       name: 'Upload FFmpeg runtime jar'
       uses: 'actions/upload-artifact@v4'
       with:
@@ -162,6 +178,16 @@ jobs:
         path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar'
         if-no-files-found: 'error'
         overwrite: 'true'
+    - id: 'step-12'
+      name: 'Build mpv runtime jar'
+      run: './gradlew :mediamp-mpv:mpvRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
+    - id: 'step-13'
+      name: 'Verify mpv zero-config loading'
+      run: './gradlew :mediamp-mpv:zeroConfigTest "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
+    - id: 'step-14'
+      name: 'Verify mpv Maven publication'
+      # windows-11-arm does not provide an Android SDK; validate only the ARM64 runtime publication.
+      run: './gradlew "-Dmaven.repo.local=mediamp-mpv/build/maven-local" :mediamp-mpv:publishMpvRuntimeWindowsArm64PublicationToMavenLocal "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
   build_github-ubuntu-2404:
     name: 'Build (Ubuntu 24.04 x86_64)'
     runs-on:

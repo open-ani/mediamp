@@ -46,7 +46,8 @@ fun main(args: Array<String>) {
         ?: "av://lavfi:testsrc2=size=1280x720:rate=60"
 
     val hostRuntimeTask = when {
-        System.getProperty("os.name").contains("Windows") -> "mpvAssembleWindowsX64"
+        System.getProperty("os.name").contains("Windows") ->
+            if (System.getProperty("os.arch") == "aarch64") "mpvAssembleWindowsArm64" else "mpvAssembleWindowsX64"
         System.getProperty("os.name").contains("Linux") -> "mpvAssembleLinuxX64"
         System.getProperty("os.arch") == "aarch64" -> "mpvAssembleMacosArm64"
         else -> "mpvAssembleMacosX64"

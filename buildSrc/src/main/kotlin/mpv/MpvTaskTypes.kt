@@ -75,6 +75,10 @@ abstract class MpvConfigureTask : DefaultTask() {
 
     @get:Input
     @get:Optional
+    abstract val msysSubsystem: Property<String>
+
+    @get:Input
+    @get:Optional
     abstract val crossFileContent: Property<String>
 
     /**
@@ -107,6 +111,7 @@ abstract class MpvConfigureTask : DefaultTask() {
         val mesonBuildDir = buildRoot.resolve("meson")
         val installDir = buildRoot.resolve("install")
         val windowsMsys = hostOsName.get() == "Windows"
+        val windowsMsysPrefix = msysSubsystem.orNull ?: "ucrt64"
         val ffmpegInstall = ffmpegInstallDir.get().asFile
 
         require(ffmpegInstall.isDirectory) {
@@ -147,8 +152,8 @@ abstract class MpvConfigureTask : DefaultTask() {
         if (windowsMsys) {
             val msys2Root = msys2Dir.orNull?.asFile
                 ?: error("MSYS2 directory must be configured for Windows mpv builds.")
-            val certFile = msys2Root.resolve("ucrt64/etc/ssl/cert.pem")
-            val certDir = msys2Root.resolve("ucrt64/etc/ssl/certs")
+            val certFile = msys2Root.resolve("$windowsMsysPrefix/etc/ssl/cert.pem")
+            val certDir = msys2Root.resolve("$windowsMsysPrefix/etc/ssl/certs")
             if (certFile.isFile) {
                 baseEnv["SSL_CERT_FILE"] = pathForShell(certFile, windowsMsys)
             }
@@ -166,7 +171,7 @@ abstract class MpvConfigureTask : DefaultTask() {
         } else {
             val prefix = pathForShell(pkgConfigDir, windowsMsys)
             val defaultPkgConfigPaths = if (windowsMsys) {
-                listOf("/ucrt64/lib/pkgconfig", "/ucrt64/share/pkgconfig")
+                listOf("/$windowsMsysPrefix/lib/pkgconfig", "/$windowsMsysPrefix/share/pkgconfig")
             } else {
                 emptyList()
             }
@@ -540,6 +545,10 @@ abstract class MpvAssembleTask : DefaultTask() {
     @get:Internal
     abstract val msys2Dir: DirectoryProperty
 
+    @get:Input
+    @get:Optional
+    abstract val msysSubsystem: Property<String>
+
     @get:Inject
     abstract val execOperations: ExecOperations
 
@@ -564,7 +573,13 @@ abstract class MpvAssembleTask : DefaultTask() {
             MpvRuntimePostProcessing.WINDOWS_COLLECT_DLLS -> {
                 val msys2Root = msys2Dir.orNull?.asFile
                     ?: error("MSYS2 directory must be configured for Windows mpv assembly.")
-                collectWindowsRuntimeDlls(execOperations, logger, msys2Root, runtimeDir)
+                collectWindowsRuntimeDlls(
+                    execOperations,
+                    logger,
+                    msys2Root,
+                    msysSubsystem.orNull ?: "ucrt64",
+                    runtimeDir,
+                )
             }
 
             MpvRuntimePostProcessing.MACOS_BUNDLE_DYLIBS -> {
@@ -731,10 +746,11 @@ private fun collectWindowsRuntimeDlls(
     execOperations: ExecOperations,
     logger: Logger,
     msys2Dir: File,
+    msysSubsystem: String,
     outputBin: File,
 ) {
-    val ucrt64Bin = msys2Dir.resolve("ucrt64/bin")
-    val objdumpExecutable = resolveWindowsObjdump(msys2Dir)
+    val msysBin = msys2Dir.resolve("$msysSubsystem/bin")
+    val objdumpExecutable = resolveWindowsObjdump(msys2Dir, "$msysSubsystem/bin")
     val copied = mutableSetOf<String>()
 
     fun shouldIgnore(dllName: String): Boolean = isWindowsSystemLibrary(dllName)
@@ -753,7 +769,7 @@ private fun collectWindowsRuntimeDlls(
                     return@forEach
                 }
 
-                val fromMsys = ucrt64Bin.resolve(dllName)
+                val fromMsys = msysBin.resolve(dllName)
                 if (fromMsys.exists()) {
                     fromMsys.copyTo(existing, overwrite = true)
                     if (copied.add(existing.name.lowercase())) {
