@@ -501,6 +501,37 @@ void mpv_handle_t::cleanup_render_resources() {
     }
 }
 
+// Copies the latest rendered frame (BGRA IOSurface) into ARGB_8888 ints. BGRA words
+// read as little-endian uint32 are already 0xAARRGGBB; alpha is forced opaque because
+// mpv leaves it undefined for opaque video. Holds render_mutex_ so the render thread
+// cannot cycle the ring back onto this buffer mid-read.
+bool mpv_handle_t::read_surface_pixels(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    if (!buffers_allocated_ || latest_index_ < 0) return false;
+    auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
+    if (!surface) return false;
+
+    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
+        LOGE("read_surface_pixels: IOSurfaceLock failed");
+        return false;
+    }
+    const auto *base = (const uint8_t *) IOSurfaceGetBaseAddress(surface);
+    size_t bpr = IOSurfaceGetBytesPerRow(surface);
+    size_t width = IOSurfaceGetWidth(surface);
+    size_t height = IOSurfaceGetHeight(surface);
+    out_pixels.resize(width * height);
+    for (size_t y = 0; y < height; ++y) {
+        const auto *src = (const uint32_t *) (base + y * bpr);
+        uint32_t *dst = out_pixels.data() + y * width;
+        for (size_t x = 0; x < width; ++x) dst[x] = src[x] | 0xFF000000u;
+    }
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+    out_width = (int) width;
+    out_height = (int) height;
+    return true;
+}
+
 // Writes the latest rendered frame (BGRA IOSurface) as PNG. Independent of mpv's
 // screenshot pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU
 // download. Holds render_mutex_ for the whole save so the render thread cannot cycle

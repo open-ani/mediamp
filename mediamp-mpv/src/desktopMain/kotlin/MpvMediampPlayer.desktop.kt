@@ -72,8 +72,9 @@ actual class MpvMediampPlayer(
         surfaceRing?.release()
     }
 
-    internal fun dumpSurfaceForDebug(path: String): Boolean =
-        ringBackend?.saveSurfacePng(handle.ptr, path) ?: false
+    /** See [MpvSurfaceRingBackend.readSurfacePixels]. */
+    internal fun readSurfacePixels(dims: IntArray): IntArray? =
+        ringBackend?.readSurfacePixels(handle.ptr, dims)
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot

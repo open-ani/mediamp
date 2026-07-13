@@ -31,9 +31,7 @@ import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
-import javax.imageio.ImageIO
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
@@ -194,16 +192,9 @@ internal class MpvFramePreview(
             // the surface content is still correct, so a timeout here is not an error.
             withTimeoutOrNull(500) { renderCounter.first { it > counterBefore } }
 
-            val tmp = File.createTempFile("mediamp-mpv-preview", ".png")
-            try {
-                if (!player.dumpSurfaceForDebug(tmp.absolutePath)) return null
-                val image = ImageIO.read(tmp) ?: return null
-                val pixels = IntArray(image.width * image.height)
-                image.getRGB(0, 0, image.width, image.height, pixels, 0, image.width)
-                return PreviewFrame(target, image.width, image.height, pixels)
-            } finally {
-                tmp.delete()
-            }
+            val dims = IntArray(2)
+            val pixels = player.readSurfacePixels(dims) ?: return null
+            return PreviewFrame(target, dims[0], dims[1], pixels)
         }
 
         /** Loads the media paused, sizes the surface ring to the video, waits for the first frame. */

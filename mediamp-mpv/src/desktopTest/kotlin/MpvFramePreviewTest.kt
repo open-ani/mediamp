@@ -230,7 +230,13 @@ class MpvFramePreviewTest {
         return target
     }
 
-    private fun findFfmpeg(): String? =
-        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
+    private fun findFfmpeg(): String? {
+        // The assembled Windows runtime ships ffmpeg.exe next to the natives.
+        System.getProperty("mediamp.mpv.dev.native.dir")
+            ?.let { File(it, "ffmpeg.exe") }
+            ?.takeIf { it.canExecute() }
+            ?.let { return it.absolutePath }
+        return listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
             .firstOrNull { File(it).canExecute() }
+    }
 }

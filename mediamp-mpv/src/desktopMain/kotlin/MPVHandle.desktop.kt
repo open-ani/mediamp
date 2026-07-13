@@ -50,6 +50,14 @@ external fun nHasMetalSurface(ptr: Long): Boolean
 @InternalMediampApi
 external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
 
+/**
+ * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
+ * top-down, alpha forced opaque), writing `[width, height]` into [dims] (size >= 2).
+ * Returns `null` when no frame is available.
+ */
+@InternalMediampApi
+external fun nReadSurfacePixelsMacos(ptr: Long, dims: IntArray): IntArray?
+
 // Windows render path (render_d3d11.cpp): a native render thread drives mpv through
 // the libmpv D3D11 render API into a ring of shared textures, each also opened on
 // Skia's D3D12 device as an ID3D12Resource.
@@ -91,6 +99,14 @@ external fun nHasD3D11Surface(ptr: Long): Boolean
 /** Saves the latest rendered frame (shared texture contents) as PNG. */
 @InternalMediampApi
 external fun nSaveSurfacePngD3D11(ptr: Long, path: String): Boolean
+
+/**
+ * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
+ * top-down, alpha forced opaque), writing `[width, height]` into [dims] (size >= 2).
+ * Returns `null` when no frame is available.
+ */
+@InternalMediampApi
+external fun nReadSurfacePixelsD3D11(ptr: Long, dims: IntArray): IntArray?
 
 @OptIn(InternalMediampApi::class)
 internal actual fun attachSurface(ptr: Long, surface: Any): Boolean {

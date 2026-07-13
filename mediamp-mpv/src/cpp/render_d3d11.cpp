@@ -23,7 +23,7 @@
 //
 // mpv leaves the alpha channel undefined for opaque video (see render_macos.mm); the
 // consumer ignores it by wrapping the texture with an opaque color type (RGB_888X), and
-// the PNG readback forces alpha to 255. No native alpha-fix pass is needed.
+// the CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
 
 #ifdef _WIN32
 
@@ -615,15 +615,15 @@ void mpv_handle_t::cleanup_render_resources() {
     safe_release(d3d_device_);
 }
 
-// Writes the latest rendered frame (RGBA shared texture) as PNG via a staging-texture
-// readback and WIC. Independent of mpv's screenshot pipeline, which cannot convert
-// hwdec (d3d11va) frames without zimg. Holds render_mutex_ for the whole save so the
+// Staging-texture readback of the latest rendered frame (RGBA shared texture) into
+// ARGB_8888 ints (0xAARRGGBB, which is BGRA byte order in little-endian memory) with
+// alpha forced opaque (mpv leaves it undefined). The caller holds render_mutex_ so the
 // render thread cannot cycle the ring back onto this buffer mid-read; the immediate
 // context is multithread-protected, so using it here while the render thread renders
 // is safe.
-bool mpv_handle_t::save_surface_png(const char *path) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    if (!buffers_allocated_ || latest_index_ < 0 || !path || !d3d_device_ || !d3d_context_) {
+bool mpv_handle_t::read_frame_argb_locked(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!buffers_allocated_ || latest_index_ < 0 || !d3d_device_ || !d3d_context_) {
         return false;
     }
     ID3D11Texture2D *source = buffers_[latest_index_].texture;
@@ -651,16 +651,40 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     }
 
     const UINT width = desc.Width, height = desc.Height;
-    // RGBA rows with alpha forced opaque (mpv leaves alpha undefined).
-    std::vector<uint8_t> pixels((size_t) width * height * 4);
+    out_pixels.resize((size_t) width * height);
     for (UINT y = 0; y < height; ++y) {
         const auto *src = (const uint8_t *) mapped.pData + (size_t) y * mapped.RowPitch;
-        uint8_t *dst = pixels.data() + (size_t) y * width * 4;
-        memcpy(dst, src, (size_t) width * 4);
-        for (UINT x = 0; x < width; ++x) dst[x * 4 + 3] = 0xFF;
+        uint32_t *dst = out_pixels.data() + (size_t) y * width;
+        for (UINT x = 0; x < width; ++x) {
+            dst[x] = 0xFF000000u | ((uint32_t) src[x * 4] << 16) |
+                ((uint32_t) src[x * 4 + 1] << 8) | src[x * 4 + 2];
+        }
     }
     d3d_context_->Unmap(staging, 0);
     staging->Release();
+    out_width = (int) width;
+    out_height = (int) height;
+    return true;
+}
+
+bool mpv_handle_t::read_surface_pixels(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    return read_frame_argb_locked(out_pixels, out_width, out_height);
+}
+
+// Writes the latest rendered frame as PNG via the staging-texture readback and WIC.
+// Independent of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va)
+// frames without zimg. render_mutex_ is only held for the readback; the encode works
+// on our own copy.
+bool mpv_handle_t::save_surface_png(const char *path) {
+    if (!path) return false;
+    std::vector<uint32_t> pixels;
+    int width = 0, height = 0;
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        if (!read_frame_argb_locked(pixels, width, height)) return false;
+    }
 
     scoped_co_init com;
     if (!com.usable) {
@@ -685,10 +709,13 @@ bool mpv_handle_t::save_surface_png(const char *path) {
         if (FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache))) break;
         if (FAILED(encoder->CreateNewFrame(&frame, nullptr))) break;
         if (FAILED(frame->Initialize(nullptr))) break;
-        if (FAILED(frame->SetSize(width, height))) break;
-        WICPixelFormatGUID format = GUID_WICPixelFormat32bppRGBA;
+        if (FAILED(frame->SetSize((UINT) width, (UINT) height))) break;
+        // ARGB ints are BGRA bytes in little-endian memory.
+        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
         if (FAILED(frame->SetPixelFormat(&format))) break;
-        if (FAILED(frame->WritePixels(height, width * 4, (UINT) pixels.size(), pixels.data()))) break;
+        if (FAILED(frame->WritePixels(
+                (UINT) height, (UINT) width * 4, (UINT) (pixels.size() * 4),
+                reinterpret_cast<BYTE *>(pixels.data())))) break;
         if (FAILED(frame->Commit())) break;
         if (FAILED(encoder->Commit())) break;
         ok = true;

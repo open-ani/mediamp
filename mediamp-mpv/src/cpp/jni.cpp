@@ -17,6 +17,32 @@ mediampv::mpv_handle_t *get_instance(jlong ptr) {
     return reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
 }
 
+#if defined(_WIN32) || defined(__APPLE__)
+// Shared body of nReadSurfacePixels{D3D11,Macos}: returns the latest frame as an ARGB
+// jintArray and writes [width, height] into dims, or null when no frame is available.
+jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims) {
+    auto *instance = get_instance(ptr);
+    if (!instance || !dims || env->GetArrayLength(dims) < 2) {
+        return nullptr;
+    }
+    std::vector<uint32_t> pixels;
+    int width = 0, height = 0;
+    if (!instance->read_surface_pixels(pixels, width, height) || pixels.empty()) {
+        return nullptr;
+    }
+    jintArray result = env->NewIntArray(static_cast<jsize>(pixels.size()));
+    if (!result) {
+        return nullptr; // OOM; exception pending
+    }
+    env->SetIntArrayRegion(
+        result, 0, static_cast<jsize>(pixels.size()),
+        reinterpret_cast<const jint *>(pixels.data()));
+    const jint dims_out[2] = {width, height};
+    env->SetIntArrayRegion(dims, 0, 2, dims_out);
+    return result;
+}
+#endif
+
 struct scoped_utf_chars final {
     scoped_utf_chars(JNIEnv *env, jstring string)
             : env(env), string(string), chars(string ? env->GetStringUTFChars(string, nullptr) : nullptr) {}
@@ -91,6 +117,7 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 #endif
 
 #ifdef __APPLE__
@@ -102,6 +129,7 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 #endif
 
 	/**
@@ -428,6 +456,10 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv * env, jclass
     return instance->save_surface_png(path_chars.get());
 }
 
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
+    return read_surface_pixels_to_java(env, ptr, dims);
+}
+
 #endif
 
 #ifdef __APPLE__
@@ -479,6 +511,10 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass claz
         return JNI_FALSE;
     }
     return instance->save_surface_png(path_chars.get());
+}
+
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
+    return read_surface_pixels_to_java(env, ptr, dims);
 }
 
 #endif
