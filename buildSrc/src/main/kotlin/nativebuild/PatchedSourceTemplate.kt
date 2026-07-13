@@ -4,16 +4,15 @@ import org.gradle.api.Project
 import org.gradle.api.file.Directory
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.Exec
-import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
 import java.io.File
 
 /**
- * The apply-patches -> snapshot -> revert-patches triplet both native modules use to turn
- * a git submodule plus an optional vendored patch into a stable source template for the
- * rest of the build. The patch is applied to the submodule working tree only for the
- * duration of the snapshot and reverted afterwards, so the submodule stays clean.
+ * Turns a git submodule plus an optional vendored patch into a stable source template for
+ * the rest of the build. The patch application happens inside [PrepareSourceTreeTask]
+ * itself (apply -> snapshot -> revert around the copy), keeping the submodule clean and
+ * the task's inputs deterministic.
  */
 internal class PatchedSourceTemplateSpec(
     /** Capitalized module tag used in task names, e.g. "Ffmpeg" -> `applyFfmpegPatches`. */
@@ -36,7 +35,9 @@ internal class PatchedSourceTemplateSpec(
 internal fun Project.registerPatchedSourceTemplate(
     spec: PatchedSourceTemplateSpec,
 ): TaskProvider<PrepareSourceTreeTask> {
-    val applyPatchesTask = tasks.register<Exec>("apply${spec.taskNameInfix}Patches") {
+    // Standalone developer conveniences for working on the patch itself; the template
+    // task no longer depends on them.
+    tasks.register<Exec>("apply${spec.taskNameInfix}Patches") {
         group = spec.taskGroup
         description = "Apply patches to the ${spec.sourceDisplayName} submodule source tree"
         enabled = spec.patchFile.exists()
@@ -45,7 +46,7 @@ internal fun Project.registerPatchedSourceTemplate(
         workingDir = spec.sourceDir
     }
 
-    val revertPatchesTask = tasks.register<Exec>("revert${spec.taskNameInfix}Patches") {
+    tasks.register<Exec>("revert${spec.taskNameInfix}Patches") {
         group = spec.taskGroup
         description = "Revert patches from the ${spec.sourceDisplayName} submodule source tree"
         enabled = spec.patchFile.exists()
@@ -57,11 +58,8 @@ internal fun Project.registerPatchedSourceTemplate(
     return tasks.register<PrepareSourceTreeTask>("prepare${spec.taskNameInfix}SourceTemplate") {
         group = spec.taskGroup
         description = "Create a stable ${spec.sourceDisplayName} source snapshot for this build"
-        dependsOn(applyPatchesTask)
-        finalizedBy(revertPatchesTask)
         if (spec.patchFile.exists()) {
-            inputs.file(spec.patchFile)
-                .withPathSensitivity(PathSensitivity.RELATIVE)
+            patchFile.set(spec.patchFile)
         }
         sourceDir.set(spec.sourceDir)
         outputDir.set(spec.outputDir)

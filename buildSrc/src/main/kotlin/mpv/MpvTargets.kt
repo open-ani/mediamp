@@ -35,6 +35,12 @@ internal data class MpvJniToolchain(
      * `{name}` is substituted; a trailing `*` matches any suffix (versioned `.so`).
      */
     val linkLibraryPatterns: List<String>,
+    /**
+     * Version probe command lines identifying the JNI compiler for the build cache
+     * (see [nativebuild.ToolchainFingerprintValueSource]). Must be runnable directly by
+     * the JVM (native paths, no MSYS path forms).
+     */
+    val versionProbes: List<List<String>> = emptyList(),
 )
 
 /** Post-assembly fixup making the runtime directory self-contained on each platform. */
@@ -75,6 +81,11 @@ internal data class MpvBuildTarget(
     val wrapDependencies: List<String> = emptyList(),
     val wrapFiles: Map<String, String> = emptyMap(),
     val msys2Packages: List<String> = emptyList(),
+    /**
+     * Version probe command lines identifying the meson toolchain and the system
+     * libraries mpv links against (see [nativebuild.ToolchainFingerprintValueSource]).
+     */
+    val toolchainProbes: List<List<String>> = emptyList(),
     val jni: MpvJniToolchain,
     val runtime: MpvRuntimeLayout,
 )
@@ -150,25 +161,29 @@ private fun jniCompilerFallback(context: MpvBuildContext, default: String): Stri
 
 internal fun MpvBuildContext.windowsTarget(): MpvBuildTarget {
     val msys2Root = project.resolveMsys2Dir()
+    val msys2Packages = listOf(
+        "git",
+        "mingw-w64-ucrt-x86_64-ca-certificates",
+        "mingw-w64-ucrt-x86_64-gcc",
+        "mingw-w64-ucrt-x86_64-libass",
+        "mingw-w64-ucrt-x86_64-libplacebo",
+        "mingw-w64-ucrt-x86_64-meson",
+        "mingw-w64-ucrt-x86_64-ninja",
+        "mingw-w64-ucrt-x86_64-pkgconf",
+        "mingw-w64-ucrt-x86_64-python-certifi",
+        "mingw-w64-ucrt-x86_64-python",
+        "mingw-w64-ucrt-x86_64-shaderc",
+        "mingw-w64-ucrt-x86_64-spirv-cross",
+    )
     return MpvBuildTarget(
         name = "WindowsX64",
         family = "windows",
         ffmpegTargetName = "WindowsX64",
         shell = msys2Root.resolve("usr/bin/bash.exe").absolutePath,
         env = mapOf("MSYSTEM" to "UCRT64"),
-        msys2Packages = listOf(
-            "git",
-            "mingw-w64-ucrt-x86_64-ca-certificates",
-            "mingw-w64-ucrt-x86_64-gcc",
-            "mingw-w64-ucrt-x86_64-libass",
-            "mingw-w64-ucrt-x86_64-libplacebo",
-            "mingw-w64-ucrt-x86_64-meson",
-            "mingw-w64-ucrt-x86_64-ninja",
-            "mingw-w64-ucrt-x86_64-pkgconf",
-            "mingw-w64-ucrt-x86_64-python-certifi",
-            "mingw-w64-ucrt-x86_64-python",
-            "mingw-w64-ucrt-x86_64-shaderc",
-            "mingw-w64-ucrt-x86_64-spirv-cross",
+        msys2Packages = msys2Packages,
+        toolchainProbes = listOf(
+            listOf(msys2Root.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages,
         ),
         mesonOptions = commonMesonOptions + listOf(
             "-Dgl=enabled",
@@ -197,6 +212,9 @@ internal fun MpvBuildContext.windowsTarget(): MpvBuildTarget {
             sourceExtensions = setOf("cpp"),
             useJdkIncludes = true,
             linkLibraryPatterns = listOf("lib{name}.dll.a", "{name}.lib"),
+            versionProbes = listOf(
+                listOf(msys2Root.resolve("ucrt64/bin/g++.exe").absolutePath, "--version"),
+            ),
         ),
         runtime = MpvRuntimeLayout(
             runtimeDirName = "bin",
@@ -213,6 +231,12 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
     name = "LinuxX64",
     family = "linux",
     ffmpegTargetName = "LinuxX64",
+    toolchainProbes = listOf(
+        listOf("cc", "--version"),
+        listOf("meson", "--version"),
+        listOf("ninja", "--version"),
+        listOf("pkg-config", "--modversion", "libass", "libplacebo"),
+    ),
     mesonOptions = commonMesonOptions + listOf(
         "-Dgl=enabled",
         "-Dgl-x11=enabled",
@@ -234,6 +258,9 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
         sourceExtensions = setOf("cpp"),
         useJdkIncludes = true,
         linkLibraryPatterns = listOf("lib{name}.so", "lib{name}.so.*"),
+        versionProbes = listOf(
+            listOf(jniCompilerFallback(this, default = "g++"), "--version"),
+        ),
     ),
     runtime = MpvRuntimeLayout(
         runtimeDirName = "lib",
@@ -269,6 +296,12 @@ private fun MpvBuildContext.macosTarget(
         name = name,
         family = "macos",
         ffmpegTargetName = name,
+        toolchainProbes = listOf(
+            listOf("clang", "--version"),
+            listOf("meson", "--version"),
+            listOf("ninja", "--version"),
+            listOf("pkg-config", "--modversion", "libass", "libplacebo"),
+        ),
         env = mapOf(
             "CC" to "clang",
             "CXX" to "clang++",
@@ -306,6 +339,9 @@ private fun MpvBuildContext.macosTarget(
         ),
         jni = MpvJniToolchain(
             compilerCommand = jniCompilerFallback(this, default = "clang++"),
+            versionProbes = listOf(
+                listOf(jniCompilerFallback(this, default = "clang++"), "--version"),
+            ),
             // -fobjc-arc is required by render_macos.mm; it has no effect on plain C++ sources.
             compilerArgs = archArgs + listOf("-fobjc-arc", CPP_STANDARD_FLAG, "-fPIC", "-dynamiclib"),
             // Metal/IOSurface render path (render_macos.mm)
@@ -353,6 +389,30 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
         """.trimIndent(),
     )
 
+    val msys2Packages = if (hostOs == Os.Windows) {
+        listOf(
+            "git",
+            "mingw-w64-ucrt-x86_64-ca-certificates",
+            "mingw-w64-ucrt-x86_64-gcc",
+            "mingw-w64-ucrt-x86_64-meson",
+            "mingw-w64-ucrt-x86_64-ninja",
+            "mingw-w64-ucrt-x86_64-pkgconf",
+            "mingw-w64-ucrt-x86_64-python-certifi",
+            "mingw-w64-ucrt-x86_64-python",
+        )
+    } else {
+        emptyList()
+    }
+    val toolchainProbes = buildList {
+        add(listOf(toolchain.cc.absolutePath, "--version"))
+        if (hostOs == Os.Windows) {
+            add(listOf(project.resolveMsys2Dir().resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages)
+        } else {
+            add(listOf("meson", "--version"))
+            add(listOf("ninja", "--version"))
+        }
+    }
+
     return MpvBuildTarget(
         name = androidTargetName(abi),
         family = "android",
@@ -360,6 +420,7 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
         androidAbi = abi,
         shell = if (hostOs == Os.Windows) project.resolveMsys2Dir().resolve("usr/bin/bash.exe").absolutePath else "bash",
         env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
+        toolchainProbes = toolchainProbes,
         wrapDependencies = listOf(
             "expat",
             "freetype2",
@@ -369,20 +430,7 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
             "zlib",
         ),
         wrapFiles = wrapFiles,
-        msys2Packages = if (hostOs == Os.Windows) {
-            listOf(
-                "git",
-                "mingw-w64-ucrt-x86_64-ca-certificates",
-                "mingw-w64-ucrt-x86_64-gcc",
-                "mingw-w64-ucrt-x86_64-meson",
-                "mingw-w64-ucrt-x86_64-ninja",
-                "mingw-w64-ucrt-x86_64-pkgconf",
-                "mingw-w64-ucrt-x86_64-python-certifi",
-                "mingw-w64-ucrt-x86_64-python",
-            )
-        } else {
-            emptyList()
-        },
+        msys2Packages = msys2Packages,
         mesonOptions = commonMesonOptions + listOf(
             "--force-fallback-for=libass,libplacebo,expat,freetype2,fribidi,harfbuzz,libpng,zlib",
             "-Dgl=enabled",
@@ -404,6 +452,9 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
         ),
         jni = MpvJniToolchain(
             compilerCommand = pathForShell(toolchain.cxx, hostOs == Os.Windows),
+            versionProbes = listOf(
+                listOf(toolchain.cxx.absolutePath, "--version"),
+            ),
             compilerArgs = toolchain.cxxArgs +
                 "--sysroot=${pathForShell(toolchain.sysroot, hostOs == Os.Windows)}" +
                 listOf(CPP_STANDARD_FLAG, "-fPIC", "-shared"),

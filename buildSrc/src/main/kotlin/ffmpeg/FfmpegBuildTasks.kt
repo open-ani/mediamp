@@ -13,6 +13,8 @@ import nativebuild.PatchedSourceTemplateSpec
 import nativebuild.registerPatchedSourceTemplate
 import nativebuild.resolveMsys2Dir
 import nativebuild.resolveNdkDir
+import nativebuild.toolchainFingerprint
+import org.gradle.api.JavaVersion
 import org.gradle.api.Task
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
@@ -105,9 +107,12 @@ private fun registerFfmpegTasks(
     val project = context.project
     val buildDir = project.layout.buildDirectory.dir("ffmpeg/${target.name}")
     val installDir = project.layout.buildDirectory.dir("ffmpeg/${target.name}/install")
+    val fftoolsDir = buildDir.map { it.dir("fftools") }
     val configStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.config_stamp")
     val buildStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.build_stamp")
     val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
+    val toolchainFingerprint = project.toolchainFingerprint(target.toolchainProbes)
+    val toolchainConfigSummary = buildDir.map { sanitizedFfmpegToolchainSummary(it.asFile) }
 
     val configureTask = project.tasks.register<FfmpegConfigureTask>("ffmpegConfigure${target.name}") {
         group = "ffmpeg"
@@ -119,6 +124,7 @@ private fun registerFfmpegTasks(
         envVars.set(target.env)
         hostOsName.set(context.hostOs.name)
         buildDirPath.set(buildDir)
+        stagedSourceDir.set(buildDir.map { it.dir("source") })
         installPrefix.set(installDir.map { it.asFile.absolutePath })
         this.configStamp.set(configStamp)
         if (msys2Dir != null) {
@@ -131,13 +137,16 @@ private fun registerFfmpegTasks(
         group = "ffmpeg"
         description = "Build FFmpeg for ${target.name}"
         dependsOn(configureTask)
+        stagedSourceDir.set(configureTask.flatMap { it.stagedSourceDir })
         this.configStamp.set(configStamp)
         shell.set(target.shell)
         envVars.set(target.env)
         makeJobs.set(context.makeJobs)
         hostOsName.set(context.hostOs.name)
+        this.toolchainFingerprint.set(toolchainFingerprint)
         buildDirPath.set(buildDir)
-        installDirPath.set(installDir.map { it.asFile.absolutePath })
+        this.installDir.set(installDir)
+        fftoolsObjectsDir.set(fftoolsDir)
         this.buildStamp.set(buildStamp)
     }
 
@@ -153,7 +162,11 @@ private fun registerFfmpegTasks(
         libPrefix.set(target.libPrefix)
         ffmpegLibNames.set(context.ffmpegLibNames)
         buildDirPath.set(buildDir)
-        this.installDir.set(installDir)
+        this.installDir.set(buildTask.flatMap { it.installDir })
+        fftoolsObjectsDir.set(buildTask.flatMap { it.fftoolsObjectsDir })
+        this.toolchainConfigSummary.set(toolchainConfigSummary)
+        this.toolchainFingerprint.set(toolchainFingerprint)
+        jdkMajorVersion.set(JavaVersion.current().majorVersion)
         this.outputDir.set(project.layout.buildDirectory.dir("ffmpeg-output/${target.name}"))
         if (target.jniWrapperName != null) {
             jniWrapperName.set(target.jniWrapperName)
@@ -184,7 +197,10 @@ private fun registerFfmpegTasks(
             frameworkName.set(context.appleFrameworkName)
             ffmpegLibNames.set(context.ffmpegLibNames)
             buildDirPath.set(buildDir)
-            this.installDir.set(installDir)
+            this.installDir.set(buildTask.flatMap { it.installDir })
+            fftoolsObjectsDir.set(buildTask.flatMap { it.fftoolsObjectsDir })
+            this.toolchainConfigSummary.set(toolchainConfigSummary)
+            this.toolchainFingerprint.set(toolchainFingerprint)
             wrapperSource.set(context.commandWrapperSource)
             publicHeaderSource.set(context.applePublicHeaderSource)
             outputDir.set(project.layout.buildDirectory.dir("apple-framework/${target.name}/${context.appleFrameworkName}.framework"))
