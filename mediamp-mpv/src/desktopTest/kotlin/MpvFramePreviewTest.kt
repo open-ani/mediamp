@@ -280,7 +280,11 @@ class MpvFramePreviewTest {
     }
 
     @OptIn(ExperimentalMediampApi::class)
-    private class FileSeekableInputMediaData(private val file: File) : SeekableInputMediaData {
+    private class FileSeekableInputMediaData(
+        private val file: File,
+        /** Artificial latency per read, to widen decode/seek timing windows in race tests. */
+        private val readDelayMillis: Long = 0,
+    ) : SeekableInputMediaData {
         override val uri: String get() = "test://${file.name}"
         override val extraFiles: MediaExtraFiles get() = MediaExtraFiles.EMPTY
         override val options: List<String> get() = emptyList()
@@ -295,8 +299,10 @@ class MpvFramePreviewTest {
                 override val bytesRemaining: Long get() = fileSize - raf.filePointer
                 override val size: Long get() = fileSize
                 override fun seekTo(position: Long) = raf.seek(position)
-                override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-                    raf.read(buffer, offset, length)
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                    if (readDelayMillis > 0) Thread.sleep(readDelayMillis)
+                    return raf.read(buffer, offset, length)
+                }
 
                 override fun close() = raf.close()
             }
@@ -319,6 +325,53 @@ class MpvFramePreviewTest {
         process.inputStream.readAllBytes()
         if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) return null
         return target
+    }
+
+    /**
+     * Regression (fast-scrub wrong thumbnail): a request following a CANCELLED in-flight
+     * request must return its OWN position's frame. Cancelling the caller does not cancel
+     * mpv's seek, so the previous request's seek/render can still be in flight when the
+     * next request starts; if completion detection attributes that activity to the new
+     * request, it returns the previous position's frame labeled with the new target.
+     *
+     * Note: the misattribution window depends on mpv-internal timing and does not reliably
+     * reproduce in-process even with slowed reads (the demuxer cache absorbs most of the
+     * latency), so this test is a functional guard for the cancel-then-grab sequence rather
+     * than a deterministic reproducer of the race.
+     */
+    @Test
+    fun `frame after a cancelled request matches the new position`() {
+        if (!prepareOrSkip()) return
+        val video = generateColorVideo()!!
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            try {
+                // Slow reads stretch each seek to >100ms so a cancelled request's seek is
+                // reliably still in flight when the next request starts; with instant local
+                // reads the race window is only microseconds wide and the test cannot see it.
+                player.setMediaData(FileSeekableInputMediaData(video, readDelayMillis = 10))
+                val preview = assertNotNull(player.features[FramePreview.Key])
+                // Warm the session so iteration timing is dominated by the seeks themselves.
+                assertNotNull(preview.getPreviewFrame(1_000, 160, 160))
+
+                repeat(8) { i ->
+                    // Seek towards the blue zone and cancel while the seek is in flight;
+                    // vary the cancellation point across iterations.
+                    val job = launch { preview.getPreviewFrame(4_000, 160, 160) }
+                    delay(40L + (i % 4) * 20L)
+                    job.cancel()
+                    job.join()
+
+                    val frame = assertNotNull(
+                        preview.getPreviewFrame(1_000, 160, 160),
+                        "no frame in iteration $i",
+                    )
+                    assertDominantColor(frame, "red (iteration $i)") { r, _, b -> r > 180 && b < 80 }
+                }
+            } finally {
+                player.close()
+            }
+        }
     }
 
     /** 5s of solid red with keyframes only at t=0 (keyint 300, scenecut off). */

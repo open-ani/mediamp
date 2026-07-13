@@ -192,6 +192,14 @@ internal class MpvFramePreview(
         private var surfaceHeight = 0
         private var surfaceHasFrame = false
 
+        /**
+         * True while a seek or ring reconfig may still produce a render that no request
+         * has accounted for — set before issuing either, cleared once the effect (or its
+         * absence) is confirmed. A caller cancelled mid-wait (fast scrubbing) leaves this
+         * true, and the next request settles the leftovers first.
+         */
+        private var unsettled = false
+
         init {
             decoder.setRenderUpdateListener { renderCounter.update { it + 1 } }
         }
@@ -200,6 +208,23 @@ internal class MpvFramePreview(
             if (!ensureStarted()) return null
             if (!ensureSurface(maxWidth, maxHeight)) return null
             val handle = decoder.handle
+
+            // Settle leftovers from a previous request that was cancelled or timed out
+            // mid-seek: cancelling the caller does NOT cancel mpv's seek, so its seek and
+            // render are still in flight and would otherwise satisfy the completion
+            // signals below — this request would then return the PREVIOUS position's
+            // frame labeled with the new target, which is exactly what fast scrubbing
+            // used to produce. Wait out the in-flight seek, then absorb its pending
+            // render so the baselines captured below belong to this request alone.
+            withTimeoutOrNull(5_000) {
+                while (handle.getPropertyBoolean("seeking")) delay(20)
+                true
+            } ?: return null
+            if (unsettled) {
+                val counterAtSettle = renderCounter.value
+                withTimeoutOrNull(100) { renderCounter.first { it > counterAtSettle } }
+                unsettled = false
+            }
 
             val durationMillis = (handle.getPropertyDouble("duration") * 1000).toLong()
             val target = if (durationMillis > 0) {
@@ -210,6 +235,7 @@ internal class MpvFramePreview(
 
             val counterBefore = renderCounter.value
             val timePosBeforeMillis = (handle.getPropertyDouble("time-pos") * 1000).toLong()
+            unsettled = true
             if (!handle.command("seek", formatSecondsForMpv(target / 1000.0), "absolute+keyframes")) {
                 return null
             }
@@ -242,10 +268,17 @@ internal class MpvFramePreview(
             if (renderCounter.value == counterBefore && moved) {
                 // The decoder landed on a different frame, so a fresh render is coming; without
                 // it the surface still holds the pre-seek picture. If it does not arrive in
-                // time we read anyway — a slightly stale thumbnail beats none. When !moved the
+                // time we read anyway — a slightly stale thumbnail beats none (and unsettled
+                // stays true, so the next request absorbs the late render). When !moved the
                 // displayed keyframe already is the target and no render will come at all;
                 // waiting here used to cost every same-keyframe request a flat 500ms.
-                withTimeoutOrNull(1_000) { renderCounter.first { it > counterBefore } }
+                if (withTimeoutOrNull(1_000) { renderCounter.first { it > counterBefore } } != null) {
+                    unsettled = false
+                }
+            } else {
+                // Either our render already arrived (post-settle bumps are ours), or the
+                // seek was a no-op and no render is pending.
+                unsettled = false
             }
 
             val dims = IntArray(2)
@@ -327,6 +360,7 @@ internal class MpvFramePreview(
             val desiredWidth = max(2, (videoWidth * scale).roundToInt())
             val desiredHeight = max(2, (videoHeight * scale).roundToInt())
             if (desiredWidth != surfaceWidth || desiredHeight != surfaceHeight) {
+                unsettled = true // the reconfig redraw is a render nobody has accounted for yet
                 if (!decoder.requestSurface(desiredWidth, desiredHeight)) return false
                 surfaceWidth = desiredWidth
                 surfaceHeight = desiredHeight
@@ -336,7 +370,10 @@ internal class MpvFramePreview(
                 // After a reconfig the new ring is empty until the render thread redraws the
                 // current frame into it (this happens even while paused). The probe read
                 // covers a frame that landed while no request was waiting (e.g. the request
-                // that reconfigured was cancelled mid-wait).
+                // that reconfigured was cancelled mid-wait). unsettled deliberately stays
+                // true on all paths: a leftover seek's render and the reconfig redraw can
+                // both be pending, so the bump observed here is not proof of quiescence —
+                // grabFrame's settle phase absorbs whatever is still in flight.
                 val counterNow = renderCounter.value
                 surfaceHasFrame = decoder.readSurfacePixels(IntArray(2)) != null ||
                     withTimeoutOrNull(5_000) { renderCounter.first { it > counterNow } } != null
