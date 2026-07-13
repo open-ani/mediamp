@@ -12,13 +12,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
-import org.jetbrains.skiko.OS
-import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
-import org.openani.mediamp.mpv.internal.MacosSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceRing
 import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(InternalMediampApi::class)
@@ -27,14 +24,8 @@ actual class MpvMediampPlayer(
     parentCoroutineContext: CoroutineContext,
 ) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
 
-    // Native surface-ring render path: macOS renders through Metal/IOSurface
-    // (render_macos.mm), Windows through D3D11/D3D12 shared textures
-    // (render_d3d11.cpp). The consumer state machine is shared (MpvSurfaceRing).
-    private val ringBackend: MpvSurfaceRingBackend? = when (hostOs) {
-        OS.MacOS -> MacosSurfaceRingBackend
-        OS.Windows -> D3D11SurfaceRingBackend
-        else -> null // TODO: Linux render path
-    }
+    // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
+    private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()
     private val surfaceRing: MpvSurfaceRing? = ringBackend?.let { MpvSurfaceRing(handle.ptr, it) }
 
     init {
@@ -72,8 +63,9 @@ actual class MpvMediampPlayer(
         surfaceRing?.release()
     }
 
-    internal fun dumpSurfaceForDebug(path: String): Boolean =
-        ringBackend?.saveSurfacePng(handle.ptr, path) ?: false
+    /** See [MpvSurfaceRingBackend.readSurfacePixels]. */
+    internal fun readSurfacePixels(dims: IntArray): IntArray? =
+        ringBackend?.readSurfacePixels(handle.ptr, dims)
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot

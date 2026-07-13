@@ -17,6 +17,8 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nAckRetiredBuffersD3D11
@@ -31,12 +33,25 @@ import org.openani.mediamp.mpv.nGetFrameStateD3D11
 import org.openani.mediamp.mpv.nGetFrameStateMacos
 import org.openani.mediamp.mpv.nHasD3D11Surface
 import org.openani.mediamp.mpv.nHasMetalSurface
+import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
+import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nSaveSurfacePng
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 
 internal const val SURFACE_RING_BUFFER_COUNT = 3
+
+/**
+ * The native surface-ring backend for the current host: macOS renders through
+ * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures
+ * (render_d3d11.cpp). Returns `null` where no render path exists (Linux, TODO).
+ */
+internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs) {
+    OS.MacOS -> MacosSurfaceRingBackend
+    OS.Windows -> D3D11SurfaceRingBackend
+    else -> null
+}
 
 /**
  * Platform half of the native surface-ring render path: the JNI entry points plus how
@@ -60,6 +75,13 @@ internal interface MpvSurfaceRingBackend {
     fun hasSurface(ptr: Long): Boolean
     fun saveSurfacePng(ptr: Long, path: String): Boolean
 
+    /**
+     * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
+     * top-down), writing `[width, height]` into [dims]. Returns `null` when no frame
+     * is available.
+     */
+    fun readSurfacePixels(ptr: Long, dims: IntArray): IntArray?
+
     fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget
     val wrapColorFormat: SurfaceColorFormat
 }
@@ -76,6 +98,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
+    override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget =
         BackendRenderTarget.makeMetal(width, height, texturePtr)
@@ -97,6 +120,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersD3D11(ptr)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
+    override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
 
     override fun makeRenderTarget(width: Int, height: Int, texturePtr: Long): BackendRenderTarget =
         BackendRenderTarget.makeDirect3D(
