@@ -311,7 +311,7 @@ class MpvFramePreviewTest {
 
     /** 0.0s-2.5s solid red, 2.5s-5.0s solid blue — known pixel content for frame assertions. */
     private fun generateColorVideo(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-colors.mp4")
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-colors-mpeg4.mp4")
         if (target.isFile && target.length() > 0) return target
         val ffmpeg = findFfmpeg() ?: return null
         val process = ProcessBuilder(
@@ -319,7 +319,7 @@ class MpvFramePreviewTest {
             "-f", "lavfi", "-i", "color=c=red:size=640x360:rate=30:duration=2.5",
             "-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=30:duration=2.5",
             "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p[v]",
-            "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast", "-g", "15",
+            "-map", "[v]", "-c:v", "mpeg4", "-q:v", "2", "-g", "15",
             target.absolutePath,
         ).redirectErrorStream(true).start()
         process.inputStream.readAllBytes()
@@ -374,16 +374,15 @@ class MpvFramePreviewTest {
         }
     }
 
-    /** 5s of solid red with keyframes only at t=0 (keyint 300, scenecut off). */
+    /** 5s of solid red with the GOP longer than the media, so the only keyframe is at t=0. */
     private fun generateLongGopVideo(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-longgop.mp4")
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-longgop-mpeg4.mp4")
         if (target.isFile && target.length() > 0) return target
         val ffmpeg = findFfmpeg() ?: return null
         val process = ProcessBuilder(
             ffmpeg, "-y",
             "-f", "lavfi", "-i", "color=c=red:size=640x360:rate=30:duration=5",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
-            "-x264-params", "keyint=300:min-keyint=300:scenecut=0",
+            "-pix_fmt", "yuv420p", "-c:v", "mpeg4", "-q:v", "2", "-g", "300",
             target.absolutePath,
         ).redirectErrorStream(true).start()
         process.inputStream.readAllBytes()
@@ -393,7 +392,7 @@ class MpvFramePreviewTest {
 
     /** 3s sine tone, no video track. */
     private fun generateAudioOnlyMedia(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-audio.m4a")
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-audio-aac.mp4")
         if (target.isFile && target.length() > 0) return target
         val ffmpeg = findFfmpeg() ?: return null
         val process = ProcessBuilder(
@@ -407,10 +406,15 @@ class MpvFramePreviewTest {
         return target
     }
 
-    // Same discovery as MpvMediampPlayerSmokeTest. Deliberately NOT the ffmpeg shipped in
-    // the assembled runtime: that one is an LGPL build without libx264, so it can decode
-    // but not generate the H.264 test videos.
+    // Same discovery as MpvMediampPlayerSmokeTest. Prefer the ffmpeg shipped in the
+    // assembled runtime so required native tests do not depend on a system installation.
     private fun findFfmpeg(): String? =
-        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg", "ffmpeg", "ffmpeg.exe")
-            .firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
+        listOfNotNull(
+            devNativeDir()?.resolve("ffmpeg.exe")?.absolutePath,
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+            "ffmpeg",
+            "ffmpeg.exe",
+        ).firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
 }

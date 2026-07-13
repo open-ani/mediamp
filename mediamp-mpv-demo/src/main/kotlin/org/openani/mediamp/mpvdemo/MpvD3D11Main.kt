@@ -38,7 +38,7 @@ import org.openani.mediamp.source.UriMediaData
  * runtime from a local mpv assemble output.
  *
  * Run: ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
- * Plays mpv's built-in lavfi test source when no video is given.
+ * Plays FFmpeg libavdevice's lavfi test source when no video is given.
  */
 fun main(args: Array<String>) {
     val videoUri = args.firstOrNull()

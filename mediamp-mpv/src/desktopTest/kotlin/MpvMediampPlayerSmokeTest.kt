@@ -79,7 +79,13 @@ class MpvMediampPlayerSmokeTest {
     }
 
     private fun findFfmpeg(): String? =
-        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg", "ffmpeg.exe")
+        listOfNotNull(
+            devNativeDir()?.resolve("ffmpeg.exe")?.absolutePath,
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "ffmpeg",
+            "ffmpeg.exe",
+        )
             .firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
 
     private fun runFfmpeg(vararg args: String): Boolean {
@@ -91,11 +97,11 @@ class MpvMediampPlayerSmokeTest {
     }
 
     private fun generateTestVideo(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-test-video.mp4")
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-test-video-mpeg4.mp4")
         if (target.isFile && target.length() > 0) return target
         val ok = runFfmpeg(
             "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30,format=yuv420p",
-            "-t", "5", "-c:v", "libx264", "-preset", "ultrafast",
+            "-t", "5", "-c:v", "mpeg4", "-q:v", "2",
             target.absolutePath,
         )
         return target.takeIf { ok }
@@ -105,13 +111,13 @@ class MpvMediampPlayerSmokeTest {
      * 0.0s-2.5s solid red, 2.5s-5.0s solid blue — known pixel content for screenshot assertions.
      */
     private fun generateColorVideo(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-test-colors.mp4")
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-test-colors-mpeg4.mp4")
         if (target.isFile && target.length() > 0) return target
         val ok = runFfmpeg(
             "-f", "lavfi", "-i", "color=c=red:size=640x360:rate=30:duration=2.5",
             "-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=30:duration=2.5",
             "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p[v]",
-            "-map", "[v]", "-c:v", "libx264", "-preset", "ultrafast",
+            "-map", "[v]", "-c:v", "mpeg4", "-q:v", "2",
             target.absolutePath,
         )
         return target.takeIf { ok }
@@ -123,7 +129,7 @@ class MpvMediampPlayerSmokeTest {
      */
     private fun generateDualSubtitleVideo(): File? {
         val tmpDir = File(System.getProperty("java.io.tmpdir"))
-        val target = File(tmpDir, "mediamp-mpv-test-dualsub.mkv")
+        val target = File(tmpDir, "mediamp-mpv-test-dualsub-mpeg4.mkv")
         if (target.isFile && target.length() > 0) return target
         val sub1 = File(tmpDir, "mediamp-mpv-test-sub1.srt")
         val sub2 = File(tmpDir, "mediamp-mpv-test-sub2.srt")
@@ -133,7 +139,7 @@ class MpvMediampPlayerSmokeTest {
             "-f", "lavfi", "-i", "color=c=blue:size=320x240:rate=24:duration=10",
             "-i", sub1.absolutePath, "-i", sub2.absolutePath,
             "-map", "0:v", "-map", "1:s", "-map", "2:s",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:s", "srt",
+            "-c:v", "mpeg4", "-q:v", "2", "-c:s", "srt",
             target.absolutePath,
         )
         return target.takeIf { ok }
