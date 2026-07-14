@@ -20,6 +20,7 @@ import kotlin.concurrent.Volatile
  * (see [MPVLog]).
  */
 public class MPVLogMessage(
+    public val instanceHandle: Long,
     public val level: Int,
     public val prefix: String,
     public val line: String,
@@ -66,7 +67,7 @@ public object MPVLog {
      * errors still surface via [println] so real problems are not lost silently; quieter
      * levels are dropped.
      */
-    public fun log(level: Int, message: String, throwable: Throwable? = null, prefix: String = PREFIX) {
+    public fun log(instanceHandle: Long, level: Int, message: String, throwable: Throwable? = null, prefix: String = PREFIX) {
         val body = if (throwable == null) {
             message
         } else {
@@ -83,22 +84,22 @@ public object MPVLog {
 
         val current = handler
         if (current != null) {
-            current.onLog(MPVLogMessage(level, prefix, normalized))
+            current.onLog(MPVLogMessage(instanceHandle, level, prefix, normalized))
         } else if (level <= WARN) {
             // No sink installed: don't silently swallow problems.
             println("[$prefix] $normalized")
         }
     }
 
-    public fun fatal(message: String, throwable: Throwable? = null): Unit = log(FATAL, message, throwable)
-    public fun error(message: String, throwable: Throwable? = null): Unit = log(ERROR, message, throwable)
-    public fun warn(message: String, throwable: Throwable? = null): Unit = log(WARN, message, throwable)
-    public fun info(message: String, throwable: Throwable? = null): Unit = log(INFO, message, throwable)
-    public fun debug(message: String, throwable: Throwable? = null): Unit = log(DEBUG, message, throwable)
-    public fun verbose(message: String, throwable: Throwable? = null): Unit = log(V, message, throwable)
+    public fun fatal(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, FATAL, message, throwable)
+    public fun error(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, ERROR, message, throwable)
+    public fun warn(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, WARN, message, throwable)
+    public fun info(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, INFO, message, throwable)
+    public fun debug(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, DEBUG, message, throwable)
+    public fun verbose(handle: Long, message: String, throwable: Throwable? = null): Unit = log(handle, V, message, throwable)
 }
 
 @Suppress("unused") // Called from JNI as MPVLogKt.onNativeLog(int, String, String).
-public fun onNativeLog(level: Int, prefix: String, message: String) {
-    MPVLog.log(level, message, prefix = prefix)
+public fun onNativeLog(instanceHandle: Long, level: Int, prefix: String, message: String) {
+    MPVLog.log(instanceHandle, level, message, prefix = prefix)
 }

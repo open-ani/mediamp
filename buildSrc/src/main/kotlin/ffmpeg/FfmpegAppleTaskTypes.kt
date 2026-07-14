@@ -16,15 +16,20 @@ import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.logging.Logger
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import java.io.File
 import javax.inject.Inject
 
+@CacheableTask
 abstract class FfmpegAppleFrameworkTask : DefaultTask() {
     @get:Input
     abstract val targetName: Property<String>
@@ -35,16 +40,35 @@ abstract class FfmpegAppleFrameworkTask : DefaultTask() {
     @get:Input
     abstract val ffmpegLibNames: ListProperty<String>
 
-    @get:InputDirectory
+    /**
+     * Configure-produced working directory (config.mak and the compile cwd). Always
+     * present locally because configure runs in every build that needs this task; its
+     * cache-relevant content is captured by [toolchainConfigSummary].
+     */
+    @get:Internal
     abstract val buildDirPath: DirectoryProperty
 
     @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val installDir: DirectoryProperty
 
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val fftoolsObjectsDir: DirectoryProperty
+
+    /** See [sanitizedFfmpegToolchainSummary]. */
+    @get:Input
+    abstract val toolchainConfigSummary: Property<String>
+
+    @get:Input
+    abstract val toolchainFingerprint: Property<String>
+
     @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
     abstract val wrapperSource: RegularFileProperty
 
     @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
     abstract val publicHeaderSource: RegularFileProperty
 
     @get:OutputDirectory
@@ -83,6 +107,7 @@ abstract class FfmpegAppleFrameworkTask : DefaultTask() {
             frameworkName = frameworkNameValue,
             wrapperSource = wrapperSource.get().asFile,
             buildDir = buildDir,
+            fftoolsDir = fftoolsObjectsDir.get().asFile,
             installDir = installDirFile,
             frameworkBinary = frameworkDir.resolve(frameworkNameValue),
             ffmpegLibNames = ffmpegLibNames.get(),
@@ -95,9 +120,11 @@ abstract class FfmpegAppleXcframeworkTask : DefaultTask() {
     abstract val frameworkName: Property<String>
 
     @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val iosDeviceFramework: DirectoryProperty
 
     @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val iosSimulatorFramework: DirectoryProperty
 
     @get:OutputDirectory
@@ -136,6 +163,7 @@ private fun buildAppleFrameworkBinary(
     frameworkName: String,
     wrapperSource: File,
     buildDir: File,
+    fftoolsDir: File,
     installDir: File,
     frameworkBinary: File,
     ffmpegLibNames: List<String>,
@@ -145,10 +173,10 @@ private fun buildAppleFrameworkBinary(
     }
 
     val config = readFfmpegConfig(buildDir.resolve("ffbuild/config.mak"))
-    val fftoolsDir = buildDir.resolve("fftools")
     val fftoolsObjects = fftoolsDir.walkTopDown()
         .filter { it.isFile && it.extension == "o" }
         .map(File::getAbsolutePath)
+        .sorted()
         .toList()
     require(fftoolsObjects.isNotEmpty()) {
         "No fftools object files found in $fftoolsDir while building $frameworkName."

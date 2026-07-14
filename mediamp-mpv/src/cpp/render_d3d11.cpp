@@ -23,7 +23,7 @@
 //
 // mpv leaves the alpha channel undefined for opaque video (see render_macos.mm); the
 // consumer ignores it by wrapping the texture with an opaque color type (RGB_888X), and
-// the PNG readback forces alpha to 255. No native alpha-fix pass is needed.
+// the CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
 
 #ifdef _WIN32
 
@@ -70,7 +70,7 @@ void safe_release(T *&object) {
 // them when two independent slots agree on the same pointer (fDevice == device and
 // fQueue == queue — skiko stores the same COM pointers in both places), and even then
 // the result must survive QueryInterface(ID3D12Device) before it is used.
-ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
+ID3D12Device *open_skia_d3d12_device(const void *instance_handle, int64_t skiko_device_ptr) {
     if (skiko_device_ptr == 0) return nullptr;
 
     // Defense-in-depth around trusting a reflected pointer plus an inferred struct layout.
@@ -82,21 +82,24 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
 
     // A real DirectXDevice* is at least pointer-aligned; a misaligned value is not one.
     if (skiko_device_ptr & static_cast<int64_t>(sizeof(void *) - 1)) {
-        LOGE("Skiko device pointer %lld is misaligned; not a DirectXDevice",
+        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
+            "Skiko device pointer %lld is misaligned; not a DirectXDevice",
             static_cast<long long>(skiko_device_ptr));
         return nullptr;
     }
     auto *slots = reinterpret_cast<void *const *>(static_cast<uintptr_t>(skiko_device_ptr));
     // Need slots[0..8] readable (9 pointers).
     if (IsBadReadPtr(slots, 9 * sizeof(void *))) {
-        LOGE("Skiko device pointer span is not readable; not a DirectXDevice");
+        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
+            "Skiko device pointer span is not readable; not a DirectXDevice");
         return nullptr;
     }
 
     void *device_a = slots[2], *device_b = slots[6];
     void *queue_a = slots[3], *queue_b = slots[8];
     if (!device_a || device_a != device_b || !queue_a || queue_a != queue_b) {
-        LOGE("Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
+        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
+            "Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
             "video will not be wrapped for Skia",
             device_a, device_b, queue_a, queue_b);
         return nullptr;
@@ -106,7 +109,8 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
     // so a non-COM but coincidentally-agreeing pointer does not jump through garbage.
     if (IsBadReadPtr(device_a, sizeof(void *)) ||
         IsBadReadPtr(*reinterpret_cast<void *const *>(device_a), sizeof(void *))) {
-        LOGE("Skiko device candidate has no readable vtable; not a COM object");
+        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
+            "Skiko device candidate has no readable vtable; not a COM object");
         return nullptr;
     }
 
@@ -114,7 +118,8 @@ ID3D12Device *open_skia_d3d12_device(int64_t skiko_device_ptr) {
     HRESULT hr = static_cast<IUnknown *>(device_a)
                      ->QueryInterface(__uuidof(ID3D12Device), reinterpret_cast<void **>(&device));
     if (FAILED(hr) || !device) {
-        LOGE("Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)", hr);
+        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
+            "Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)", hr);
         return nullptr;
     }
     return device;  // AddRef'd by QueryInterface; caller owns.
@@ -140,7 +145,7 @@ namespace mediampv {
 
 bool mpv_handle_t::create_render_context() {
     if (!handle_) {
-        LOGE("create_render_context: mpv handle is null");
+        LOG(this, LOG_LEVEL_ERROR, "create_render_context: mpv handle is null");
         return false;
     }
     if (render_context_) return true;
@@ -172,14 +177,15 @@ bool mpv_handle_t::create_render_context() {
             if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
                 // Headless CI / no GPU: WARP renders in software but supports the full
                 // API, including shared resources (Windows 8+).
-                LOGW("D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)",
+                LOG(this, LOG_LEVEL_WARN,
+                    "D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)",
                     (int) driver_type, flags, hr);
             }
         }
         if (SUCCEEDED(hr)) break;
     }
     if (FAILED(hr) || !device || !context) {
-        LOGE("D3D11CreateDevice failed: 0x%lx", hr);
+        LOG(this, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
         safe_release(context);
         safe_release(device);
         return false;
@@ -196,7 +202,7 @@ bool mpv_handle_t::create_render_context() {
 
     D3D11_QUERY_DESC query_desc{D3D11_QUERY_EVENT, 0};
     if (FAILED(device->CreateQuery(&query_desc, &flush_query_))) {
-        LOGW("CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
+        LOG(this, LOG_LEVEL_WARN, "CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
         flush_query_ = nullptr;
     }
 
@@ -208,7 +214,8 @@ bool mpv_handle_t::create_render_context() {
     };
     int create_result = mpv_render_context_create(&render_context_, handle_, params);
     if (create_result < 0) {
-        LOGE("mpv_render_context_create(d3d11) failed: %s", mpv_error_string(create_result));
+        LOG(this, LOG_LEVEL_ERROR,
+            "mpv_render_context_create(d3d11) failed: %s", mpv_error_string(create_result));
         render_context_ = nullptr;
         safe_release(flush_query_);
         safe_release(context);
@@ -408,7 +415,7 @@ bool mpv_handle_t::apply_config_locked() {
 
     if (device_ptr != buffer_device_ptr_ || !skia_device_) {
         safe_release(skia_device_);
-        skia_device_ = open_skia_d3d12_device(device_ptr);
+        skia_device_ = open_skia_d3d12_device(this, device_ptr);
         // device_ptr == 0 (headless) legitimately yields no D3D12 side; a non-zero
         // pointer failing the layout check was already logged. Either way the ring is
         // still allocated so playback and PNG readback keep working.
@@ -419,7 +426,7 @@ bool mpv_handle_t::apply_config_locked() {
         ok = allocate_buffer(buffers_[i], width, height);
     }
     if (!ok) {
-        LOGE("buffer ring allocation failed (%dx%d)", width, height);
+        LOG(this, LOG_LEVEL_ERROR, "buffer ring allocation failed (%dx%d)", width, height);
         destroy_buffer_ring(buffers_);
         latest_index_ = -1;
         buffer_width_ = buffer_height_ = 0;
@@ -436,7 +443,7 @@ bool mpv_handle_t::apply_config_locked() {
     latest_index_ = -1;
     ++buffer_generation_;
     publish_state_locked();
-    LOGI("buffer ring allocated %dx%d gen=%u d3d12=%d",
+    LOG(this, LOG_LEVEL_INFO, "buffer ring allocated %dx%d gen=%u d3d12=%d",
         width, height, buffer_generation_, skia_device_ ? 1 : 0);
     return true;
 }
@@ -460,7 +467,8 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
     ID3D11Texture2D *texture = nullptr;
     HRESULT hr = d3d_device_->CreateTexture2D(&desc, nullptr, &texture);
     if (FAILED(hr) || !texture) {
-        LOGE("CreateTexture2D(%dx%d shared) failed: 0x%lx", width, height, hr);
+        LOG(this, LOG_LEVEL_ERROR,
+            "CreateTexture2D(%dx%d shared) failed: 0x%lx", width, height, hr);
         return false;
     }
 
@@ -475,7 +483,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
         dxgi_resource->Release();
     }
     if (FAILED(hr) || !shared_handle) {
-        LOGE("CreateSharedHandle failed: 0x%lx", hr);
+        LOG(this, LOG_LEVEL_ERROR, "CreateSharedHandle failed: 0x%lx", hr);
         texture->Release();
         return false;
     }
@@ -485,7 +493,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
         hr = skia_device_->OpenSharedHandle(
             shared_handle, __uuidof(ID3D12Resource), reinterpret_cast<void **>(&d3d12_resource));
         if (FAILED(hr) || !d3d12_resource) {
-            LOGE("ID3D12Device::OpenSharedHandle failed: 0x%lx", hr);
+            LOG(this, LOG_LEVEL_ERROR, "ID3D12Device::OpenSharedHandle failed: 0x%lx", hr);
             CloseHandle(shared_handle);
             texture->Release();
             return false;
@@ -556,12 +564,13 @@ bool mpv_handle_t::wait_for_gpu() {
         HRESULT hr = d3d_context_->GetData(flush_query_, nullptr, 0, 0);
         if (hr == S_OK) return true;
         if (FAILED(hr)) {
-            LOGE("flush query GetData failed: 0x%lx", hr);
+            LOG(this, LOG_LEVEL_ERROR, "flush query GetData failed: 0x%lx", hr);
             return false;
         }
         if (GetTickCount64() - start_tick >= timeout_ms) {
             HRESULT removed = d3d_device_ ? d3d_device_->GetDeviceRemovedReason() : S_OK;
-            LOGE("wait_for_gpu timed out after %llums (device removed reason: 0x%lx)",
+            LOG(this, LOG_LEVEL_ERROR,
+                "wait_for_gpu timed out after %llums (device removed reason: 0x%lx)",
                 timeout_ms, removed);
             return false;
         }
@@ -615,15 +624,15 @@ void mpv_handle_t::cleanup_render_resources() {
     safe_release(d3d_device_);
 }
 
-// Writes the latest rendered frame (RGBA shared texture) as PNG via a staging-texture
-// readback and WIC. Independent of mpv's screenshot pipeline, which cannot convert
-// hwdec (d3d11va) frames without zimg. Holds render_mutex_ for the whole save so the
+// Staging-texture readback of the latest rendered frame (RGBA shared texture) into
+// ARGB_8888 ints (0xAARRGGBB, which is BGRA byte order in little-endian memory) with
+// alpha forced opaque (mpv leaves it undefined). The caller holds render_mutex_ so the
 // render thread cannot cycle the ring back onto this buffer mid-read; the immediate
 // context is multithread-protected, so using it here while the render thread renders
 // is safe.
-bool mpv_handle_t::save_surface_png(const char *path) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    if (!buffers_allocated_ || latest_index_ < 0 || !path || !d3d_device_ || !d3d_context_) {
+bool mpv_handle_t::read_frame_argb_locked(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!buffers_allocated_ || latest_index_ < 0 || !d3d_device_ || !d3d_context_) {
         return false;
     }
     ID3D11Texture2D *source = buffers_[latest_index_].texture;
@@ -638,33 +647,57 @@ bool mpv_handle_t::save_surface_png(const char *path) {
 
     ID3D11Texture2D *staging = nullptr;
     if (FAILED(d3d_device_->CreateTexture2D(&desc, nullptr, &staging)) || !staging) {
-        LOGE("staging texture creation failed");
+        LOG(this, LOG_LEVEL_ERROR, "staging texture creation failed");
         return false;
     }
     d3d_context_->CopyResource(staging, source);
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
     if (FAILED(d3d_context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
-        LOGE("Map(staging) failed");
+        LOG(this, LOG_LEVEL_ERROR, "Map(staging) failed");
         staging->Release();
         return false;
     }
 
     const UINT width = desc.Width, height = desc.Height;
-    // RGBA rows with alpha forced opaque (mpv leaves alpha undefined).
-    std::vector<uint8_t> pixels((size_t) width * height * 4);
+    out_pixels.resize((size_t) width * height);
     for (UINT y = 0; y < height; ++y) {
         const auto *src = (const uint8_t *) mapped.pData + (size_t) y * mapped.RowPitch;
-        uint8_t *dst = pixels.data() + (size_t) y * width * 4;
-        memcpy(dst, src, (size_t) width * 4);
-        for (UINT x = 0; x < width; ++x) dst[x * 4 + 3] = 0xFF;
+        uint32_t *dst = out_pixels.data() + (size_t) y * width;
+        for (UINT x = 0; x < width; ++x) {
+            dst[x] = 0xFF000000u | ((uint32_t) src[x * 4] << 16) |
+                ((uint32_t) src[x * 4 + 1] << 8) | src[x * 4 + 2];
+        }
     }
     d3d_context_->Unmap(staging, 0);
     staging->Release();
+    out_width = (int) width;
+    out_height = (int) height;
+    return true;
+}
+
+bool mpv_handle_t::read_surface_pixels(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    return read_frame_argb_locked(out_pixels, out_width, out_height);
+}
+
+// Writes the latest rendered frame as PNG via the staging-texture readback and WIC.
+// Independent of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va)
+// frames without zimg. render_mutex_ is only held for the readback; the encode works
+// on our own copy.
+bool mpv_handle_t::save_surface_png(const char *path) {
+    if (!path) return false;
+    std::vector<uint32_t> pixels;
+    int width = 0, height = 0;
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        if (!read_frame_argb_locked(pixels, width, height)) return false;
+    }
 
     scoped_co_init com;
     if (!com.usable) {
-        LOGE("CoInitializeEx failed");
+        LOG(this, LOG_LEVEL_ERROR, "CoInitializeEx failed");
         return false;
     }
     bool ok = false;
@@ -685,10 +718,13 @@ bool mpv_handle_t::save_surface_png(const char *path) {
         if (FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache))) break;
         if (FAILED(encoder->CreateNewFrame(&frame, nullptr))) break;
         if (FAILED(frame->Initialize(nullptr))) break;
-        if (FAILED(frame->SetSize(width, height))) break;
-        WICPixelFormatGUID format = GUID_WICPixelFormat32bppRGBA;
+        if (FAILED(frame->SetSize((UINT) width, (UINT) height))) break;
+        // ARGB ints are BGRA bytes in little-endian memory.
+        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
         if (FAILED(frame->SetPixelFormat(&format))) break;
-        if (FAILED(frame->WritePixels(height, width * 4, (UINT) pixels.size(), pixels.data()))) break;
+        if (FAILED(frame->WritePixels(
+                (UINT) height, (UINT) width * 4, (UINT) (pixels.size() * 4),
+                reinterpret_cast<BYTE *>(pixels.data())))) break;
         if (FAILED(frame->Commit())) break;
         if (FAILED(encoder->Commit())) break;
         ok = true;
@@ -697,7 +733,7 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     safe_release(encoder);
     safe_release(stream);
     safe_release(factory);
-    if (!ok) LOGE("save_surface_png failed for %s", path);
+    if (!ok) LOG(this, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
     return ok;
 }
 

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <jni.h>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
@@ -99,6 +100,9 @@ public:
 
     bool has_d3d11_surface();
     bool save_surface_png(const char *path);
+    // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
+    // top-down) with alpha forced opaque. Returns false when no frame is available.
+    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
 #ifdef __APPLE__
@@ -128,6 +132,9 @@ public:
 
     bool has_metal_surface();
     bool save_surface_png(const char *path);
+    // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
+    // top-down) with alpha forced opaque. Returns false when no frame is available.
+    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
 #ifdef __linux__
@@ -143,6 +150,7 @@ public:
     bool ack_retired_buffers();
     bool has_opengl_surface();
     bool save_surface_png(const char *path);
+    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
     struct seekable_stream_entry;
@@ -229,6 +237,9 @@ private:
     bool render_into(const d3d11_buffer &buffer);
     void drain_one_frame();
     bool wait_for_gpu();  // End(flush_query_) + poll; render thread only
+    // Staging-texture readback of the latest frame; shared by save_surface_png and
+    // read_surface_pixels. Assumes render_mutex_ is held.
+    bool read_frame_argb_locked(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
 #ifdef __APPLE__
@@ -322,6 +333,12 @@ private:
     bool screenshot_pending_ = false;
     bool screenshot_finished_ = false;
     bool screenshot_ok_ = false;
+    bool readback_pending_ = false;
+    bool readback_finished_ = false;
+    bool readback_ok_ = false;
+    std::vector<uint32_t> readback_pixels_;
+    int readback_width_ = 0;
+    int readback_height_ = 0;
     std::mutex render_mutex_;
     std::condition_variable render_cv_;
     void *render_thread_ = nullptr; // std::thread*, owned by render_glx.cpp
@@ -339,6 +356,8 @@ private:
     bool render_into(const opengl_buffer &buffer);
     void drain_one_frame();
     bool write_surface_png_on_render_thread(const char *path);
+    bool read_surface_pixels_on_render_thread(
+        std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;

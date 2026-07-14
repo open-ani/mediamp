@@ -7,6 +7,9 @@ import nativebuild.PrepareSourceTreeTask
 import nativebuild.registerPatchedSourceTemplate
 import nativebuild.resolveMsys2Dir
 import nativebuild.resolveNdkDir
+import nativebuild.sanitizeAbsolutePaths
+import nativebuild.toolchainFingerprint
+import org.gradle.api.JavaVersion
 import org.gradle.api.Task
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.kotlin.dsl.register
@@ -104,6 +107,8 @@ private fun registerMpvTasks(
         return previousTargetTask
     }
     val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
+    val toolchainFingerprint = project.toolchainFingerprint(target.toolchainProbes)
+    val jniToolchainFingerprint = project.toolchainFingerprint(target.jni.versionProbes)
 
     val configureTask = project.tasks.register<MpvConfigureTask>("mpvConfigure${target.name}") {
         group = "mpv"
@@ -121,6 +126,7 @@ private fun registerMpvTasks(
         wrapFiles.set(target.wrapFiles)
         msys2Packages.set(target.msys2Packages)
         buildDirPath.set(buildDir)
+        stagedSourceDir.set(buildDir.map { it.dir("source") })
         this.configStamp.set(configStamp)
         target.androidAbi?.let { crossFileContent.set(context.androidCrossFileContent(it)) }
         if (msys2Dir != null) {
@@ -132,11 +138,23 @@ private fun registerMpvTasks(
         group = "mpv"
         description = "Build mpv for ${target.name}"
         dependsOn(configureTask)
+        stagedSourceDir.set(configureTask.flatMap { it.stagedSourceDir })
+        this.ffmpegInstallDir.set(ffmpegInstallDir)
         this.configStamp.set(configStamp)
         shell.set(target.shell)
         envVars.set(target.env)
         hostOsName.set(context.hostOs.name)
+        this.toolchainFingerprint.set(toolchainFingerprint)
+        target.androidAbi?.let { abi ->
+            crossFileFingerprint.set(
+                sanitizeAbsolutePaths(
+                    context.androidCrossFileContent(abi),
+                    listOf(project.rootProject.projectDir),
+                ),
+            )
+        }
         buildDirPath.set(buildDir)
+        installDir.set(buildDir.map { it.dir("install") })
         this.buildStamp.set(buildStamp)
         if (target.androidAbi != null) {
             // Cross builds configure prefix=/ and install via --destdir (see MpvConfigureTask).
@@ -150,11 +168,13 @@ private fun registerMpvTasks(
         dependsOn(buildTask)
         targetName.set(target.name)
         sourceDir.set(project.layout.projectDirectory.dir("src/cpp"))
-        mpvInstallDir.set(buildDir.map { it.dir("install") })
+        mpvInstallDir.set(buildTask.flatMap { it.installDir })
         this.ffmpegInstallDir.set(ffmpegInstallDir)
         shell.set(target.shell)
         envVars.set(target.env)
         hostOsName.set(context.hostOs.name)
+        this.toolchainFingerprint.set(jniToolchainFingerprint)
+        jdkMajorVersion.set(JavaVersion.current().majorVersion)
         compilerCommand.set(target.jni.compilerCommand)
         compilerArgs.set(target.jni.compilerArgs)
         linkerArgs.set(target.jni.linkerArgs)
@@ -175,7 +195,7 @@ private fun registerMpvTasks(
             mustRunAfter(previousTargetTask)
         }
         targetName.set(target.name)
-        installDir.set(buildDir.map { it.dir("install") })
+        installDir.set(buildTask.flatMap { it.installDir })
         this.ffmpegInstallDir.set(ffmpegInstallDir)
         jniLibrary.set(jniOutputFile)
         runtimeDirName.set(target.runtime.runtimeDirName)

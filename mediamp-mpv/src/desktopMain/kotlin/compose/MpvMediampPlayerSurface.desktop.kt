@@ -76,12 +76,12 @@ private fun MpvMediampPlayerSurfaceRing(
     val window = LocalWindow.current
     val interop: SkiaRenderDeviceInterop? = remember(window) {
         if (window == null) {
-            MPVLog.warn("LocalWindow.current is null; cannot locate SkiaLayer, video stays black")
+            MPVLog.warn(player.handle.ptr, "LocalWindow.current is null; cannot locate SkiaLayer, video stays black")
             return@remember null
         }
         val layer = window.findSkiaLayer()
         if (layer == null) {
-            MPVLog.warn("no SkiaLayer found in window $window; video stays black")
+            MPVLog.warn(player.handle.ptr, "no SkiaLayer found in window $window; video stays black")
             return@remember null
         }
         runCatching {
@@ -92,7 +92,7 @@ private fun MpvMediampPlayerSurfaceRing(
                 else -> null
             }
         }
-            .onFailure { MPVLog.error("Skia device interop init failed; video stays black", it) }
+            .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
     }
     val frameTick = remember { mutableLongStateOf(0L) }
@@ -103,7 +103,7 @@ private fun MpvMediampPlayerSurfaceRing(
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
     fun logOnce(state: String, level: Int = MPVLog.DEBUG) {
-        if (loggedStates.add(state)) MPVLog.log(level, state)
+        if (loggedStates.add(state)) MPVLog.log(player.handle.ptr, level, state)
     }
     // Linux re-checks the live GLX identity because Skiko may replace its redrawer.
     fun ensureRenderContext(environment: OpenGLRenderEnvironment? = null): Boolean {
@@ -117,7 +117,7 @@ private fun MpvMediampPlayerSurfaceRing(
         val ready = runCatching {
             player.attachOpenGLRenderEnvironment(environment)
         }.onFailure {
-            MPVLog.error("Linux GLX render context unavailable; video stays black", it)
+            MPVLog.error(player.handle.ptr, "Linux GLX render context unavailable; video stays black", it)
         }.getOrDefault(false)
         if (ready && !renderContextReady) {
             player.setRenderUpdateListener { frameTick.longValue++ }
@@ -130,7 +130,7 @@ private fun MpvMediampPlayerSurfaceRing(
         if (hostOs != OS.Linux) return null
         val glInterop = interop as? SkiaOpenGLInterop ?: return null
         val snapshot = runCatching { glInterop.renderSnapshot() }
-            .onFailure { MPVLog.error("Linux GLX render context unavailable; video stays black", it) }
+            .onFailure { MPVLog.error(player.handle.ptr, "Linux GLX render context unavailable; video stays black", it) }
             .getOrNull() ?: return null
         return snapshot.takeIf { ensureRenderContext(it.environment) }
     }

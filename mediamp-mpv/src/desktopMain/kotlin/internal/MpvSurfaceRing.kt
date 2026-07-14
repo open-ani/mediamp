@@ -18,6 +18,8 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nAckRetiredBuffersD3D11
@@ -40,6 +42,9 @@ import org.openani.mediamp.mpv.nGetFrameStateOpenGL
 import org.openani.mediamp.mpv.nHasD3D11Surface
 import org.openani.mediamp.mpv.nHasMetalSurface
 import org.openani.mediamp.mpv.nHasOpenGLSurface
+import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
+import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
+import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
 import org.openani.mediamp.mpv.nSaveSurfacePng
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
 import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
@@ -71,6 +76,18 @@ internal class MpvConsumerRenderTarget(
 }
 
 /**
+ * The native surface-ring backend for the current host: macOS renders through
+ * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures,
+ * and Linux through shared OpenGL textures (render_glx.cpp).
+ */
+internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs) {
+    OS.MacOS -> MacosSurfaceRingBackend
+    OS.Windows -> D3D11SurfaceRingBackend
+    OS.Linux -> OpenGLSurfaceRingBackend
+    else -> null
+}
+
+/**
  * Platform half of the native surface-ring render path: the JNI entry points plus how
  * a ring buffer's native texture is wrapped for Skia. The consumer state machine on top
  * ([MpvSurfaceRing]) is capability-based: Metal/IOSurface on macOS, D3D11/D3D12 shared
@@ -93,6 +110,13 @@ internal interface MpvSurfaceRingBackend {
     fun hasSurface(ptr: Long): Boolean
     fun saveSurfacePng(ptr: Long, path: String): Boolean
 
+    /**
+     * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
+     * top-down), writing `[width, height]` into [dims]. Returns `null` when no frame
+     * is available.
+     */
+    fun readSurfacePixels(ptr: Long, dims: IntArray): IntArray?
+
     fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long): MpvConsumerRenderTarget
     val wrapColorFormat: SurfaceColorFormat
     val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.TOP_LEFT
@@ -110,6 +134,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
+    override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
         MpvConsumerRenderTarget(BackendRenderTarget.makeMetal(width, height, texturePtr))
@@ -131,6 +156,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersD3D11(ptr)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
+    override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) = MpvConsumerRenderTarget(
         BackendRenderTarget.makeDirect3D(
@@ -170,6 +196,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersOpenGL(ptr)
     override fun hasSurface(ptr: Long) = nHasOpenGLSurface(ptr)
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngOpenGL(ptr, path)
+    override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsOpenGL(ptr, dims)
 
     fun attachRenderEnvironment(ptr: Long, environment: OpenGLRenderEnvironment): Boolean =
         nAttachRenderEnvironmentOpenGL(
@@ -426,7 +453,7 @@ internal class MpvSurfaceRing(
 
     private val loggedStates = mutableSetOf<String>()
     private fun logOnce(message: String, level: Int = MPVLog.WARN, throwable: Throwable? = null) {
-        if (loggedStates.add(message)) MPVLog.log(level, message, throwable)
+        if (loggedStates.add(message)) MPVLog.log(handlePtr, level, message, throwable)
     }
 
     fun release() {

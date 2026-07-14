@@ -15,12 +15,11 @@ import org.jetbrains.skia.Image
 import org.jetbrains.skiko.OS
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
-import org.openani.mediamp.mpv.internal.MacosSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceRing
 import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.OpenGLSurfaceRingBackend
 import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
+import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(InternalMediampApi::class)
@@ -29,20 +28,13 @@ actual class MpvMediampPlayer(
     parentCoroutineContext: CoroutineContext,
 ) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
 
-    // Native surface-ring render path: macOS renders through Metal/IOSurface,
-    // Windows through D3D11/D3D12 shared textures, and Linux through shared GL textures.
-    // The consumer state machine is shared by all three backends (MpvSurfaceRing).
-    private val ringBackend: MpvSurfaceRingBackend? = when (hostOs) {
-        OS.MacOS -> MacosSurfaceRingBackend
-        OS.Windows -> D3D11SurfaceRingBackend
-        OS.Linux -> OpenGLSurfaceRingBackend
-        else -> null
-    }
+    // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
+    private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()
     private val surfaceRing: MpvSurfaceRing? = ringBackend?.let { MpvSurfaceRing(handle.ptr, it) }
     private var attachedOpenGLEnvironment: OpenGLRenderEnvironment? = null
 
     init {
-        if (hostOs == org.jetbrains.skiko.OS.Linux) {
+        if (hostOs == OS.Linux) {
             // Prefer the two Linux paths mediamp validates: NVIDIA can keep decoded
             // frames on-GPU through CUDA/OpenGL, while Intel/AMD use stable VAAPI
             // decode with a system-memory copy. Only then try mpv's safe auto list.
@@ -51,7 +43,7 @@ actual class MpvMediampPlayer(
         // macOS and Windows own their producer device. Linux must first attach the live
         // Skiko GLX environment, otherwise `vo=libmpv` would be asked to load before its
         // required render context can exist.
-        if (hostOs != org.jetbrains.skiko.OS.Linux) createRenderContext()
+        if (hostOs != OS.Linux) createRenderContext()
     }
 
     /** Creates the native render context and starts the render thread. Idempotent. */
@@ -68,7 +60,7 @@ actual class MpvMediampPlayer(
      * the next published generation.
      */
     internal fun attachOpenGLRenderEnvironment(environment: OpenGLRenderEnvironment): Boolean {
-        if (hostOs != org.jetbrains.skiko.OS.Linux) return false
+        if (hostOs != OS.Linux) return false
         if (attachedOpenGLEnvironment?.identity == environment.identity) {
             return createRenderContext().also { if (it) renderContextBecameReady() }
         }
@@ -98,7 +90,7 @@ actual class MpvMediampPlayer(
     }
 
     override fun ensureRenderContextForLoad(): Boolean = when (hostOs) {
-        org.jetbrains.skiko.OS.Linux -> attachedOpenGLEnvironment != null && createRenderContext()
+        OS.Linux -> attachedOpenGLEnvironment != null && createRenderContext()
         // Eager platforms keep the established load behavior even when a headless CI
         // environment cannot create an accelerated producer context.
         else -> true
@@ -124,8 +116,9 @@ actual class MpvMediampPlayer(
         surfaceRing?.release()
     }
 
-    internal fun dumpSurfaceForDebug(path: String): Boolean =
-        ringBackend?.saveSurfacePng(handle.ptr, path) ?: false
+    /** See [MpvSurfaceRingBackend.readSurfacePixels]. */
+    internal fun readSurfacePixels(dims: IntArray): IntArray? =
+        ringBackend?.readSurfacePixels(handle.ptr, dims)
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot

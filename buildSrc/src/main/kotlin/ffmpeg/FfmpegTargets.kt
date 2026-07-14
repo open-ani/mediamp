@@ -34,6 +34,13 @@ internal data class FfmpegBuildTarget(
     val libPrefix: String = "lib",
     val msys2Packages: List<String> = emptyList(),
 
+    /**
+     * Version probe command lines whose combined output identifies the toolchain for the
+     * build cache (see [nativebuild.ToolchainFingerprintValueSource]). Probes must be
+     * runnable directly by the JVM (native paths, no MSYS path forms).
+     */
+    val toolchainProbes: List<List<String>> = emptyList(),
+
     // ---- assemble-stage behavior ----
 
     /** JVM JNI wrapper library file name, or null when the target has no JVM runtime (iOS). */
@@ -196,19 +203,8 @@ internal fun FfmpegBuildContext.hostWindowsTarget(): FfmpegBuildTarget = when (h
     else -> windowsX64Target()
 }
 
-private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget = FfmpegBuildTarget(
-    name = "WindowsX64",
-    configureFlags = listOf(
-        "--arch=x86_64",
-        "--target-os=mingw32",
-        "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
-        "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
-    ) + opensslHttpTlsFlags + windowsD3d11vaFlags,
-    env = mapOf("MSYSTEM" to "UCRT64"),
-    shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
-    libExtension = "dll",
-    libPrefix = "",
-    msys2Packages = listOf(
+private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget {
+    val msys2Packages = listOf(
         "make",
         "diffutils",
         "pkg-config",
@@ -216,26 +212,32 @@ private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget = FfmpegBui
         "mingw-w64-ucrt-x86_64-gcc",
         "mingw-w64-ucrt-x86_64-nasm",
         "mingw-w64-ucrt-x86_64-openssl",
-    ),
-    jniWrapperName = "ffmpegkitjni.dll",
-    jniWrapperExtraLibs = listOf("-lstdc++"),
-    msysSubsystem = "ucrt64",
-    collectWindowsRuntime = true,
-)
+    )
+    return FfmpegBuildTarget(
+        name = "WindowsX64",
+        configureFlags = listOf(
+            "--arch=x86_64",
+            "--target-os=mingw32",
+            "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
+            "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags,
+        env = mapOf("MSYSTEM" to "UCRT64"),
+        shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
+        libExtension = "dll",
+        libPrefix = "",
+        msys2Packages = msys2Packages,
+        toolchainProbes = listOf(
+            listOf(msys2Dir.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages,
+        ),
+        jniWrapperName = "ffmpegkitjni.dll",
+        jniWrapperExtraLibs = listOf("-lstdc++"),
+        msysSubsystem = "ucrt64",
+        collectWindowsRuntime = true,
+    )
+}
 
-private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget = FfmpegBuildTarget(
-    name = "WindowsArm64",
-    configureFlags = listOf(
-        "--arch=aarch64",
-        "--target-os=mingw32",
-        "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
-        "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
-    ) + opensslHttpTlsFlags,
-    env = mapOf("MSYSTEM" to "CLANGARM64"),
-    shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
-    libExtension = "dll",
-    libPrefix = "",
-    msys2Packages = listOf(
+private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget {
+    val msys2Packages = listOf(
         "make",
         "diffutils",
         "pkg-config",
@@ -244,12 +246,29 @@ private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget = FfmpegB
         "mingw-w64-clang-aarch64-nasm",
         "mingw-w64-clang-aarch64-openssl",
         "mingw-w64-clang-aarch64-pkgconf",
-    ),
-    jniWrapperName = "ffmpegkitjni.dll",
-    jniWrapperExtraLibs = listOf("-lstdc++"),
-    msysSubsystem = "clangarm64",
-    collectWindowsRuntime = true,
-)
+    )
+    return FfmpegBuildTarget(
+        name = "WindowsArm64",
+        configureFlags = listOf(
+            "--arch=aarch64",
+            "--target-os=mingw32",
+            "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
+            "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
+        ) + opensslHttpTlsFlags,
+        env = mapOf("MSYSTEM" to "CLANGARM64"),
+        shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
+        libExtension = "dll",
+        libPrefix = "",
+        msys2Packages = msys2Packages,
+        toolchainProbes = listOf(
+            listOf(msys2Dir.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages,
+        ),
+        jniWrapperName = "ffmpegkitjni.dll",
+        jniWrapperExtraLibs = listOf("-lstdc++"),
+        msysSubsystem = "clangarm64",
+        collectWindowsRuntime = true,
+    )
+}
 
 // ---------------------------------------------------------------------------------------
 // Linux
@@ -279,6 +298,11 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
         "--enable-hwaccel=av1_vaapi",
     ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags,
     libExtension = "so",
+    toolchainProbes = listOf(
+        listOf("cc", "--version"),
+        listOf("nasm", "--version"),
+        listOf("pkg-config", "--modversion", "openssl"),
+    ),
     jniWrapperName = "libffmpegkitjni.so",
 )
 
@@ -303,6 +327,9 @@ private fun macosTarget(name: String, arch: String): FfmpegBuildTarget = FfmpegB
         "--extra-ldflags=-arch $arch -mmacosx-version-min=12.0",
     ) + secureTransportHttpTlsFlags + macosVideotoolboxFlags,
     libExtension = "dylib",
+    toolchainProbes = listOf(
+        listOf("clang", "--version"),
+    ),
     jniWrapperName = "libffmpegkitjni.dylib",
     jniWrapperLinkFlags = listOf("-dynamiclib", "-Wl,-install_name,@loader_path/libffmpegkitjni.dylib"),
     rewriteAppleInstallNames = true,
@@ -337,6 +364,10 @@ private fun FfmpegBuildContext.iosTarget(
     ) + appleHostToolFlags + secureTransportHttpTlsFlags,
     shell = "bash",
     libExtension = "a",
+    toolchainProbes = listOf(
+        listOf("xcrun", "--sdk", sdk, "clang", "--version"),
+        listOf("xcrun", "--sdk", sdk, "--show-sdk-version"),
+    ),
     jniWrapperName = null,
     rewriteAppleInstallNames = true,
     bundleFfmpegExecutable = false,
@@ -388,11 +419,15 @@ internal fun FfmpegBuildContext.androidTarget(abi: AndroidAbi): FfmpegBuildTarge
         else -> emptyList()
     }
 
+    // .cmd wrappers need a shell on Windows; probe failures degrade to a stable marker.
+    val clangProbe = if (hostOs == Os.Windows) listOf("cmd", "/c", cc, "--version") else listOf(cc, "--version")
+
     return FfmpegBuildTarget(
         name = androidTargetName(abi),
         libExtension = "so",
         shell = if (hostOs == Os.Windows) msys2Dir.resolve("usr/bin/bash.exe").absolutePath else "bash",
         env = if (hostOs == Os.Windows) mapOf("MSYSTEM" to "UCRT64") else emptyMap(),
+        toolchainProbes = listOf(clangProbe),
         configureFlags = listOf(
             // Android keeps network disabled until a cross-compiled TLS backend
             // is wired in for this target family.

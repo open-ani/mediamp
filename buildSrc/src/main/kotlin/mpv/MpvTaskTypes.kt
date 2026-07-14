@@ -4,10 +4,12 @@ import nativebuild.copyTreePreservingLinks
 import nativebuild.deleteRecursivelyForce
 import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
+import nativebuild.makePkgConfigRelocatable
 import nativebuild.pathForShell
 import nativebuild.parseWindowsImportedDllNames
 import nativebuild.recreateDirectory
 import nativebuild.resolveWindowsObjdump
+import nativebuild.rewriteMachOToLoaderPath
 import nativebuild.shellQuote
 import nativebuild.shellScriptWithExports
 import org.gradle.api.DefaultTask
@@ -18,9 +20,11 @@ import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
@@ -31,6 +35,11 @@ import org.gradle.process.ExecOperations
 import java.io.File
 import javax.inject.Inject
 
+/**
+ * Stages the patched mpv source and runs `meson setup`. Deliberately NOT cacheable: its
+ * interesting product is the configured build tree, which is cheap to recreate locally
+ * but expensive to store; the cache boundary is [MpvBuildTask].
+ */
 abstract class MpvConfigureTask : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -68,14 +77,24 @@ abstract class MpvConfigureTask : DefaultTask() {
     @get:Optional
     abstract val crossFileContent: Property<String>
 
-    @get:OutputDirectory
+    /**
+     * Whole target build directory. Internal on purpose: configure only owns the staged
+     * source; `meson compile`/`meson install` (the build task) write in here too, and
+     * declaring the whole directory as an output would overlap with the build task's
+     * outputs, which disables build caching.
+     */
+    @get:Internal
     abstract val buildDirPath: DirectoryProperty
+
+    /** The staged mpv source tree, `<buildDir>/source`, including downloaded wraps. */
+    @get:OutputDirectory
+    abstract val stagedSourceDir: DirectoryProperty
 
     @get:OutputFile
     abstract val configStamp: RegularFileProperty
 
-    @get:InputDirectory
-    @get:Optional
+    /** Tool location, not content input: versions are captured by the toolchain fingerprint. */
+    @get:Internal
     abstract val msys2Dir: DirectoryProperty
 
     @get:Inject
@@ -202,10 +221,12 @@ abstract class MpvConfigureTask : DefaultTask() {
             environment(baseEnv)
         }
 
+        // The stamp feeds the build task's cache key, so it must not contain absolute
+        // worktree paths (the FFmpeg install participates in the key as a content input
+        // on the build task instead).
         configStamp.get().asFile.writeText(
             buildString {
                 appendLine("buildType=${mesonBuildType.get()}")
-                appendLine("ffmpegInstall=${ffmpegInstall.absolutePath}")
                 append(setupArgs.get().joinToString("\n"))
             },
         )
@@ -260,9 +281,33 @@ abstract class MpvConfigureTask : DefaultTask() {
     }
 }
 
+/**
+ * Runs `meson compile && meson install` — the expensive step and therefore the primary
+ * build-cache boundary (layer 1) for mpv. The cache key is the staged (patched, wraps
+ * included) source content, the meson configuration, the FFmpeg install it links
+ * against, and the toolchain fingerprint; the cached output is the install prefix.
+ */
+@CacheableTask
 abstract class MpvBuildTask : DefaultTask() {
+    /** Staged source content (including downloaded wrap subprojects). */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val stagedSourceDir: DirectoryProperty
+
+    /** The FFmpeg install this mpv build compiles and links against. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val ffmpegInstallDir: DirectoryProperty
+
+    /** Meson build type and setup args as written by [MpvConfigureTask]. */
     @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
     abstract val configStamp: RegularFileProperty
+
+    /** Cross-file content with worktree-specific paths masked (Android targets). */
+    @get:Input
+    @get:Optional
+    abstract val crossFileFingerprint: Property<String>
 
     @get:Input
     abstract val shell: Property<String>
@@ -273,13 +318,20 @@ abstract class MpvBuildTask : DefaultTask() {
     @get:Input
     abstract val hostOsName: Property<String>
 
-    /** Set on cross builds, which configure prefix=/ and install here via --destdir. */
+    /** See [nativebuild.ToolchainFingerprintValueSource]. */
     @get:Input
-    @get:Optional
+    abstract val toolchainFingerprint: Property<String>
+
+    /** Set on cross builds, which configure prefix=/ and install here via --destdir. */
+    @get:Internal
     abstract val installDestDir: Property<String>
 
-    @get:OutputDirectory
+    /** Working directory prepared by configure; scratch state, not an input or output. */
+    @get:Internal
     abstract val buildDirPath: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val installDir: DirectoryProperty
 
     @get:OutputFile
     abstract val buildStamp: RegularFileProperty
@@ -292,6 +344,10 @@ abstract class MpvBuildTask : DefaultTask() {
         val buildRoot = buildDirPath.get().asFile
         val mesonBuildDir = buildRoot.resolve("meson")
         val windowsMsys = hostOsName.get() == "Windows"
+        require(mesonBuildDir.isDirectory) {
+            "mpv build directory at ${mesonBuildDir.absolutePath} is not configured. " +
+                "Run the matching mpvConfigure task first."
+        }
 
         val destDirArg = installDestDir.orNull
             ?.let { " --destdir ${shellQuote(pathForShell(File(it), windowsMsys))}" }
@@ -310,10 +366,17 @@ abstract class MpvBuildTask : DefaultTask() {
             environment(envVars.get())
         }
 
+        makePkgConfigRelocatable(installDir.get().asFile, logger)
         buildStamp.get().asFile.writeText(System.currentTimeMillis().toString())
     }
 }
 
+/**
+ * Compiles the `mediampv` JNI wrapper — build-cache layer 2: keyed on the wrapper
+ * sources plus the layer-1 install outputs, so editing the JNI code only recompiles the
+ * wrapper and never invalidates the mpv/FFmpeg compiles.
+ */
+@CacheableTask
 abstract class MpvJniBuildTask : DefaultTask() {
     @get:Input
     abstract val targetName: Property<String>
@@ -323,9 +386,11 @@ abstract class MpvJniBuildTask : DefaultTask() {
     abstract val sourceDir: DirectoryProperty
 
     @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val mpvInstallDir: DirectoryProperty
 
     @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val ffmpegInstallDir: DirectoryProperty
 
     @get:Input
@@ -336,6 +401,14 @@ abstract class MpvJniBuildTask : DefaultTask() {
 
     @get:Input
     abstract val hostOsName: Property<String>
+
+    /** See [nativebuild.ToolchainFingerprintValueSource]. */
+    @get:Input
+    abstract val toolchainFingerprint: Property<String>
+
+    /** The wrapper may compile against the Gradle JVM's JNI headers. */
+    @get:Input
+    abstract val jdkMajorVersion: Property<String>
 
     // Toolchain description, provided by MpvJniToolchain (MpvTargets.kt).
 
@@ -360,8 +433,8 @@ abstract class MpvJniBuildTask : DefaultTask() {
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
-    @get:InputDirectory
-    @get:Optional
+    /** Tool location, not content input: versions are captured by [toolchainFingerprint]. */
+    @get:Internal
     abstract val msys2Dir: DirectoryProperty
 
     @get:Inject
@@ -463,8 +536,8 @@ abstract class MpvAssembleTask : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
-    @get:InputDirectory
-    @get:Optional
+    /** Tool location, not content input. */
+    @get:Internal
     abstract val msys2Dir: DirectoryProperty
 
     @get:Inject
@@ -495,11 +568,20 @@ abstract class MpvAssembleTask : DefaultTask() {
             }
 
             MpvRuntimePostProcessing.MACOS_BUNDLE_DYLIBS -> {
-                rewriteAppleInstallNames(
+                // Name-based rewrite works for cache-restored install dirs too, whose
+                // recorded install names belong to another worktree/machine.
+                val bundledDylibs = runtimeDir.walkTopDown()
+                    .filter { it.isFile && it.name.endsWith(".dylib") }
+                    .map(File::getCanonicalFile)
+                    .distinctBy(File::getAbsolutePath)
+                    .toList()
+                rewriteMachOToLoaderPath(
                     execOperations = execOperations,
-                    mpvInstallDir = installPrefix,
-                    ffmpegInstallDir = ffmpegPrefix,
-                    outputDir = outputPrefix,
+                    machOFiles = bundledDylibs,
+                    bundledLibraryNames = runtimeDir.walkTopDown()
+                        .filter { it.isFile && it.name.endsWith(".dylib") }
+                        .map(File::getName)
+                        .toSet(),
                 )
                 bundleAppleExternalDependencies(
                     execOperations = execOperations,
@@ -689,51 +771,6 @@ private fun collectWindowsRuntimeDlls(
 
     if (copied.isNotEmpty()) {
         logger.lifecycle("Collected Windows runtime DLLs for mpv: ${copied.sorted().joinToString()}")
-    }
-}
-
-private fun rewriteAppleInstallNames(
-    execOperations: ExecOperations,
-    mpvInstallDir: File,
-    ffmpegInstallDir: File,
-    outputDir: File,
-) {
-    val outputLibDir = outputDir.resolve("lib")
-    val machOFiles = outputLibDir.walkTopDown()
-        .filter { it.isFile && it.name.endsWith(".dylib") }
-        .map(File::getCanonicalFile)
-        .distinctBy(File::getAbsolutePath)
-        .toList()
-
-    if (machOFiles.isEmpty()) return
-
-    val installNameMap = buildMap {
-        listOf(mpvInstallDir, ffmpegInstallDir)
-            .map { it.resolve("lib") }
-            .filter(File::isDirectory)
-            .forEach { libDir ->
-                libDir.walkTopDown()
-                    .filter { it.isFile && it.name.endsWith(".dylib") }
-                    .forEach { dylib ->
-                        put(dylib.canonicalFile.absolutePath, "@loader_path/${dylib.name}")
-                        put(dylib.absolutePath, "@loader_path/${dylib.name}")
-                    }
-            }
-    }
-
-    machOFiles.forEach { dylib ->
-        execOperations.exec {
-            commandLine("xcrun", "install_name_tool", "-id", "@loader_path/${dylib.name}", dylib.absolutePath)
-        }
-    }
-
-    machOFiles.forEach { machO ->
-        installNameMap.forEach { (oldPath, newPath) ->
-            execOperations.exec {
-                commandLine("xcrun", "install_name_tool", "-change", oldPath, newPath, machO.absolutePath)
-                isIgnoreExitValue = true
-            }
-        }
     }
 }
 

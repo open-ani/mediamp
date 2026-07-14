@@ -1,6 +1,7 @@
 #include "log.h"
 
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <jni.h>
 
@@ -75,7 +76,7 @@ void log_to_stderr(int level, const char *prefix, const char *text) {
 #endif
 }
 
-void dispatch(int level, const char *prefix, const char *text) {
+void dispatch(const void *instance_handle, int level, const char *prefix, const char *text) {
     if (!prefix) prefix = "mediampv";
     if (!text) text = "";
 
@@ -107,6 +108,7 @@ void dispatch(int level, const char *prefix, const char *text) {
     if (jprefix && jtext) {
         env->CallStaticVoidMethod(jni_mediamp_clazz_MPVLogKt,
                                   jni_mediamp_method_MPVLogKt_onNativeLog,
+                                  static_cast<jlong>(reinterpret_cast<std::uintptr_t>(instance_handle)),
                                   static_cast<jint>(level), jprefix, jtext);
     } else {
         log_to_stderr(level, prefix, text);
@@ -120,22 +122,37 @@ void dispatch(int level, const char *prefix, const char *text) {
     if (jtext) env->DeleteLocalRef(jtext);
 }
 
-} // namespace
-
-void log_print(int level, const char *format, ...) {
+void log_vprint(const void *instance_handle, int level, const char *format, va_list args) {
     char buffer[2048];
-    va_list args;
-    va_start(args, format);
     const int written = vsnprintf(buffer, sizeof(buffer), format ? format : "", args);
-    va_end(args);
     if (written < 0) {
         return;
     }
-    dispatch(level, "mediampv", buffer);
+    dispatch(instance_handle, level, "mediampv", buffer);
+}
+
+} // namespace
+
+void log_print(int level, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    log_vprint(nullptr, level, format, args);
+    va_end(args);
+}
+
+void log_print(const void *instance_handle, int level, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    log_vprint(instance_handle, level, format, args);
+    va_end(args);
 }
 
 void log_forward(int level, const char *prefix, const char *text) {
-    dispatch(level, prefix, text);
+    dispatch(nullptr, level, prefix, text);
+}
+
+void log_forward(const void *instance_handle, int level, const char *prefix, const char *text) {
+    dispatch(instance_handle, level, prefix, text);
 }
 
 } // namespace mediampv

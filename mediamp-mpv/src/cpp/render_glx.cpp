@@ -291,7 +291,7 @@ void mpv_handle_t::render_thread_loop() {
     while (!render_quit_) {
         render_cv_.wait(lock, [this] {
             return render_quit_ || render_pending_ || config_pending_ || retire_ack_pending_ ||
-                screenshot_pending_;
+                screenshot_pending_ || readback_pending_;
         });
         if (render_quit_) break;
 
@@ -317,6 +317,21 @@ void mpv_handle_t::render_thread_loop() {
             lock.lock();
             screenshot_ok_ = saved;
             screenshot_finished_ = true;
+            render_cv_.notify_all();
+            continue;
+        }
+        if (readback_pending_) {
+            readback_pending_ = false;
+            lock.unlock();
+            std::vector<uint32_t> pixels;
+            int width = 0, height = 0;
+            const bool read = read_surface_pixels_on_render_thread(pixels, width, height);
+            lock.lock();
+            readback_pixels_ = std::move(pixels);
+            readback_width_ = width;
+            readback_height_ = height;
+            readback_ok_ = read;
+            readback_finished_ = true;
             render_cv_.notify_all();
             continue;
         }
@@ -511,6 +526,54 @@ bool mpv_handle_t::save_surface_png(const char *path) {
     render_cv_.notify_all();
     render_cv_.wait(lock, [this] { return screenshot_finished_ || render_quit_; });
     return screenshot_finished_ && screenshot_ok_;
+}
+
+bool mpv_handle_t::read_surface_pixels_on_render_thread(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!buffers_allocated_ || latest_index_ < 0) return false;
+    const opengl_buffer &buffer = buffers_[latest_index_];
+    const size_t pixel_count = static_cast<size_t>(buffer_width_) * buffer_height_;
+    std::vector<uint8_t> rgba(pixel_count * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, buffer.fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, buffer_width_, buffer_height_, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (glGetError() != GL_NO_ERROR) return false;
+
+    out_pixels.resize(pixel_count);
+    for (int y = 0; y < buffer_height_; ++y) {
+        const size_t source_row = static_cast<size_t>(buffer_height_ - 1 - y) * buffer_width_;
+        const size_t target_row = static_cast<size_t>(y) * buffer_width_;
+        for (int x = 0; x < buffer_width_; ++x) {
+            const size_t source = (source_row + x) * 4;
+            out_pixels[target_row + x] = 0xFF000000u |
+                (static_cast<uint32_t>(rgba[source]) << 16) |
+                (static_cast<uint32_t>(rgba[source + 1]) << 8) |
+                static_cast<uint32_t>(rgba[source + 2]);
+        }
+    }
+    out_width = buffer_width_;
+    out_height = buffer_height_;
+    return true;
+}
+
+bool mpv_handle_t::read_surface_pixels(
+    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!render_thread_) return false;
+    std::unique_lock<std::mutex> lock(render_mutex_);
+    if (!buffers_allocated_ || latest_index_ < 0 || readback_pending_) return false;
+    readback_pixels_.clear();
+    readback_width_ = readback_height_ = 0;
+    readback_pending_ = true;
+    readback_finished_ = false;
+    readback_ok_ = false;
+    render_cv_.notify_all();
+    render_cv_.wait(lock, [this] { return readback_finished_ || render_quit_; });
+    if (!readback_finished_ || !readback_ok_) return false;
+    out_pixels = readback_pixels_;
+    out_width = readback_width_;
+    out_height = readback_height_;
+    return true;
 }
 
 void mpv_handle_t::cleanup_render_resources() {

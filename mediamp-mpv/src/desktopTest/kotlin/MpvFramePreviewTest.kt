@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -123,6 +124,96 @@ class MpvFramePreviewTest {
         }
     }
 
+    /**
+     * Regression: seek-landing detection must not require time-pos to end up near the target.
+     * With `absolute+keyframes` the decoder snaps to the previous keyframe; this video has its
+     * only keyframe at t=0, so a request at 4s lands ~4s away from the target. The old check
+     * (|time-pos - target| < 3s) permanently failed for such positions.
+     */
+    @Test
+    fun `long-GOP media - positions far from a keyframe still produce frames`() {
+        if (!prepareOrSkip()) return
+        val video = generateLongGopVideo() ?: run {
+            skip("ffmpeg unavailable or long-GOP video generation failed")
+            return
+        }
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            try {
+                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+                val preview = assertNotNull(player.features[FramePreview.Key])
+                val frame = assertNotNull(
+                    preview.getPreviewFrame(4_000, 160, 160),
+                    "no frame at 4s on long-GOP media",
+                )
+                assertDominantColor(frame, "red") { r, _, b -> r > 180 && b < 80 }
+            } finally {
+                player.close()
+            }
+        }
+    }
+
+    /**
+     * Contract: frames must fit within the maxWidth/maxHeight of EACH request. The session used
+     * to size its surface from the first request only, so a later smaller request received
+     * oversized frames.
+     */
+    @Test
+    fun `smaller max size in a later request shrinks the frame`() {
+        if (!prepareOrSkip()) return
+        val video = generateColorVideo()!!
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            try {
+                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+                val preview = assertNotNull(player.features[FramePreview.Key])
+
+                val big = assertNotNull(preview.getPreviewFrame(1_000, 160, 160), "no frame at 160x160")
+                assertTrue(big.width <= 160 && big.height <= 160, "unexpected size ${big.width}x${big.height}")
+
+                val small = assertNotNull(preview.getPreviewFrame(1_000, 64, 64), "no frame at 64x64")
+                assertTrue(
+                    small.width <= 64 && small.height <= 64,
+                    "frame ${small.width}x${small.height} exceeds the requested 64x64 bounds",
+                )
+                assertDominantColor(small, "red") { r, _, b -> r > 180 && b < 80 }
+            } finally {
+                player.close()
+            }
+        }
+    }
+
+    /** Audio-only media must fail fast (no-video detection) and cache the verdict. */
+    @Test
+    fun `audio-only media returns null quickly and caches the result`() {
+        if (!prepareOrSkip()) return
+        val audio = generateAudioOnlyMedia() ?: run {
+            skip("ffmpeg unavailable or audio-only media generation failed")
+            return
+        }
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            try {
+                player.setMediaData(UriMediaData(audio.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+                val preview = assertNotNull(player.features[FramePreview.Key])
+
+                val first = kotlin.system.measureTimeMillis {
+                    assertNull(preview.getPreviewFrame(1_000, 160, 160), "audio-only media produced a frame")
+                }
+                // The no-video-track detection kicks in once the demuxer opens the file; it must
+                // not sit out the full 10s first-frame timeout.
+                assertTrue(first < 8_000, "no-video detection took ${first}ms")
+
+                val second = kotlin.system.measureTimeMillis {
+                    assertNull(preview.getPreviewFrame(2_000, 160, 160))
+                }
+                assertTrue(second < 1_000, "no-video verdict should be cached, took ${second}ms")
+            } finally {
+                player.close()
+            }
+        }
+    }
+
     private fun runScenario(mediaData: MediaData) {
         runBlocking(Dispatchers.Default) {
             val player = MpvMediampPlayer(Any(), coroutineContext)
@@ -189,7 +280,11 @@ class MpvFramePreviewTest {
     }
 
     @OptIn(ExperimentalMediampApi::class)
-    private class FileSeekableInputMediaData(private val file: File) : SeekableInputMediaData {
+    private class FileSeekableInputMediaData(
+        private val file: File,
+        /** Artificial latency per read, to widen decode/seek timing windows in race tests. */
+        private val readDelayMillis: Long = 0,
+    ) : SeekableInputMediaData {
         override val uri: String get() = "test://${file.name}"
         override val extraFiles: MediaExtraFiles get() = MediaExtraFiles.EMPTY
         override val options: List<String> get() = emptyList()
@@ -204,8 +299,10 @@ class MpvFramePreviewTest {
                 override val bytesRemaining: Long get() = fileSize - raf.filePointer
                 override val size: Long get() = fileSize
                 override fun seekTo(position: Long) = raf.seek(position)
-                override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-                    raf.read(buffer, offset, length)
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                    if (readDelayMillis > 0) Thread.sleep(readDelayMillis)
+                    return raf.read(buffer, offset, length)
+                }
 
                 override fun close() = raf.close()
             }
@@ -230,7 +327,90 @@ class MpvFramePreviewTest {
         return target
     }
 
+    /**
+     * Regression (fast-scrub wrong thumbnail): a request following a CANCELLED in-flight
+     * request must return its OWN position's frame. Cancelling the caller does not cancel
+     * mpv's seek, so the previous request's seek/render can still be in flight when the
+     * next request starts; if completion detection attributes that activity to the new
+     * request, it returns the previous position's frame labeled with the new target.
+     *
+     * Note: the misattribution window depends on mpv-internal timing and does not reliably
+     * reproduce in-process even with slowed reads (the demuxer cache absorbs most of the
+     * latency), so this test is a functional guard for the cancel-then-grab sequence rather
+     * than a deterministic reproducer of the race.
+     */
+    @Test
+    fun `frame after a cancelled request matches the new position`() {
+        if (!prepareOrSkip()) return
+        val video = generateColorVideo()!!
+        runBlocking(Dispatchers.Default) {
+            val player = MpvMediampPlayer(Any(), coroutineContext)
+            try {
+                // Slow reads stretch each seek to >100ms so a cancelled request's seek is
+                // reliably still in flight when the next request starts; with instant local
+                // reads the race window is only microseconds wide and the test cannot see it.
+                player.setMediaData(FileSeekableInputMediaData(video, readDelayMillis = 10))
+                val preview = assertNotNull(player.features[FramePreview.Key])
+                // Warm the session so iteration timing is dominated by the seeks themselves.
+                assertNotNull(preview.getPreviewFrame(1_000, 160, 160))
+
+                repeat(8) { i ->
+                    // Seek towards the blue zone and cancel while the seek is in flight;
+                    // vary the cancellation point across iterations.
+                    val job = launch { preview.getPreviewFrame(4_000, 160, 160) }
+                    delay(40L + (i % 4) * 20L)
+                    job.cancel()
+                    job.join()
+
+                    val frame = assertNotNull(
+                        preview.getPreviewFrame(1_000, 160, 160),
+                        "no frame in iteration $i",
+                    )
+                    assertDominantColor(frame, "red (iteration $i)") { r, _, b -> r > 180 && b < 80 }
+                }
+            } finally {
+                player.close()
+            }
+        }
+    }
+
+    /** 5s of solid red with keyframes only at t=0 (keyint 300, scenecut off). */
+    private fun generateLongGopVideo(): File? {
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-longgop.mp4")
+        if (target.isFile && target.length() > 0) return target
+        val ffmpeg = findFfmpeg() ?: return null
+        val process = ProcessBuilder(
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", "color=c=red:size=640x360:rate=30:duration=5",
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+            "-x264-params", "keyint=300:min-keyint=300:scenecut=0",
+            target.absolutePath,
+        ).redirectErrorStream(true).start()
+        process.inputStream.readAllBytes()
+        if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) return null
+        return target
+    }
+
+    /** 3s sine tone, no video track. */
+    private fun generateAudioOnlyMedia(): File? {
+        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-frame-preview-audio.m4a")
+        if (target.isFile && target.length() > 0) return target
+        val ffmpeg = findFfmpeg() ?: return null
+        val process = ProcessBuilder(
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:a", "aac",
+            target.absolutePath,
+        ).redirectErrorStream(true).start()
+        process.inputStream.readAllBytes()
+        if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) return null
+        return target
+    }
+
+    // Same discovery as MpvMediampPlayerSmokeTest. Deliberately NOT the ffmpeg shipped in
+    // the assembled runtime: that one is an LGPL build without libx264, so it can decode
+    // but not generate the H.264 test videos.
     private fun findFfmpeg(): String? =
-        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg")
-            .firstOrNull { File(it).canExecute() }
+        listOf("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg", "ffmpeg", "ffmpeg.exe")
+            .firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
 }

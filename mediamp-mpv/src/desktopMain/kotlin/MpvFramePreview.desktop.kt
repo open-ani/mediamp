@@ -9,11 +9,14 @@
 package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -28,18 +31,12 @@ import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
-import org.openani.mediamp.io.SeekableInput
+import org.openani.mediamp.mpv.internal.MpvPreviewDecoder
+import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import org.openani.mediamp.source.MediaData
-import org.openani.mediamp.source.MediaExtraFiles
-import org.openani.mediamp.source.SeekableInputMediaData
-import org.openani.mediamp.source.UriMediaData
-import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
-import java.io.File
-import java.util.concurrent.CopyOnWriteArrayList
-import javax.imageio.ImageIO
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -49,27 +46,26 @@ internal actual fun createMpvFramePreview(
     context: Any,
     parentCoroutineContext: CoroutineContext,
 ): FramePreview? {
-    // The preview decoder is itself an MpvMediampPlayer, which would recursively get its own
-    // (never-used) FramePreview. Cut the recursion at depth 1.
-    if (context is MpvFramePreviewContextMarker) return null
-    return MpvFramePreview(player, context, parentCoroutineContext)
+    // Without a surface-ring backend frames cannot be read back, so the
+    // feature is absent rather than present-but-always-null.
+    val ringBackend = currentSurfaceRingBackend() ?: return null
+    return MpvFramePreview(player, context, ringBackend, parentCoroutineContext)
 }
 
-/** Marks the `context` of a preview decoder instance so it does not create nested previews. */
-internal class MpvFramePreviewContextMarker(val delegate: Any)
-
 /**
- * [FramePreview] implementation backed by a second, headless mpv instance.
+ * [FramePreview] implementation backed by a second, minimal mpv instance
+ * ([MpvPreviewDecoder] — no event listeners, no player features, tiny demuxer cache).
  *
- * The preview instance loads the same media (a second [SeekableInput] for stream_cb media),
- * stays paused, and renders into a small native surface ring sized to fit the requested
- * dimensions; each request is a keyframe seek followed by a surface readback.
+ * The decoder loads the same media (a second input for stream_cb media), stays paused,
+ * and renders into a small native surface ring sized per request; each request is a
+ * keyframe seek followed by a direct pixel readback.
  */
 @OptIn(ExperimentalMediampApi::class)
 internal class MpvFramePreview(
     private val mainPlayer: JvmMpvMediampPlayer,
     private val context: Any,
-    private val parentCoroutineContext: CoroutineContext,
+    private val ringBackend: MpvSurfaceRingBackend,
+    parentCoroutineContext: CoroutineContext,
 ) : FramePreview, AutoCloseable {
     private val scope = CoroutineScope(
         parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
@@ -84,7 +80,7 @@ internal class MpvFramePreview(
             // so it never outlives the media data it reads from.
             mainPlayer.mediaData.collect { data ->
                 mutex.withLock {
-                    if (session != null && session?.originalData !== data) {
+                    if (session != null && session?.mediaData !== data) {
                         discardSessionLocked()
                     }
                 }
@@ -98,9 +94,9 @@ internal class MpvFramePreview(
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 if (closed) return@withLock null
-                val session = obtainSessionLocked(data, maxWidth, maxHeight) ?: return@withLock null
+                val session = obtainSessionLocked(data) ?: return@withLock null
                 try {
-                    session.grabFrame(positionMillis)
+                    session.grabFrame(positionMillis, maxWidth, maxHeight)
                 } catch (e: CancellationException) {
                     // The caller moved on to a newer position (collectLatest). The session is
                     // still healthy — destroying it here would tear down and rebuild the whole
@@ -115,27 +111,33 @@ internal class MpvFramePreview(
         }
     }
 
-    private suspend fun obtainSessionLocked(data: MediaData, maxWidth: Int, maxHeight: Int): PreviewSession? {
+    private suspend fun obtainSessionLocked(data: MediaData): PreviewSession? {
         session?.let { existing ->
-            if (existing.originalData === data) return existing
+            if (existing.mediaData === data) return existing
             discardSessionLocked()
         }
         // A new Linux preview player needs a GLX environment before vo=libmpv can load.
         val renderEnvironment = (mainPlayer as? MpvMediampPlayer)?.currentOpenGLRenderEnvironment()
         if (hostOs == OS.Linux && renderEnvironment == null) return null
         return try {
-            // NonCancellable: session creation is expensive shared state; a cancelled first
+            // NonCancellable: decoder creation is expensive shared state; a cancelled first
             // request must not abort it half-way (the next request reuses the session).
             withContext(NonCancellable) {
-                PreviewSession.create(context, parentCoroutineContext, data, maxWidth, maxHeight, renderEnvironment)
+                val decoder = MpvPreviewDecoder(context, ringBackend, renderEnvironment)
+                try {
+                    PreviewSession(data, decoder, scope)
+                } catch (e: Throwable) {
+                    decoder.close()
+                    throw e
+                }
             }.also { session = it }
         } catch (e: Exception) {
             null
         }
     }
 
-    private fun discardSessionLocked() {
-        session?.close()
+    private suspend fun discardSessionLocked() {
+        session?.closeSuspending()
         session = null
     }
 
@@ -152,22 +154,82 @@ internal class MpvFramePreview(
         }
     }
 
-    private class PreviewSession private constructor(
+    private class PreviewSession(
         /** The main player's media data; identity-compared to detect media changes. */
-        val originalData: MediaData,
-        private val previewData: MediaData,
-        private val player: MpvMediampPlayer,
-        private val renderCounter: MutableStateFlow<Long>,
-        private val maxWidth: Int,
-        private val maxHeight: Int,
+        val mediaData: MediaData,
+        private val decoder: MpvPreviewDecoder,
+        private val scope: CoroutineScope,
     ) : AutoCloseable {
-        private var started = false
+        private val renderCounter = MutableStateFlow(0L)
 
-        suspend fun grabFrame(positionMillis: Long): PreviewFrame? {
-            // NonCancellable: starting (paused load + surface setup) is shared progress that
-            // must survive the cancellation of the request that happened to trigger it.
-            if (!withContext(NonCancellable) { ensureStarted() }) return null
-            val handle = player.handle
+        private enum class StartOutcome {
+            READY,
+
+            /**
+             * The media has no video track, or the load terminated without producing one
+             * (e.g. a corrupt file). Permanent for this session.
+             */
+            UNPLAYABLE,
+
+            /** Transient (e.g. the data is not downloaded yet); retried by the next request. */
+            FAILED,
+        }
+
+        /**
+         * The shared load-and-probe attempt. Runs on the session [scope] so a caller
+         * cancelled mid-wait (scrubbing) does not abort it; the await in [ensureStarted]
+         * stays cancellable, unlike the previous NonCancellable block which pinned a
+         * cancelled caller (and the mutex) for the full 10s wait on unavailable data.
+         *
+         * All fields are confined to the preview mutex except [cachedOutcome], which the
+         * attempt writes from its own coroutine.
+         */
+        private var startAttempt: Deferred<StartOutcome>? = null
+
+        @Volatile
+        private var cachedOutcome: StartOutcome? = null
+
+        /** Display dimensions of the video (rotation/anamorphic-corrected), set by a READY attempt. */
+        private var videoWidth = 0
+        private var videoHeight = 0
+
+        private var surfaceWidth = 0
+        private var surfaceHeight = 0
+        private var surfaceHasFrame = false
+
+        /**
+         * True while a seek or ring reconfig may still produce a render that no request
+         * has accounted for — set before issuing either, cleared once the effect (or its
+         * absence) is confirmed. A caller cancelled mid-wait (fast scrubbing) leaves this
+         * true, and the next request settles the leftovers first.
+         */
+        private var unsettled = false
+
+        init {
+            decoder.setRenderUpdateListener { renderCounter.update { it + 1 } }
+        }
+
+        suspend fun grabFrame(positionMillis: Long, maxWidth: Int, maxHeight: Int): PreviewFrame? {
+            if (!ensureStarted()) return null
+            if (!ensureSurface(maxWidth, maxHeight)) return null
+            val handle = decoder.handle
+
+            // Settle leftovers from a previous request that was cancelled or timed out
+            // mid-seek: cancelling the caller does NOT cancel mpv's seek, so its seek and
+            // render are still in flight and would otherwise satisfy the completion
+            // signals below — this request would then return the PREVIOUS position's
+            // frame labeled with the new target, which is exactly what fast scrubbing
+            // used to produce. Wait out the in-flight seek, then absorb its pending
+            // render so the baselines captured below belong to this request alone.
+            withTimeoutOrNull(5_000) {
+                while (handle.getPropertyBoolean("seeking")) delay(20)
+                true
+            } ?: return null
+            if (unsettled) {
+                val counterAtSettle = renderCounter.value
+                withTimeoutOrNull(100) { renderCounter.first { it > counterAtSettle } }
+                unsettled = false
+            }
 
             val durationMillis = (handle.getPropertyDouble("duration") * 1000).toLong()
             val target = if (durationMillis > 0) {
@@ -177,159 +239,164 @@ internal class MpvFramePreview(
             }
 
             val counterBefore = renderCounter.value
+            val timePosBeforeMillis = (handle.getPropertyDouble("time-pos") * 1000).toLong()
+            unsettled = true
             if (!handle.command("seek", formatSecondsForMpv(target / 1000.0), "absolute+keyframes")) {
                 return null
             }
 
-            // Wait until the seek lands: while paused, mpv decodes the target frame, updates
-            // time-pos and pushes a render update.
+            // Wait for the seek to finish. time-pos is deliberately NOT required to land near
+            // the target: `keyframes` snaps to the previous keyframe, which on long-GOP content
+            // (keyint of 5-10s is common) can be arbitrarily far from the target — a distance
+            // check would permanently blank previews for such positions. Completion is instead
+            // a full seeking true->false cycle, an observed position change, or a fresh render.
+            // A no-op seek (the target maps to the already-displayed keyframe) may show none of
+            // these, so a short quiet window also counts as done.
+            var moved = false
             val landed = withTimeoutOrNull(5_000) {
+                var sawSeeking = false
+                var quietPolls = 0
                 while (true) {
+                    if (renderCounter.value > counterBefore) break
                     val seeking = handle.getPropertyBoolean("seeking")
                     val timePosMillis = (handle.getPropertyDouble("time-pos") * 1000).toLong()
-                    if (!seeking && abs(timePosMillis - target) < 3_000) break
+                    if (timePosMillis != timePosBeforeMillis) moved = true
+                    if (seeking) sawSeeking = true
+                    if (!seeking && (sawSeeking || moved)) break
+                    if (!seeking && ++quietPolls >= 15) break
                     delay(20)
                 }
                 true
             } ?: false
             if (!landed) return null
 
-            // Prefer a frame rendered after the seek. The surface ring only publishes complete
-            // frames, so the first post-seek render is safe to read immediately. When the seek
-            // lands on the keyframe that is already displayed, mpv may not push a new render —
-            // the surface content is still correct, so a timeout here is not an error.
-            withTimeoutOrNull(500) { renderCounter.first { it > counterBefore } }
-
-            val tmp = File.createTempFile("mediamp-mpv-preview", ".png")
-            try {
-                if (!player.dumpSurfaceForDebug(tmp.absolutePath)) return null
-                val image = ImageIO.read(tmp) ?: return null
-                val pixels = IntArray(image.width * image.height)
-                image.getRGB(0, 0, image.width, image.height, pixels, 0, image.width)
-                return PreviewFrame(target, image.width, image.height, pixels)
-            } finally {
-                tmp.delete()
+            if (renderCounter.value == counterBefore && moved) {
+                // The decoder landed on a different frame, so a fresh render is coming; without
+                // it the surface still holds the pre-seek picture. If it does not arrive in
+                // time we read anyway — a slightly stale thumbnail beats none (and unsettled
+                // stays true, so the next request absorbs the late render). When !moved the
+                // displayed keyframe already is the target and no render will come at all;
+                // waiting here used to cost every same-keyframe request a flat 500ms.
+                if (withTimeoutOrNull(1_000) { renderCounter.first { it > counterBefore } } != null) {
+                    unsettled = false
+                }
+            } else {
+                // Either our render already arrived (post-settle bumps are ours), or the
+                // seek was a no-op and no render is pending.
+                unsettled = false
             }
+
+            val dims = IntArray(2)
+            val pixels = decoder.readSurfacePixels(dims) ?: return null
+            return PreviewFrame(target, dims[0], dims[1], pixels)
         }
 
-        /** Loads the media paused, sizes the surface ring to the video, waits for the first frame. */
         private suspend fun ensureStarted(): Boolean {
-            if (started) return true
-            val handle = player.handle
-            if (!player.commandLoadFilePaused()) return false
+            // Fast path: a completed attempt already decided this session's fate.
+            when (cachedOutcome) {
+                StartOutcome.READY -> return true
+                StartOutcome.UNPLAYABLE -> return false
+                StartOutcome.FAILED, null -> {}
+            }
+            val attempt = startAttempt?.takeIf { it.isActive }
+                ?: scope.async(Dispatchers.IO) { doStart().also { cachedOutcome = it } }
+                    .also { startAttempt = it }
+            return attempt.await() == StartOutcome.READY
+        }
 
-            // Video dimensions become available once the first frame is decoded.
+        /** Loads the media paused and waits for the video dimensions of the first frame. */
+        private suspend fun doStart(): StartOutcome {
+            if (!decoder.loadPaused(mediaData)) return StartOutcome.FAILED
+
+            var unplayable = false
+            var codedFallbackPolls = 0
+            var sawLoading = false
+            var idlePolls = 0
             val dims = withTimeoutOrNull(10_000) {
                 while (true) {
-                    val w = handle.getPropertyInt("width")
-                    val h = handle.getPropertyInt("height")
-                    if (w > 0 && h > 0) return@withTimeoutOrNull w to h
+                    // Display dimensions include rotation and anamorphic aspect; the coded
+                    // width/height would distort such content. They normally appear together,
+                    // but fall back to the coded size if only that becomes available.
+                    val dw = decoder.handle.getPropertyInt("dwidth")
+                    val dh = decoder.handle.getPropertyInt("dheight")
+                    if (dw > 0 && dh > 0) return@withTimeoutOrNull dw to dh
+                    val w = decoder.handle.getPropertyInt("width")
+                    val h = decoder.handle.getPropertyInt("height")
+                    if (w > 0 && h > 0 && ++codedFallbackPolls >= 20) return@withTimeoutOrNull w to h
+
+                    // A load that TERMINATES without video dimensions (audio-only file with
+                    // aid=no selects no track at all; corrupt file) drops mpv back to idle.
+                    // Waiting out the full timeout — and re-waiting on every request — would
+                    // burn 10s per hover, so detect the idle transition. This cannot misfire
+                    // for merely-slow media: a demuxer blocked on unavailable data (torrent
+                    // inputs block rather than error) keeps idle-active false the whole time.
+                    val idleActive = decoder.handle.getPropertyBoolean("idle-active")
+                    if (!idleActive) {
+                        sawLoading = true
+                        idlePolls = 0
+                    } else if (sawLoading || ++idlePolls >= 40) {
+                        // Load ended (or, after 2s of continuous idle, never started).
+                        unplayable = true
+                        return@withTimeoutOrNull null
+                    }
                     delay(50)
                 }
                 @Suppress("UNREACHABLE_CODE")
                 null
-            } ?: return false
+            }
+            if (unplayable) return StartOutcome.UNPLAYABLE
+            if (dims == null) return StartOutcome.FAILED
+            videoWidth = dims.first
+            videoHeight = dims.second
+            return StartOutcome.READY
+        }
 
-            val (videoWidth, videoHeight) = dims
+        /**
+         * Sizes the surface ring to fit the video within [maxWidth] x [maxHeight] and makes
+         * sure a frame has landed in it. Re-checked on every request: the max size may
+         * legitimately change between requests, and returning frames larger than the
+         * requested bounds would break the [FramePreview.getPreviewFrame] contract.
+         */
+        private suspend fun ensureSurface(maxWidth: Int, maxHeight: Int): Boolean {
             val scale = min(
                 maxWidth.toFloat() / videoWidth,
                 maxHeight.toFloat() / videoHeight,
             ).coerceAtMost(1f)
-            val surfaceWidth = max(2, (videoWidth * scale).roundToInt())
-            val surfaceHeight = max(2, (videoHeight * scale).roundToInt())
-            if (!player.requestSurface(surfaceWidth, surfaceHeight, 0L)) return false
+            val desiredWidth = max(2, (videoWidth * scale).roundToInt())
+            val desiredHeight = max(2, (videoHeight * scale).roundToInt())
+            if (desiredWidth != surfaceWidth || desiredHeight != surfaceHeight) {
+                unsettled = true // the reconfig redraw is a render nobody has accounted for yet
+                if (!decoder.requestSurface(desiredWidth, desiredHeight)) return false
+                surfaceWidth = desiredWidth
+                surfaceHeight = desiredHeight
+                surfaceHasFrame = false
+            }
+            if (!surfaceHasFrame) {
+                // After a reconfig the new ring is empty until the render thread redraws the
+                // current frame into it (this happens even while paused). The probe read
+                // covers a frame that landed while no request was waiting (e.g. the request
+                // that reconfigured was cancelled mid-wait). unsettled deliberately stays
+                // true on all paths: a leftover seek's render and the reconfig redraw can
+                // both be pending, so the bump observed here is not proof of quiescence —
+                // grabFrame's settle phase absorbs whatever is still in flight.
+                val counterNow = renderCounter.value
+                surfaceHasFrame = decoder.readSurfacePixels(IntArray(2)) != null ||
+                    withTimeoutOrNull(5_000) { renderCounter.first { it > counterNow } } != null
+            }
+            return surfaceHasFrame
+        }
 
-            if (withTimeoutOrNull(5_000) { renderCounter.first { it > 0 } } == null) return false
-            started = true
-            return true
+        /**
+         * Cancels the in-flight start attempt (waiting for it to actually finish, so no
+         * coroutine still touches the handle) and then tears down the native decoder.
+         */
+        suspend fun closeSuspending() {
+            startAttempt?.cancelAndJoin()
+            close()
         }
 
         override fun close() {
-            try {
-                player.setRenderUpdateListener(null)
-                player.releaseSurface()
-                player.releaseRenderContext()
-            } catch (_: Exception) {
-            }
-            try {
-                player.close()
-            } catch (_: Exception) {
-            }
-            (previewData as? NonClosingSeekableInputMediaData)?.closeOpenInputs()
-        }
-
-        companion object {
-            suspend fun create(
-                context: Any,
-                parentCoroutineContext: CoroutineContext,
-                data: MediaData,
-                maxWidth: Int,
-                maxHeight: Int,
-                renderEnvironment: OpenGLRenderEnvironment?,
-            ): PreviewSession {
-                val previewData: MediaData = when (data) {
-                    is SeekableInputMediaData -> NonClosingSeekableInputMediaData(data)
-                    // UriMediaData is sealed; a fresh copy is safe because its close() is a no-op.
-                    is UriMediaData -> UriMediaData(data.uri, data.headers, data.extraFiles, data.options)
-                }
-                val renderCounter = MutableStateFlow(0L)
-                val player = MpvMediampPlayer(MpvFramePreviewContextMarker(context), parentCoroutineContext)
-                try {
-                    if (hostOs == OS.Linux) {
-                        checkNotNull(renderEnvironment) { "Linux frame preview requires the main player's GLX environment" }
-                        check(player.attachOpenGLRenderEnvironment(renderEnvironment)) {
-                            "Could not attach the main player's GLX environment to the preview decoder"
-                        }
-                    }
-                    val handle = player.handle
-                    // Keep the preview decoder lightweight: no audio, no subtitles.
-                    handle.setPropertyString("aid", "no")
-                    handle.setPropertyString("sid", "no")
-                    handle.setPropertyBoolean("pause", true)
-                    player.setRenderUpdateListener { renderCounter.update { it + 1 } }
-                    player.setMediaData(previewData)
-                    return PreviewSession(data, previewData, player, renderCounter, maxWidth, maxHeight)
-                } catch (e: Throwable) {
-                    try {
-                        player.close()
-                    } catch (_: Exception) {
-                    }
-                    (previewData as? NonClosingSeekableInputMediaData)?.closeOpenInputs()
-                    throw e
-                }
-            }
-        }
-    }
-
-    /**
-     * Delegates to the main player's media but never closes it (the main player owns it),
-     * and tracks inputs opened for the preview decoder so the session can close them.
-     */
-    private class NonClosingSeekableInputMediaData(
-        private val delegate: SeekableInputMediaData,
-    ) : SeekableInputMediaData {
-        private val openInputs = CopyOnWriteArrayList<SeekableInput>()
-
-        override val uri: String get() = delegate.uri
-        override val extraFiles: MediaExtraFiles get() = delegate.extraFiles
-        override val options: List<String> get() = delegate.options
-        override fun fileLength(): Long? = delegate.fileLength()
-
-        override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput =
-            delegate.createInput(coroutineContext).also { openInputs.add(it) }
-
-        override fun close() {
-            // no-op: the shared media data is owned by the main player.
-        }
-
-        fun closeOpenInputs() {
-            openInputs.forEach {
-                try {
-                    it.close()
-                } catch (_: Exception) {
-                }
-            }
-            openInputs.clear()
+            decoder.close()
         }
     }
 }
