@@ -279,6 +279,23 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
     configureFlags = listOf(
         "--arch=x86_64",
         "--target-os=linux",
+        // mpv's `hwdec=nvdec` uses the ordinary software decoders with FFmpeg's
+        // NVDEC hwaccels. CUDA/NVDEC driver libraries are loaded dynamically at
+        // runtime; ffnvcodec headers are a build-only dependency.
+        "--enable-ffnvcodec",
+        "--enable-nvdec",
+        "--enable-hwaccel=h264_nvdec",
+        "--enable-hwaccel=hevc_nvdec",
+        "--enable-hwaccel=vp9_nvdec",
+        "--enable-hwaccel=av1_nvdec",
+        // Intel and AMD share FFmpeg's VAAPI hwdevice. mediamp deliberately uses
+        // mpv's vaapi-copy path with the GLX renderer; direct DMA-BUF/EGL import is
+        // a separate capability and is not claimed by this build.
+        "--enable-vaapi",
+        "--enable-hwaccel=h264_vaapi",
+        "--enable-hwaccel=hevc_vaapi",
+        "--enable-hwaccel=vp9_vaapi",
+        "--enable-hwaccel=av1_vaapi",
     ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags,
     libExtension = "so",
     toolchainProbes = listOf(

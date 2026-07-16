@@ -9,10 +9,13 @@
 package org.openani.mediamp.mpv.internal
 
 import kotlinx.coroutines.currentCoroutineContext
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.mpv.MPVHandle
 import org.openani.mediamp.mpv.RenderUpdateListener
+import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -34,6 +37,7 @@ private const val FRAME_PREVIEW_LOAD_TARGET_PREFIX = "mediamp://frame_preview/"
 internal class MpvPreviewDecoder(
     context: Any,
     private val ringBackend: MpvSurfaceRingBackend,
+    renderEnvironment: OpenGLRenderEnvironment? = null,
 ) : AutoCloseable {
     val handle = MPVHandle(context)
 
@@ -44,6 +48,14 @@ internal class MpvPreviewDecoder(
     init {
         try {
             configure()
+            if (hostOs == OS.Linux) {
+                checkNotNull(renderEnvironment) {
+                    "Linux frame preview requires the main player's GLX environment"
+                }
+                check((ringBackend as OpenGLSurfaceRingBackend).attachRenderEnvironment(handle.ptr, renderEnvironment)) {
+                    "Could not attach the main player's GLX environment to the preview decoder"
+                }
+            }
             check(ringBackend.createRenderContext(handle.ptr)) {
                 "Failed to create the mpv render context for frame preview"
             }

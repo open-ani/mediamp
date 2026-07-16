@@ -35,6 +35,10 @@ struct ID3D12Resource;
 
 namespace mediampv {
 
+#ifdef __linux__
+class glx_context_provider;
+#endif
+
 class mpv_handle_t final {
 public:
     explicit mpv_handle_t(JNIEnv *env, jobject app_context) {
@@ -130,6 +134,22 @@ public:
     bool save_surface_png(const char *path);
     // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
     // top-down) with alpha forced opaque. Returns false when no frame is available.
+    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+#endif
+
+#ifdef __linux__
+    // Context A is Skiko-owned. These borrowed GLX inputs create producer context B
+    // in A's share group; a new identity rebuilds the complete native GL environment.
+    bool attach_opengl_render_environment(
+        int64_t display_ptr, int64_t share_context_ptr, int screen, uint64_t identity);
+    bool create_render_context();
+    bool destroy_render_context();
+    bool set_surface_config(int width, int height, int64_t ignored_device_ptr = 0);
+    uint64_t get_frame_state();
+    int64_t get_buffer_texture(int index); // GLuint texture name, not an FBO.
+    bool ack_retired_buffers();
+    bool has_opengl_surface();
+    bool save_surface_png(const char *path);
     bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
@@ -277,6 +297,69 @@ private:
     void drain_one_frame();
 #endif
 
+#ifdef __linux__
+    mpv_render_context *render_context_ = nullptr;
+    glx_context_provider *glx_provider_ = nullptr;
+
+    // Textures are share-group objects; these FBOs are context-B-local producer targets.
+    static constexpr int kOpenGLBufferCount = 3;
+    struct opengl_buffer {
+        uint32_t texture = 0; // GL_TEXTURE_2D / GL_RGBA8
+        uint32_t fbo = 0;
+    };
+    opengl_buffer buffers_[kOpenGLBufferCount];
+    opengl_buffer retired_buffers_[kOpenGLBufferCount];
+    bool has_retired_buffers_ = false;
+    bool buffers_allocated_ = false;
+    int buffer_width_ = 0, buffer_height_ = 0;
+    uint32_t buffer_generation_ = 0;
+    uint64_t frame_serial_ = 0;
+    int latest_index_ = -1;
+    std::atomic<uint64_t> frame_state_{0xFull << 44};
+
+    int64_t pending_display_ptr_ = 0;
+    int64_t pending_share_context_ptr_ = 0;
+    int pending_screen_ = 0;
+    uint64_t pending_environment_identity_ = 0;
+    bool environment_attached_ = false;
+    bool config_pending_ = false;
+    int pending_width_ = 0, pending_height_ = 0;
+    bool retire_ack_pending_ = false;
+    bool render_pending_ = false;
+    bool render_quit_ = false;
+    bool render_initialized_ = false;
+    bool render_initialize_ok_ = false;
+    std::string screenshot_path_;
+    bool screenshot_pending_ = false;
+    bool screenshot_finished_ = false;
+    bool screenshot_ok_ = false;
+    bool readback_pending_ = false;
+    bool readback_finished_ = false;
+    bool readback_ok_ = false;
+    std::vector<uint32_t> readback_pixels_;
+    int readback_width_ = 0;
+    int readback_height_ = 0;
+    std::mutex render_mutex_;
+    std::condition_variable render_cv_;
+    void *render_thread_ = nullptr; // std::thread*, owned by render_glx.cpp
+
+    void signal_render_update();
+    void start_render_thread();
+    void stop_render_thread();
+    void render_thread_loop();
+    bool create_mpv_render_context_on_render_thread();
+    void destroy_mpv_render_context_on_render_thread();
+    bool apply_config_locked();
+    bool allocate_buffer(opengl_buffer &buffer, int width, int height);
+    void destroy_buffer_ring(opengl_buffer *ring);
+    void publish_state_locked();
+    bool render_into(const opengl_buffer &buffer);
+    void drain_one_frame();
+    bool write_surface_png_on_render_thread(const char *path);
+    bool read_surface_pixels_on_render_thread(
+        std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+#endif
+
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
     std::atomic_bool event_loop_request_exit{false};
     bool stream_protocol_registered_ = false;
@@ -299,6 +382,9 @@ private:
     void cleanup_render_resources();
 #endif
 #ifdef __APPLE__
+    void cleanup_render_resources();
+#endif
+#ifdef __linux__
     void cleanup_render_resources();
 #endif
 };

@@ -26,6 +26,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
@@ -44,7 +46,7 @@ internal actual fun createMpvFramePreview(
     context: Any,
     parentCoroutineContext: CoroutineContext,
 ): FramePreview? {
-    // Without a surface-ring backend (Linux, TODO) frames cannot be read back, so the
+    // Without a surface-ring backend frames cannot be read back, so the
     // feature is absent rather than present-but-always-null.
     val ringBackend = currentSurfaceRingBackend() ?: return null
     return MpvFramePreview(player, context, ringBackend, parentCoroutineContext)
@@ -114,11 +116,14 @@ internal class MpvFramePreview(
             if (existing.mediaData === data) return existing
             discardSessionLocked()
         }
+        // A new Linux preview player needs a GLX environment before vo=libmpv can load.
+        val renderEnvironment = (mainPlayer as? MpvMediampPlayer)?.currentOpenGLRenderEnvironment()
+        if (hostOs == OS.Linux && renderEnvironment == null) return null
         return try {
             // NonCancellable: decoder creation is expensive shared state; a cancelled first
             // request must not abort it half-way (the next request reuses the session).
             withContext(NonCancellable) {
-                val decoder = MpvPreviewDecoder(context, ringBackend)
+                val decoder = MpvPreviewDecoder(context, ringBackend, renderEnvironment)
                 try {
                     PreviewSession(data, decoder, scope)
                 } catch (e: Throwable) {

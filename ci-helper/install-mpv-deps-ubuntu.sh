@@ -21,6 +21,8 @@ sudo apt-get install -y --no-install-recommends \
     ninja-build \
     patchelf \
     pkg-config \
+    libffmpeg-nvenc-dev \
+    libva-dev \
     libass-dev \
     libplacebo-dev \
     libasound2-dev \
