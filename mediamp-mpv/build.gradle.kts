@@ -100,8 +100,12 @@ tasks.withType<Test>().configureEach {
     //     no full meson build required).
     val mpvTestRequired = getPropertyOrNull("mediamp.mpv.test.required") == "true"
     val testNativeDir = when {
-        getOs() == Os.Windows ->
+        getOs() == Os.Windows -> {
+            if (mpvTestRequired) {
+                dependsOn("mpvAssembleWindowsX64")
+            }
             layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
+        }
 
         getOs() == Os.MacOS && mpvTestRequired -> {
             val macosTarget = if (getArch() == Arch.AARCH64) "MacosArm64" else "MacosX64"

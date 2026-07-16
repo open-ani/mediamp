@@ -361,6 +361,8 @@ val buildMatrixInstances = listOf(
         mpvBuildVariant = "windows",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=x86_64",
+            // The Windows runner assembles the production runtime and must not silently skip mpv smoke tests.
+            "-Pmediamp.mpv.test.required=true",
         ),
         buildAllAndroidAbis = false,
     ),
