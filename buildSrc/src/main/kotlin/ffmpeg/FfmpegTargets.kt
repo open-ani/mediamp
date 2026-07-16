@@ -266,7 +266,7 @@ private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget {
             "--target-os=mingw32",
             "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
             "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
-        ) + opensslHttpTlsFlags,
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags,
         env = mapOf("MSYSTEM" to "CLANGARM64"),
         shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
         libExtension = "dll",

@@ -87,10 +87,18 @@ val compileJniDevMacos = tasks.register<Exec>("compileJniDevMacos") {
     )
 }
 
+val hostMpvTargetName = when (getOs()) {
+    Os.Windows -> if (getArch() == Arch.AARCH64) "WindowsArm64" else "WindowsX64"
+    Os.Linux -> "LinuxX64"
+    Os.MacOS -> if (getArch() == Arch.AARCH64) "MacosArm64" else "MacosX64"
+    else -> null
+}
+val hostMpvAssembleTaskName = hostMpvTargetName?.let { "mpvAssemble$it" }
+
 tasks.withType<Test>().configureEach {
     // Where MpvMediampPlayerSmokeTest loads the native runtime from:
     // - Windows: the assembled meson runtime (no system libmpv exists, and the D3D11
-    //     render API needs our patched build anyway) — mpv-output/WindowsX64/bin.
+    //     render API needs our patched build anyway) — mpv-output/<target>/bin.
     // - macOS on a required runner (self-hosted, full environment): the assembled meson
     //     runtime — mpv-output/<target>/lib, which includes libmediampv.dylib. That
     //     runner has no Homebrew libmpv, so the dev fast-path below would skip and, under
@@ -102,9 +110,9 @@ tasks.withType<Test>().configureEach {
     val testNativeDir = when {
         getOs() == Os.Windows -> {
             if (mpvTestRequired) {
-                dependsOn("mpvAssembleWindowsX64")
+                hostMpvAssembleTaskName?.let { dependsOn(it) }
             }
-            layout.buildDirectory.dir("mpv-output/WindowsX64/bin").get().asFile
+            layout.buildDirectory.dir("mpv-output/$hostMpvTargetName/bin").get().asFile
         }
 
         getOs() == Os.MacOS && mpvTestRequired -> {
@@ -123,14 +131,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("mediamp.mpv.test.required", getPropertyOrNull("mediamp.mpv.test.required") ?: "false")
 }
 
-val hostMpvTargetName = when (getOs()) {
-    Os.Windows -> "WindowsX64"
-    Os.Linux -> "LinuxX64"
-    Os.MacOS -> if (getArch() == Arch.AARCH64) "MacosArm64" else "MacosX64"
-    else -> null
-}
 val hostMpvOutputDir = hostMpvTargetName?.let { layout.buildDirectory.dir("mpv-output/$it") }
-val hostMpvAssembleTaskName = hostMpvTargetName?.let { "mpvAssemble$it" }
 val legacyNativeBuildDir = projectDir.resolve("build-ci")
 
 val nativeJarForCurrentPlatform = tasks.register("nativeJarForCurrentPlatform", Jar::class.java) {

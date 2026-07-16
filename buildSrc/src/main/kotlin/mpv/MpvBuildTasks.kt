@@ -125,6 +125,7 @@ private fun registerMpvTasks(
         wrapDependencies.set(target.wrapDependencies)
         wrapFiles.set(target.wrapFiles)
         msys2Packages.set(target.msys2Packages)
+        target.msysSubsystem?.let { msysSubsystem.set(it) }
         buildDirPath.set(buildDir)
         stagedSourceDir.set(buildDir.map { it.dir("source") })
         this.configStamp.set(configStamp)
@@ -200,6 +201,7 @@ private fun registerMpvTasks(
         jniLibrary.set(jniOutputFile)
         runtimeDirName.set(target.runtime.runtimeDirName)
         postProcessing.set(target.runtime.postProcessing.name)
+        target.msysSubsystem?.let { msysSubsystem.set(it) }
         this.outputDir.set(outputDirProvider)
         if (msys2Dir != null) {
             this.msys2Dir.set(msys2Dir)

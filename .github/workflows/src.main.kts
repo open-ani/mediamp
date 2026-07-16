@@ -162,7 +162,7 @@ class MatrixInstance(
     val ffmpegBuildVariant: String? = null,
     /**
      * mpv 原生构建家族 (`mediamp.mpv.buildvariant`). null = 不设置属性 (Gradle 侧默认全家族注册).
-     * 注意 mpv 没有 windows-arm64 与 ios 目标; Android 交叉编译管线未就绪, 发布时勿包含 android.
+     * 注意 mpv 没有 ios 目标; Android 交叉编译管线未就绪, 发布时勿包含 android.
      */
     val mpvBuildVariant: String? = null,
 
@@ -373,12 +373,12 @@ val buildMatrixInstances = listOf(
         gradleHeap = "4g",
         uploadDesktopInstallers = true,
         ffmpegBuildVariant = "windows",
+        mpvBuildVariant = "windows",
         extraGradleArgs = listOf(
             "-P$ANI_ANDROID_ABIS=arm64-v8a",
+            "-Pmediamp.mpv.test.required=true",
         ),
         buildAllAndroidAbis = false,
-        // The Windows ARM64 job only builds and uploads the FFmpeg runtime artifact.
-        runTests = false,
     ),
     MatrixInstance(
         runner = Runner.GithubUbuntu2404,
@@ -624,6 +624,7 @@ workflow(
                 artifactName = ArtifactNames.ffmpegRuntimeJar("windows-arm64"),
                 path = "mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar",
             )
+            uploadMpvRuntimeJar()
         }
     }
     val linux = addJob(buildMatrixInstances[Runner.GithubUbuntu2404]) {
@@ -659,9 +660,8 @@ workflow(
                 )
             }
             run(command = "ls -R mediamp-ffmpeg/build/prebuilt-runtime-jars || true")
-            // mpv runtime prebuilt jars (macos-arm64 在本机由 publish 触发 mpvAssembleMacosArm64 构建;
-            // mpv 没有 windows-arm64 目标)
-            listOf("windows-x64", "linux-x64", "macos-x64").forEach { platformId ->
+            // mpv runtime prebuilt jars (macos-arm64 在本机由 publish 触发 mpvAssembleMacosArm64 构建)
+            listOf("windows-x64", "windows-arm64", "linux-x64", "macos-x64").forEach { platformId ->
                 uses(
                     action = DownloadArtifact(
                         name = ArtifactNames.mpvRuntimeJar(platformId),
@@ -934,12 +934,21 @@ class WithMatrix(
                         "msystem" to "CLANGARM64",
                         "update" to "true",
                         "install" to """
+                            git
                             mingw-w64-clang-aarch64-clang
                             mingw-w64-clang-aarch64-lld
+                            mingw-w64-clang-aarch64-libass
+                            mingw-w64-clang-aarch64-libplacebo
+                            mingw-w64-clang-aarch64-meson
+                            mingw-w64-clang-aarch64-ninja
                             mingw-w64-clang-aarch64-pkgconf
                             mingw-w64-clang-aarch64-nasm
                             mingw-w64-clang-aarch64-openssl
                             mingw-w64-clang-aarch64-ca-certificates
+                            mingw-w64-clang-aarch64-python-certifi
+                            mingw-w64-clang-aarch64-python
+                            mingw-w64-clang-aarch64-shaderc
+                            mingw-w64-clang-aarch64-spirv-cross
                         """.trimIndent(),
                     ),
                 ),
@@ -1021,12 +1030,20 @@ class WithMatrix(
 
     fun JobBuilder<*>.gradleCheck() {
         if (matrix.runTests) {
+            val tasks = if (matrix.isWindowsAArch64) {
+                // Kotlin/Native does not publish a Windows AArch64 host distribution, so the root
+                // check task cannot configure its Native targets on this runner. The mpv desktop
+                // suite is architecture-neutral and exercises the freshly built ARM64 runtime.
+                ":mediamp-mpv:desktopTest"
+            } else {
+                "check"
+            }
             uses(
                 name = "Check",
                 action = Retry_Untyped(
                     maxAttempts_Untyped = "2",
                     timeoutMinutes_Untyped = "60",
-                    command_Untyped = "./gradlew check " + matrix.gradleArgs,
+                    command_Untyped = "./gradlew $tasks " + matrix.gradleArgs,
                 ),
             )
         }
@@ -1116,10 +1133,11 @@ class WithMatrix(
     }
 
     /**
-     * mpv 在当前 host 上的 runtime jar 任务. mpv 没有 windows-arm64 目标.
+     * mpv 在当前 host 上的 runtime jar 任务.
      */
     fun mpvHostRuntimeJarInfo(): Pair<String, String>? = when {
         matrix.isWindows && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarWindowsX64" to "windows-x64"
+        matrix.isWindows && matrix.isAArch64 -> ":mediamp-mpv:mpvRuntimeJarWindowsArm64" to "windows-arm64"
         matrix.isUbuntu && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarLinuxX64" to "linux-x64"
         matrix.isMacOS && matrix.isX64 -> ":mediamp-mpv:mpvRuntimeJarMacosX64" to "macos-x64"
         matrix.isMacOSAArch64 -> ":mediamp-mpv:mpvRuntimeJarMacosArm64" to "macos-arm64"

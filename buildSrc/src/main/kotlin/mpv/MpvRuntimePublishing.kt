@@ -194,7 +194,7 @@ private fun runtimeManifestEntries(
             val msys2Root = msys2Dir ?: error("MSYS2 directory must be available when packaging Windows mpv runtimes.")
             orderWindowsDllsByDependencies(
                 execOperations = execOperations,
-                objdumpExecutable = resolveWindowsObjdump(msys2Root),
+                objdumpExecutable = resolveWindowsObjdump(msys2Root, windowsMsysBinDir(target)),
                 dllFiles = dependencyLibraries,
             )
         }
@@ -220,6 +220,9 @@ private fun runtimeManifestEntries(
     return (orderedShared + wrapperFiles.sortedBy { it.name.lowercase() })
         .map { manifestRelativePath(runtimeRoot, it) }
 }
+
+private fun windowsMsysBinDir(target: DesktopRuntimeTarget): String =
+    if (target.targetName == "WindowsArm64") "clangarm64/bin" else "ucrt64/bin"
 
 private fun wrapperLibraryName(os: String): String =
     when (os) {

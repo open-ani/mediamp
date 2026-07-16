@@ -203,12 +203,21 @@ jobs:
         msystem: 'CLANGARM64'
         update: 'true'
         install: |-
+          git
           mingw-w64-clang-aarch64-clang
           mingw-w64-clang-aarch64-lld
+          mingw-w64-clang-aarch64-libass
+          mingw-w64-clang-aarch64-libplacebo
+          mingw-w64-clang-aarch64-meson
+          mingw-w64-clang-aarch64-ninja
           mingw-w64-clang-aarch64-pkgconf
           mingw-w64-clang-aarch64-nasm
           mingw-w64-clang-aarch64-openssl
           mingw-w64-clang-aarch64-ca-certificates
+          mingw-w64-clang-aarch64-python-certifi
+          mingw-w64-clang-aarch64-python
+          mingw-w64-clang-aarch64-shaderc
+          mingw-w64-clang-aarch64-spirv-cross
     - id: 'step-7'
       name: 'Configure MSYS2 root'
       run: |-
@@ -225,7 +234,7 @@ jobs:
       with:
         timeout_minutes: '60'
         max_attempts: '3'
-        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+        command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-10'
       name: 'Update Release Version Name'
       env:
@@ -233,16 +242,27 @@ jobs:
         GITHUB_REPOSITORY: '${{ secrets.GITHUB_REPOSITORY }}'
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
-      run: './gradlew updateReleaseVersionNameFromGit "-DCI_TAG=${{ steps.step-1.outputs.tag }}" "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+      run: './gradlew updateReleaseVersionNameFromGit "-DCI_TAG=${{ steps.step-1.outputs.tag }}" "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-11'
       name: 'Build FFmpeg runtime jar'
-      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.ffmpeg.buildvariant=windows"'
+      run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
     - id: 'step-12'
       name: 'Upload FFmpeg runtime jar'
       uses: 'actions/upload-artifact@v4'
       with:
         name: 'mediamp-ffmpeg-runtime-windows-arm64'
         path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-arm64.jar'
+        if-no-files-found: 'error'
+        overwrite: 'true'
+    - id: 'step-13'
+      name: 'Build mpv runtime jar'
+      run: './gradlew :mediamp-mpv:mpvRuntimeJarWindowsArm64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
+    - id: 'step-14'
+      name: 'Upload mpv runtime jar'
+      uses: 'actions/upload-artifact@v4'
+      with:
+        name: 'mediamp-mpv-runtime-windows-arm64'
+        path: 'mediamp-mpv/build/libs/mediamp-mpv-runtime-*-windows-arm64.jar'
         if-no-files-found: 'error'
         overwrite: 'true'
   release_github-ubuntu-2404:
@@ -549,16 +569,21 @@ jobs:
     - id: 'step-19'
       uses: 'actions/download-artifact@v4'
       with:
+        name: 'mediamp-mpv-runtime-windows-arm64'
+        path: 'mediamp-mpv/build/prebuilt-runtime-jars/windows-arm64'
+    - id: 'step-20'
+      uses: 'actions/download-artifact@v4'
+      with:
         name: 'mediamp-mpv-runtime-linux-x64'
         path: 'mediamp-mpv/build/prebuilt-runtime-jars/linux-x64'
-    - id: 'step-20'
+    - id: 'step-21'
       uses: 'actions/download-artifact@v4'
       with:
         name: 'mediamp-mpv-runtime-macos-x64'
         path: 'mediamp-mpv/build/prebuilt-runtime-jars/macos-x64'
-    - id: 'step-21'
-      run: 'ls -R mediamp-mpv/build/prebuilt-runtime-jars || true'
     - id: 'step-22'
+      run: 'ls -R mediamp-mpv/build/prebuilt-runtime-jars || true'
+    - id: 'step-23'
       name: 'Publish'
       env:
         ORG_GRADLE_PROJECT_mavenCentralUsername: '${{ secrets.ORG_GRADLE_PROJECT_mavenCentralUsername }}'
@@ -567,7 +592,7 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKeyId: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyId }}'
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: '${{ secrets.ORG_GRADLE_PROJECT_signingInMemoryKeyPassword }}'
       run: './gradlew publish "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "--parallel" "-Pani.android.abis=arm64-v8a" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=ios,macos,android" "-Pmediamp.mpv.buildvariant=macos"'
-    - id: 'step-23'
+    - id: 'step-24'
       name: 'Cleanup temp files'
       continue-on-error: true
       run: 'chmod +x ./ci-helper/cleanup-temp-files-macos.sh && ./ci-helper/cleanup-temp-files-macos.sh'

@@ -70,7 +70,11 @@ internal class MpvBuildContext(
         enabledBuildVariantFamilies.includesBuildVariant(family)
 
     fun hostDesktopTargetName(): String? = when (hostOs) {
-        Os.Windows -> "WindowsX64"
+        Os.Windows -> when (hostArch) {
+            Arch.AARCH64 -> "WindowsArm64"
+            Arch.X86_64 -> "WindowsX64"
+            Arch.UNKNOWN -> null
+        }
         Os.Linux -> "LinuxX64"
         Os.MacOS -> when (hostArch) {
             Arch.AARCH64 -> "MacosArm64"
