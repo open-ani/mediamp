@@ -161,6 +161,17 @@ void *(mpv_handle_t::event_loop)(void *arg) {
             continue;
         }
 
+        if (event->event_id != MPV_EVENT_PROPERTY_CHANGE &&
+            event->event_id != MPV_EVENT_LOG_MESSAGE &&
+            jni_mediamp_method_EventListener_onEvent
+        ) {
+            env->CallVoidMethod(
+                    event_listener_,
+                    jni_mediamp_method_EventListener_onEvent,
+                    static_cast<jint>(event->event_id));
+            clear_jni_exception(env, this, "EventListener.onEvent");
+        }
+
         switch (event->event_id) {
             case MPV_EVENT_PROPERTY_CHANGE:
                 event_property = (mpv_event_property *) event->data;
