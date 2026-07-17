@@ -51,6 +51,7 @@ import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.exoplayer.internal.ExoFramePreview
 import org.openani.mediamp.exoplayer.internal.ExoPlaybackStateMapper
 import org.openani.mediamp.exoplayer.internal.SeekableInputDataSource
+import org.openani.mediamp.exoplayer.internal.WsolaRenderersFactory
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
@@ -82,7 +83,17 @@ import androidx.media3.common.Player as Media3Player
 class ExoPlayerMediampPlayer @UiThread constructor(
     context: Context,
     parentCoroutineContext: CoroutineContext,
+    private val audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
 ) : AbstractMediampPlayer<ExoPlayerMediampPlayer.ExoPlayerData>(Dispatchers.Default) {
+
+    // Keep the previous two-argument JVM constructor for binary compatibility. A Kotlin default
+    // argument lets recompiled source omit audioTimeStretch, but does not preserve the old JVM
+    // constructor descriptor used by already-compiled callers.
+    @UiThread
+    constructor(
+        context: Context,
+        parentCoroutineContext: CoroutineContext,
+    ) : this(context, parentCoroutineContext, ExoPlayerAudioTimeStretch.Media3Default)
     
     public open class ExoPlayerData(
         mediaData: MediaData,
@@ -242,7 +253,13 @@ class ExoPlayerMediampPlayer @UiThread constructor(
     }
 
     private val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
-        .apply { setTrackSelector(trackSelector) }
+        .apply {
+            setTrackSelector(trackSelector)
+            if (audioTimeStretch == ExoPlayerAudioTimeStretch.HighQualityWsola) {
+                val renderersFactory = WsolaRenderersFactory(context)
+                setRenderersFactory(renderersFactory)
+            }
+        }
         .build()
         .apply {
             playWhenReady = true
