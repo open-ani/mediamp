@@ -161,7 +161,8 @@ void *(mpv_handle_t::event_loop)(void *arg) {
             continue;
         }
 
-        if (event->event_id != MPV_EVENT_PROPERTY_CHANGE &&
+        if (event_listener_ &&
+            event->event_id != MPV_EVENT_PROPERTY_CHANGE &&
             event->event_id != MPV_EVENT_LOG_MESSAGE &&
             jni_mediamp_method_EventListener_onEvent
         ) {
