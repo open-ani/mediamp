@@ -27,7 +27,8 @@ class ExoPlayerMediampPlayerFactory : MediampPlayerFactory<ExoPlayerMediampPlaye
     fun create(
         context: Context,
         parentCoroutineContext: CoroutineContext,
+        audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
     ): ExoPlayerMediampPlayer {
-        return ExoPlayerMediampPlayer(context, parentCoroutineContext)
+        return ExoPlayerMediampPlayer(context, parentCoroutineContext, audioTimeStretch)
     }
 }
