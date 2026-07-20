@@ -32,16 +32,11 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import org.jetbrains.skia.Rect
 import org.jetbrains.skia.SamplingMode
-import org.jetbrains.skiko.OS
-import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.MpvMediampPlayer
-import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
-import org.openani.mediamp.mpv.utils.OpenGLRenderSnapshot
-import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
-import org.openani.mediamp.mpv.utils.SkiaMetalInterop
-import org.openani.mediamp.mpv.utils.SkiaOpenGLInterop
+import org.openani.mediamp.mpv.internal.MpvSurfaceDrawResolver
+import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import org.openani.mediamp.mpv.utils.findSkiaLayer
 import kotlin.time.Duration.Companion.milliseconds
@@ -51,9 +46,10 @@ actual fun MpvMediampPlayerSurface(
     player: MpvMediampPlayer,
     modifier: Modifier,
 ) {
-    when (hostOs) {
-        OS.MacOS, OS.Windows, OS.Linux -> MpvMediampPlayerSurfaceRing(player, modifier)
-        else -> Box(modifier)
+    if (currentSurfaceRingBackend() != null) {
+        MpvMediampPlayerSurfaceRing(player, modifier)
+    } else {
+        Box(modifier)
     }
 }
 
@@ -66,6 +62,9 @@ actual fun MpvMediampPlayerSurface(
  * shared handles opened as ID3D12Resources on Windows (hwdec=d3d11va, libmpv D3D11
  * render API). The video becomes a regular draw call in the Compose scene graph, zero
  * extra CPU copies end to end, and this thread never renders or blocks.
+ *
+ * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
+ * render-context lifecycle; this composable contains no host checks.
  */
 @OptIn(InternalMediampApi::class)
 @Composable
@@ -84,60 +83,28 @@ private fun MpvMediampPlayerSurfaceRing(
             MPVLog.warn(player.handle.ptr, "no SkiaLayer found in window $window; video stays black")
             return@remember null
         }
-        runCatching {
-            when (hostOs) {
-                OS.MacOS -> SkiaMetalInterop(layer)
-                OS.Windows -> SkiaDirectXInterop(layer)
-                OS.Linux -> SkiaOpenGLInterop(layer)
-                else -> null
-            }
-        }
+        runCatching { player.createSkiaInterop(layer) }
             .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
     }
+    val drawResolver: MpvSurfaceDrawResolver? = remember(player, interop) {
+        interop?.let { player.renderContextLifecycle?.createDrawResolver(it) }
+    }
     val frameTick = remember { mutableLongStateOf(0L) }
     val canvasSize = remember { mutableStateOf(IntSize.Zero) }
-    // macOS/Windows create their producer context eagerly. Linux intentionally waits for
-    // the live LinuxOpenGLRedrawer so `vo=libmpv` never sees loadfile before GLX sharing
-    // has been attached.
+    // Whether the player's producer render context exists. Eager backends decide this
+    // when the surface enters composition; deferred-readiness backends (Linux GLX)
+    // intentionally wait for the live redrawer so `vo=libmpv` never sees loadfile
+    // before its render environment has been attached — they become ready from the
+    // first successful draw pass instead.
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
     fun logOnce(state: String, level: Int = MPVLog.DEBUG) {
         if (loggedStates.add(state)) MPVLog.log(player.handle.ptr, level, state)
     }
-    // Linux re-checks the live GLX identity because Skiko may replace its redrawer.
-    fun ensureRenderContext(environment: OpenGLRenderEnvironment? = null): Boolean {
-        if (hostOs != OS.Linux) return renderContextReady
-        environment ?: return false
-        if (renderContextReady &&
-            player.currentOpenGLRenderEnvironment()?.identity == environment.identity
-        ) {
-            return true
-        }
-        val ready = runCatching {
-            player.attachOpenGLRenderEnvironment(environment)
-        }.onFailure {
-            MPVLog.error(player.handle.ptr, "Linux GLX render context unavailable; video stays black", it)
-        }.getOrDefault(false)
-        if (ready && !renderContextReady) {
-            player.setRenderUpdateListener { frameTick.longValue++ }
-            renderContextReady = true
-        }
-        return ready
-    }
-
-    fun currentOpenGLSnapshot(): OpenGLRenderSnapshot? {
-        if (hostOs != OS.Linux) return null
-        val glInterop = interop as? SkiaOpenGLInterop ?: return null
-        val snapshot = runCatching { glInterop.renderSnapshot() }
-            .onFailure { MPVLog.error(player.handle.ptr, "Linux GLX render context unavailable; video stays black", it) }
-            .getOrNull() ?: return null
-        return snapshot.takeIf { ensureRenderContext(it.environment) }
-    }
 
     DisposableEffect(player) {
-        // Linux creates its shared context later, from the live redrawer in Canvas.
-        renderContextReady = hostOs != OS.Linux && player.createRenderContext()
+        renderContextReady = player.renderContextLifecycle?.createEagerly() ?: false
         if (renderContextReady) {
             player.setRenderUpdateListener { frameTick.longValue++ }
         }
@@ -148,19 +115,21 @@ private fun MpvMediampPlayerSurfaceRing(
         }
     }
 
-    // Linux waits for GLX attachment; Metal/D3D keep their existing readiness retry.
-    // The first ready layout configures immediately; later size changes
-    // (window resize, overlay-driven relayout) settle for 150ms first. The reallocation
-    // itself happens between frames on the native render thread, and the draw pass
-    // letterboxes whatever the ring currently contains, so resizes cost no visible
-    // frames — the video keeps playing at the old size until the new ring has content.
+    // Deferred-readiness backends wait for the render context; eager backends keep
+    // their existing readiness retry. The first ready layout configures immediately;
+    // later size changes (window resize, overlay-driven relayout) settle for 150ms
+    // first. The reallocation itself happens between frames on the native render
+    // thread, and the draw pass letterboxes whatever the ring currently contains, so
+    // resizes cost no visible frames — the video keeps playing at the old size until
+    // the new ring has content.
     LaunchedEffect(player, interop) {
         val deviceInterop = interop ?: return@LaunchedEffect
+        val deferredReadiness = player.renderContextLifecycle?.deferredReadiness == true
         var configured = false
         snapshotFlow { canvasSize.value }
             .filter { it.width > 0 && it.height > 0 }
             .collectLatest { size ->
-                if (hostOs == OS.Linux) {
+                if (deferredReadiness) {
                     snapshotFlow { renderContextReady }.first { it }
                 }
                 if (configured) delay(150.milliseconds)
@@ -172,7 +141,7 @@ private fun MpvMediampPlayerSurfaceRing(
                         configured = true
                         break
                     }
-                    if (hostOs == OS.Linux) break
+                    if (deferredReadiness) break
                     delay(50.milliseconds)
                 }
             }
@@ -181,25 +150,23 @@ private fun MpvMediampPlayerSurfaceRing(
     Canvas(modifier.onSizeChanged { canvasSize.value = it }) {
         frameTick.longValue // subscribe: redraw whenever mpv publishes a new frame
 
-        if (interop == null) {
+        if (drawResolver == null) {
             logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
             return@Canvas
         }
-        val openGLSnapshot = currentOpenGLSnapshot()
-        val renderReady = if (hostOs == OS.Linux) {
-            openGLSnapshot != null
-        } else {
-            renderContextReady
+        val drawPass = drawResolver.resolveDrawPass(renderContextReady)
+        if (drawPass != null && !renderContextReady) {
+            // Deferred-readiness backends attach inside resolveDrawPass: the first
+            // successful pass is the readiness transition, so hook the frame listener
+            // here.
+            player.setRenderUpdateListener { frameTick.longValue++ }
+            renderContextReady = true
         }
-        if (!renderReady) {
+        if (drawPass == null) {
             logOnce("render context not ready")
             return@Canvas
         }
-        val directContext = if (hostOs == OS.Linux) {
-            openGLSnapshot?.directContext
-        } else {
-            interop.directContext
-        }
+        val directContext = drawPass.directContext
         if (directContext == null) {
             logOnce("DirectContext not initialized yet")
             return@Canvas
@@ -209,19 +176,11 @@ private fun MpvMediampPlayerSurfaceRing(
         if (width <= 0 || height <= 0) return@Canvas
         // Skiko can recreate its redrawer (and render device) at runtime; the ring's
         // textures must live on Skia's current device.
-        val renderDevicePtr = openGLSnapshot?.environment?.shareContext
-            ?: runCatching { interop.renderDevicePtr }.getOrNull()
-        renderDevicePtr?.let {
+        drawPass.renderDevicePtr()?.let {
             player.refreshDeviceIfChanged(it)
         }
 
-        val renderer = when (hostOs) {
-            OS.MacOS -> "Metal"
-            OS.Windows -> "D3D12"
-            OS.Linux -> "OpenGL/GLX"
-            else -> "unknown"
-        }
-        logOnce("rendering ${width}x${height} via $renderer surface", MPVLog.INFO)
+        logOnce("rendering ${width}x${height} via ${drawResolver.rendererName} surface", MPVLog.INFO)
         // Draw through Compose so the op survives RenderNode display-list recording
         // (raw nativeCanvas draws are dropped there). The image is a Skia-owned texture:
         // snapshots of the BRT-wrapped surface itself do not render. The frame normally

@@ -68,8 +68,9 @@ abstract class JvmMpvMediampPlayer(
     internal val handle by lazy { MPVHandle(context) }
     private val stateMachine = MpvPlaybackStateMachine()
 
-    // Linux may resume before Skiko exposes its GLX share context. Preserve that load
-    // until surface attachment; eager macOS/Windows contexts never use this state.
+    // Platforms whose render context depends on an externally attached environment may
+    // resume before that environment exists. Preserve that load until the context
+    // becomes ready; eagerly-created contexts never use this state.
     private val pendingLoadLock = Any()
     private var pendingPlaybackLoad: MPVPlayerData? = null
 
@@ -321,15 +322,22 @@ abstract class JvmMpvMediampPlayer(
     }
 
     /**
-     * Linux overrides this because its GLX context is unavailable before surface attach.
-     * `vo=libmpv` requires it before `loadfile`; false defers the load while staying READY.
+     * Platform subclasses whose render context is unavailable until an external render
+     * environment is attached override this. `vo=libmpv` requires the context before
+     * `loadfile`; false defers the load while staying READY.
      */
     protected open fun ensureRenderContextForLoad(): Boolean = true
 
-    /** Linux rejects GLX share-group replacement while this playback session is active. */
+    /**
+     * Environment-bound render backends reject render-environment replacement while
+     * this playback session is active.
+     */
     protected fun hasActivePlaybackSession(): Boolean = stateMachine.playbackSessionActive
 
-    /** Completes a Linux load deferred until GLX attach; shares a lock with [resumeImpl]. */
+    /**
+     * Completes a load deferred until the render context became ready; shares a lock
+     * with [resumeImpl].
+     */
     protected fun renderContextBecameReady() {
         synchronized(pendingLoadLock) {
             val pending = pendingPlaybackLoad ?: return
@@ -339,13 +347,13 @@ abstract class JvmMpvMediampPlayer(
         }
     }
 
-    // Clear deferred Linux loads on replace/stop/close so a later GLX attach cannot
-    // resurrect a cancelled request.
+    // Clear deferred loads on replace/stop/close so a later render-context attach
+    // cannot resurrect a cancelled request.
     private fun cancelPendingPlaybackLoad() {
         synchronized(pendingLoadLock) { pendingPlaybackLoad = null }
     }
 
-    // Shared by the eager path and Linux's deferred path so state transitions stay equal.
+    // Shared by the eager path and the deferred path so state transitions stay equal.
     private fun loadForPlayback(media: MPVPlayerData): Boolean {
         handle.setPropertyBoolean("pause", false)
         if (!handle.command("loadfile", media.loadTarget, "replace")) return false
@@ -356,7 +364,7 @@ abstract class JvmMpvMediampPlayer(
 
     override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
         is UriMediaData -> {
-            // Do not let a later Linux GLX attach load the resource being replaced.
+            // Do not let a later render-context attach load the resource being replaced.
             cancelPendingPlaybackLoad()
             clearPlaybackSession(resetPosition = true)
             handle.command("stop")
@@ -372,7 +380,7 @@ abstract class JvmMpvMediampPlayer(
         }
 
         is SeekableInputMediaData -> {
-            // Do not let a later Linux GLX attach load the resource being replaced.
+            // Do not let a later render-context attach load the resource being replaced.
             cancelPendingPlaybackLoad()
             clearPlaybackSession(resetPosition = true)
             handle.command("stop")
@@ -395,8 +403,9 @@ abstract class JvmMpvMediampPlayer(
         when (playbackState.value) {
             PlaybackState.READY -> {
                 val media = openResource.value ?: return
-                // Atomic with renderContextBecameReady(): GLX may become ready between
-                // the check and recording the pending load, which would lose the wake-up.
+                // Atomic with renderContextBecameReady(): the render context may become
+                // ready between the check and recording the pending load, which would
+                // lose the wake-up.
                 synchronized(pendingLoadLock) {
                     if (!ensureRenderContextForLoad()) {
                         pendingPlaybackLoad = media
@@ -445,7 +454,7 @@ abstract class JvmMpvMediampPlayer(
     }
 
     override fun stopPlaybackImpl() {
-        // Linux may still have a load waiting for GLX attach.
+        // A load may still be waiting for the render context.
         cancelPendingPlaybackLoad()
         handle.command("stop")
         clearPlaybackSession(resetPosition = true)
@@ -453,7 +462,7 @@ abstract class JvmMpvMediampPlayer(
     }
 
     override fun closeImpl() {
-        // Prevent a late Linux GLX attach from loading into a closing player.
+        // Prevent a late render-context attach from loading into a closing player.
         cancelPendingPlaybackLoad()
         (framePreview as? AutoCloseable)?.close()
         clearPlaybackSession(resetPosition = true)
