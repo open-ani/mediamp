@@ -19,6 +19,7 @@ import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
 import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.SkiaLayer
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
@@ -53,6 +54,10 @@ import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
 import org.openani.mediamp.mpv.nAttachRenderEnvironmentOpenGL
 import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
+import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
+import org.openani.mediamp.mpv.utils.SkiaMetalInterop
+import org.openani.mediamp.mpv.utils.SkiaOpenGLInterop
+import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 
 internal const val SURFACE_RING_BUFFER_COUNT = 3
 
@@ -88,14 +93,30 @@ internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs)
 }
 
 /**
- * Platform half of the native surface-ring render path: the JNI entry points plus how
- * a ring buffer's native texture is wrapped for Skia. The consumer state machine on top
- * ([MpvSurfaceRing]) is capability-based: Metal/IOSurface on macOS, D3D11/D3D12 shared
- * textures on Windows, and shared OpenGL textures on Linux/GLX.
+ * Platform half of the native surface-ring render path: the JNI entry points, how a
+ * ring buffer's native texture is wrapped for Skia, which reflective Skia interop reads
+ * the consumer device, and which [MpvRenderContextLifecycle] governs the producer
+ * context. The consumer state machine on top ([MpvSurfaceRing]) is capability-based:
+ * Metal/IOSurface on macOS, D3D11/D3D12 shared textures on Windows, and shared OpenGL
+ * textures on Linux/GLX.
  */
 internal interface MpvSurfaceRingBackend {
     fun createRenderContext(ptr: Long): Boolean
     fun destroyRenderContext(ptr: Long): Boolean
+
+    /** Renderer name for user-facing logs: what Compose draws the ring's frames with. */
+    val rendererName: String
+
+    /** Creates the reflective interop reading the consumer render device of [layer]. */
+    fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop
+
+    /**
+     * Creates the per-player producer-context lifecycle. Backends owning their producer
+     * device are eager; environment-bound backends override (see
+     * [OpenGLRenderContextLifecycle]).
+     */
+    fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
+        EagerRenderContextLifecycle(this, host)
 
     /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
@@ -140,6 +161,8 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
         MpvConsumerRenderTarget(BackendRenderTarget.makeMetal(width, height, texturePtr))
 
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.BGRA_8888
+    override val rendererName: String get() = "Metal"
+    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaMetalInterop(layer)
 }
 
 @OptIn(InternalMediampApi::class)
@@ -174,6 +197,11 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     // so wrap as RGBA_8888. mpv's d3d11 renderer writes alpha=1 for opaque video
     // (verified by the demo pixel readback), so premultiplied sampling is safe.
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
+
+    // The producer renders through D3D11, but the consumer side Compose draws with is
+    // Skiko's D3D12 device.
+    override val rendererName: String get() = "D3D12"
+    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaDirectXInterop(layer)
 }
 
 /**
@@ -236,6 +264,11 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
 
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
     override val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.BOTTOM_LEFT
+    override val rendererName: String get() = "OpenGL/GLX"
+    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaOpenGLInterop(layer)
+
+    override fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
+        OpenGLRenderContextLifecycle(this, host)
 }
 
 /**
