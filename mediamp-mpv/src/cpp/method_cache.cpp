@@ -97,14 +97,14 @@ void throw_illegal_argument(JNIEnv *env, const char *message, const void *instan
     throw_java_exception(env, "java/lang/IllegalArgumentException", message, instance_handle);
 }
 
-void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
+bool jni_cache_classes(JNIEnv *env, const void *instance_handle) {
     if (!env) {
-        return;
+        return false;
     }
 
     std::lock_guard<std::mutex> guard(jni_cache_mutex);
     if (jni_class_cached) {
-        return;
+        return true;
     }
 
     jclass event_listener_class = find_global_class(env, instance_handle, "org/openani/mediamp/mpv/EventListener");
@@ -132,7 +132,7 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
 #ifdef __ANDROID__
         delete_global_ref(env, surface_class);
 #endif
-        return;
+        return false;
     }
 
     jmethodID on_property_change_none =
@@ -185,7 +185,7 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
 #ifdef __ANDROID__
         delete_global_ref(env, surface_class);
 #endif
-        return;
+        return false;
     }
 
     jni_mediamp_clazz_EventListener = event_listener_class;
@@ -209,6 +209,7 @@ void jni_cache_classes(JNIEnv *env, const void *instance_handle) {
 #endif
 
     jni_class_cached = true;
+    return true;
 }
     
 } // namespace mediampv

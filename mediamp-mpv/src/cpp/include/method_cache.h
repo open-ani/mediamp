@@ -36,7 +36,11 @@ UTIL_EXTERN jmethodID jni_mediamp_method_SeekableInput_close;
 UTIL_EXTERN jclass jni_mediamp_clazz_android_Surface;
 #endif
 
-void jni_cache_classes(JNIEnv *env, const void *instance_handle = nullptr);
+// Resolves and caches every JNI class/method the native<->Kotlin bridge dispatches to.
+// All-or-nothing: returns true when the cache is populated (possibly by an earlier call),
+// false when any class or method failed to resolve — e.g. the Kotlin mediamp-mpv artifact
+// on the classpath does not match the version this native library was built against.
+bool jni_cache_classes(JNIEnv *env, const void *instance_handle = nullptr);
 
 // Raises a Java exception of `class_name` (e.g. "java/lang/IllegalStateException") carrying
 // `message`. The native method must return promptly afterwards; the exception is delivered

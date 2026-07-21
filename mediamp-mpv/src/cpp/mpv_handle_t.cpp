@@ -337,7 +337,16 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     }
 
     jvm_ = global_jvm;
-    jni_cache_classes(env, this);
+    // Fail fast on a Kotlin<->native version mismatch: with an unpopulated method cache
+    // every event/log/stream callback silently no-ops, which surfaces as a "zombie" player
+    // (mpv plays, but currentPositionMillis stays 0 and the state never reaches FINISHED).
+    // A hard construction failure is diagnosable; the silent degradation is not.
+    if (!jni_cache_classes(env, this)) {
+        throw std::runtime_error(
+                "cannot create mpv handle: failed to resolve the mediamp JNI classes/methods. "
+                "The libmediampv native library does not match the mediamp-mpv Kotlin artifact "
+                "on the classpath (version mismatch); rebuild or realign the native runtime");
+    }
     event_loop_request_exit.store(false, std::memory_order_release);
 
     // libmpv hard-requires LC_NUMERIC == "C": mp_create() returns NULL on any other numeric
