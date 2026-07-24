@@ -126,7 +126,7 @@
    - 通过 `pkg-config` 导入
 
 2. 其他三方库
-   - 当前设计为依赖 Linux 主机的系统开发包
+   - 编译期依赖 Linux 主机的系统开发包（通过 `pkg-config` 导入）
    - 主要包括：
      - `libass`
      - `libplacebo`
@@ -137,10 +137,11 @@
 当前边界：
 
 - Linux 构建逻辑已接通，但尚未在 Linux 主机上实跑验证。
-- 目前 Linux 组装阶段只会复制：
+- Linux 组装阶段会复制：
   - `mpv install prefix`
   - FFmpeg 的 `lib`
-- 不会额外把系统 `libX11/libEGL/libGL/libass/libplacebo` 一起 vendoring 到输出目录。
+  - 通过 `readelf` 解析直接 `DT_NEEDED`、`ldconfig -p` 在构建机上解析路径，递归收集的非系统基线库（`libass`、`libplacebo` 及其传递依赖，如 `libshaderc`、`libfreetype`、`libharfbuzz` 等），按 soname 文件名放入输出目录，配合 `RUNPATH=$ORIGIN` 加载；同一 soname 存在多架构/hwcaps 候选时按 ELF class/machine 与使用方匹配
+- 系统基线库（glibc、`libstdc++`、`libX11`/`libEGL`/`libGL` 等驱动与桌面服务耦合的库，见 `isLinuxSystemLibrary`）不会 vendoring 到输出目录，运行时仍由系统提供。
 
 ### Android
 

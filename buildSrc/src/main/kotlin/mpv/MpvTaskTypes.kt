@@ -2,6 +2,7 @@ package mpv
 
 import nativebuild.copyTreePreservingLinks
 import nativebuild.deleteRecursivelyForce
+import nativebuild.isLinuxSystemLibrary
 import nativebuild.isWindowsSystemLibrary
 import nativebuild.jniIncludeFlags
 import nativebuild.makePkgConfigRelocatable
@@ -32,7 +33,9 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
 import javax.inject.Inject
 
 /**
@@ -606,6 +609,11 @@ abstract class MpvAssembleTask : DefaultTask() {
             }
 
             MpvRuntimePostProcessing.LINUX_RUNPATH_ORIGIN -> {
+                bundleLinuxExternalDependencies(
+                    execOperations = execOperations,
+                    logger = logger,
+                    libDir = runtimeDir,
+                )
                 setLinuxRunpathOrigin(
                     execOperations = execOperations,
                     logger = logger,
@@ -623,16 +631,167 @@ abstract class MpvAssembleTask : DefaultTask() {
     }
 }
 
+// Matches the language-independent parts of a `readelf -d` NEEDED line: the entry type
+// and the bracketed soname. The descriptive text between them ("Shared library") is a
+// translated string in binutils and must not be relied on; `readelf` is additionally
+// invoked with LC_ALL=C.
+private val ELF_NEEDED_ENTRY = Regex("""\(NEEDED\)[^\[]*\[([^]]+)]""")
+
+// ldconfig -p line: soname, parenthesized ABI info, resolved path. The ABI info is kept
+// so same-soname candidates of different architectures are not conflated.
+private val LDCONFIG_ENTRY = Regex("""^(\S+)\s+\(([^)]*)\)\s+=>\s+(/\S+)$""")
+
+/**
+ * Makes the Linux runtime self-contained: recursively copies every non-baseline shared
+ * library dependency (libplacebo, libass and their transitive deps) into [libDir],
+ * mirroring what [bundleAppleExternalDependencies] does for macOS and
+ * [collectWindowsRuntimeDlls] does for Windows.
+ *
+ * Only DIRECT `DT_NEEDED` entries of bundled libraries are considered (via `readelf -d`
+ * with `LC_ALL=C`), so dependencies of system-baseline libraries (e.g. libpulse's
+ * private `libpulsecommon`) never leak into the package. A candidate soname is resolved
+ * first against [libDir] itself (already-bundled siblings like libmpv and the ffmpeg
+ * libraries), then against the build machine's loader cache (`ldconfig -p`); when the
+ * cache lists several candidates for one soname (multi-arch or glibc-hwcaps variants),
+ * only those whose ELF class/machine match the consuming library are eligible, and
+ * hardware-capability variants are avoided in favour of the baseline build. The system
+ * baseline (glibc, X11, the GL / VAAPI driver stack, audio servers, fontconfig, ...) is
+ * skipped per [isLinuxSystemLibrary] and stays resolved via the system linker.
+ *
+ * Each dependency is copied under the exact soname the loader asks for (e.g.
+ * `libplacebo.so.338`), so `RUNPATH=$ORIGIN` (applied afterwards by
+ * [setLinuxRunpathOrigin]) picks the bundled copy up regardless of the library versions
+ * installed on the target machine. A non-baseline dependency that does not resolve on
+ * the build machine fails the build instead of shipping a broken runtime.
+ */
+private fun bundleLinuxExternalDependencies(
+    execOperations: ExecOperations,
+    logger: Logger,
+    libDir: File,
+) {
+    if (!libDir.isDirectory) return
+
+    fun listSharedObjects(): List<File> =
+        libDir.listFiles()
+            ?.filter { it.isFile && !Files.isSymbolicLink(it.toPath()) && it.name.contains(".so") }
+            .orEmpty()
+
+    fun runTool(executable: String, vararg args: String): String {
+        val output = ByteArrayOutputStream()
+        execOperations.exec {
+            this.executable = executable
+            this.args(*args)
+            // binutils/glibc tools translate parts of their output; pin the C locale so
+            // parsing does not depend on the build machine's language settings.
+            environment("LC_ALL", "C")
+            standardOutput = output
+        }
+        return output.toString()
+    }
+
+    /** Direct `DT_NEEDED` sonames of [library]. */
+    fun directDependencies(library: File): List<String> =
+        runTool("readelf", "-d", library.absolutePath).lineSequence()
+            .mapNotNull { line -> ELF_NEEDED_ENTRY.find(line)?.groupValues?.get(1) }
+            .distinct()
+            .toList()
+
+    val elfHeaderCache = mutableMapOf<String, String>()
+
+    /** ELF class and machine of [path], e.g. "ELF64 Advanced Micro Devices X86-64". */
+    fun elfClassMachine(path: String): String = elfHeaderCache.getOrPut(path) {
+        var elfClass = ""
+        var machine = ""
+        runTool("readelf", "-h", path).lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            when {
+                trimmed.startsWith("Class:") -> elfClass = trimmed.substringAfter("Class:").trim()
+                trimmed.startsWith("Machine:") -> machine = trimmed.substringAfter("Machine:").trim()
+            }
+        }
+        "$elfClass $machine"
+    }
+
+    // soname -> candidate paths on the build machine, from the loader cache. A soname is
+    // NOT unique: multi-arch installs and glibc-hwcaps variants coexist under one name.
+    val systemLibraryCandidates: Map<String, List<String>> = run {
+        val output = ByteArrayOutputStream()
+        execOperations.exec {
+            executable = "ldconfig"
+            args("-p")
+            environment("LC_ALL", "C")
+            standardOutput = output
+        }
+        output.toString().lineSequence()
+            .map { it.trim() }
+            .mapNotNull { line ->
+                LDCONFIG_ENTRY.matchEntire(line)
+                    ?.let { it.groupValues[1] to it.groupValues[3] }
+            }
+            .groupBy({ it.first }, { it.second })
+    }
+
+    /**
+     * Picks the candidate for [soname] whose ELF class/machine matches [consumerHeader],
+     * preferring the baseline build over glibc-hwcaps variants (which may require a newer
+     * CPU than the runtime targets).
+     */
+    fun resolveCandidate(soname: String, consumerHeader: String): String? {
+        val eligible = systemLibraryCandidates[soname].orEmpty()
+            .filter { elfClassMachine(it) == consumerHeader }
+        return eligible.firstOrNull { !it.contains("hwcap") } ?: eligible.firstOrNull()
+    }
+
+    val bundled = mutableListOf<String>()
+    val missing = sortedSetOf<String>()
+    val processed = mutableSetOf<String>()
+    val pending = ArrayDeque(listSharedObjects())
+
+    while (pending.isNotEmpty()) {
+        val library = pending.removeFirst()
+        if (!processed.add(library.canonicalPath)) continue
+        val consumerHeader = elfClassMachine(library.absolutePath)
+
+        directDependencies(library).forEach { soname ->
+            if (isLinuxSystemLibrary(soname)) return@forEach
+            if (libDir.listFiles()?.any { it.name == soname } == true) return@forEach
+            val path = resolveCandidate(soname, consumerHeader)
+            if (path == null) {
+                missing += soname
+                return@forEach
+            }
+            val real = File(path).canonicalFile
+            require(real.isFile) {
+                "Shared library dependency '$soname' of ${library.name} resolved to '$path', which does not exist."
+            }
+            val target = libDir.resolve(soname)
+            real.copyTo(target, overwrite = false)
+            bundled += soname
+            pending.addLast(target)
+        }
+    }
+
+    require(missing.isEmpty()) {
+        "Linux mpv runtime has unresolved non-system dependencies: ${missing.joinToString()}. " +
+                "Install the corresponding development packages (see ci-helper/install-mpv-deps-ubuntu.sh) " +
+                "or extend isLinuxSystemLibrary if they belong to the system baseline."
+    }
+
+    if (bundled.isNotEmpty()) {
+        logger.lifecycle(
+            "Bundled Linux external dependencies into ${libDir.name}/: ${bundled.sorted().joinToString()}",
+        )
+    }
+}
+
 /**
  * Makes the bundled Linux libraries load their siblings from the same directory: sets
  * `RUNPATH=$ORIGIN` on every regular `.so`, the ELF equivalent of macOS `@loader_path`
  * and the Windows `SetDllDirectory` path. Without it, `System.load(libmediampv.so)` cannot
  * resolve `libmpv.so.2` and the bundled ffmpeg libraries that sit next to it.
  *
- * System libraries (libass, libplacebo, glibc, X11, ...) are intentionally NOT bundled and
- * are still resolved via the system linker; the Linux runtime is therefore not fully
- * self-contained (documented limitation), but it is loadable wherever those system libraries
- * are present.
+ * Only the system baseline (see [isLinuxSystemLibrary]) is still resolved via the system
+ * linker; everything else is bundled by [bundleLinuxExternalDependencies] before this runs.
  */
 private fun setLinuxRunpathOrigin(
     execOperations: ExecOperations,

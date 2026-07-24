@@ -136,3 +136,93 @@ internal fun isWindowsSystemLibrary(dllName: String): Boolean {
             "ws2_32.dll",
         )
 }
+
+/**
+ * Linux system-baseline libraries that the desktop runtime intentionally does NOT bundle.
+ * They are either not safely relocatable (glibc and the dynamic loader), coupled to the
+ * machine's drivers or desktop services (GL/Vulkan/VAAPI, X11, audio servers, D-Bus,
+ * fontconfig), or universally present with a long-stable soname (zlib, libstdc++).
+ * Everything else reported by `ldd` (libplacebo, libass, libshaderc, ...) is collected
+ * into the runtime directory so the package does not depend on the sonames installed on
+ * the target machine.
+ */
+internal fun isLinuxSystemLibrary(soname: String): Boolean {
+    val name = soname.lowercase(Locale.ROOT)
+    return name in LINUX_SYSTEM_LIBRARY_NAMES ||
+            LINUX_SYSTEM_LIBRARY_PREFIXES.any { name.startsWith(it) }
+}
+
+private val LINUX_SYSTEM_LIBRARY_NAMES = setOf(
+    // Dynamic loader / glibc. Not relocatable, always resolved via the system loader.
+    "linux-vdso.so.1",
+    "libc.so.6",
+    "libm.so.6",
+    "libmvec.so.1",
+    "libdl.so.2",
+    "librt.so.1",
+    "libpthread.so.0",
+    "libresolv.so.2",
+    "libutil.so.1",
+    "libnsl.so.2",
+    "libanl.so.1",
+    // Toolchain runtime. Backward compatible like glibc; the build machine is the floor.
+    "libstdc++.so.6",
+    "libgcc_s.so.1",
+    // zlib's soname has been stable for decades; part of every desktop baseline.
+    "libz.so.1",
+    // GPU/driver stack. Coupled to the machine's drivers, never relocatable.
+    "libgl.so.1",
+    "libegl.so.1",
+    "libglesv2.so.2",
+    "libglx.so.0",
+    "libgldispatch.so.0",
+    "libopengl.so.0",
+    "libvulkan.so.1",
+    "libdrm.so.2",
+    "libgbm.so.1",
+    "libva.so.2",
+    "libva-x11.so.2",
+    "libva-drm.so.2",
+    "libva-wayland.so.2",
+    "libvdpau.so.1",
+    "libcuda.so.1",
+    // X11 client libraries. Part of the desktop baseline.
+    "libx11.so.6",
+    "libx11-xcb.so.1",
+    "libxext.so.6",
+    "libxrandr.so.2",
+    "libxss.so.1",
+    "libxpresent.so.1",
+    "libxfixes.so.3",
+    "libxinerama.so.1",
+    "libxrender.so.1",
+    "libxdamage.so.1",
+    "libxcomposite.so.1",
+    "libxcursor.so.1",
+    "libxi.so.6",
+    "libxtst.so.6",
+    "libxau.so.6",
+    "libxdmcp.so.6",
+    "libice.so.6",
+    "libsm.so.6",
+    // Audio servers. Coupled to the running sound daemon.
+    "libasound.so.2",
+    "libpulse.so.0",
+    "libpulse-simple.so.0",
+    "libpipewire-0.3.so.0",
+    // Desktop services / configuration-coupled.
+    "libdbus-1.so.3",
+    "libsystemd.so.0",
+    "libfontconfig.so.1",
+    "libexpat.so.1",
+    "libuuid.so.1",
+)
+
+private val LINUX_SYSTEM_LIBRARY_PREFIXES = listOf(
+    "ld-linux",
+    "ld-musl",
+    "libnss_",
+    "libxcb",
+    "libwayland-",
+    "libnvidia-",
+)
