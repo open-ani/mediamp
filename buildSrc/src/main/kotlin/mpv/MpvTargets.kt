@@ -52,8 +52,8 @@ internal enum class MpvRuntimePostProcessing {
     /** Rewrite install names to @loader_path, bundle external dylibs, re-sign. */
     MACOS_BUNDLE_DYLIBS,
 
-    /** Set `RUNPATH=$ORIGIN` so bundled `.so` files resolve their siblings. */
-    LINUX_RUNPATH_ORIGIN,
+    /** Bundle portable ELF dependencies and set `RUNPATH=$ORIGIN` on the resulting closure. */
+    LINUX_BUNDLE_ELF_DEPENDENCIES,
 
     /** Copy `libc++_shared.so` from the NDK next to the runtime. */
     ANDROID_BUNDLE_LIBCXX,
@@ -313,7 +313,7 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
     ),
     runtime = MpvRuntimeLayout(
         runtimeDirName = "lib",
-        postProcessing = MpvRuntimePostProcessing.LINUX_RUNPATH_ORIGIN,
+        postProcessing = MpvRuntimePostProcessing.LINUX_BUNDLE_ELF_DEPENDENCIES,
     ),
 )
 

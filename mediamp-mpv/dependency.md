@@ -136,11 +136,13 @@
 
 当前边界：
 
-- Linux 构建逻辑已接通，但尚未在 Linux 主机上实跑验证。
-- 目前 Linux 组装阶段只会复制：
+- Linux 组装阶段会先复制：
   - `mpv install prefix`
   - FFmpeg 的 `lib`
-- 不会额外把系统 `libX11/libEGL/libGL/libass/libplacebo` 一起 vendoring 到输出目录。
+- 随后递归分析 ELF `DT_NEEDED`，把 `libass`、`libplacebo`、X11 扩展、音频客户端等
+  可移植依赖复制到输出目录，并为所有打包库设置 `RUNPATH=$ORIGIN`。
+- glibc、JVM 已加载的编译器 runtime、基础 X11 ABI，以及 GL/EGL/驱动调度栈继续由宿主提供，
+  避免将构建机 ABI 或 GPU 驱动实现带到用户系统。
 
 ### Android
 

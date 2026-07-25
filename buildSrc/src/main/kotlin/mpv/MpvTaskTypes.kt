@@ -32,7 +32,10 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
+import java.util.ArrayDeque
 import javax.inject.Inject
 
 /**
@@ -605,8 +608,8 @@ abstract class MpvAssembleTask : DefaultTask() {
                 )
             }
 
-            MpvRuntimePostProcessing.LINUX_RUNPATH_ORIGIN -> {
-                setLinuxRunpathOrigin(
+            MpvRuntimePostProcessing.LINUX_BUNDLE_ELF_DEPENDENCIES -> {
+                bundleLinuxElfDependencies(
                     execOperations = execOperations,
                     logger = logger,
                     libDir = runtimeDir,
@@ -623,37 +626,172 @@ abstract class MpvAssembleTask : DefaultTask() {
     }
 }
 
-/**
- * Makes the bundled Linux libraries load their siblings from the same directory: sets
- * `RUNPATH=$ORIGIN` on every regular `.so`, the ELF equivalent of macOS `@loader_path`
- * and the Windows `SetDllDirectory` path. Without it, `System.load(libmediampv.so)` cannot
- * resolve `libmpv.so.2` and the bundled ffmpeg libraries that sit next to it.
- *
- * System libraries (libass, libplacebo, glibc, X11, ...) are intentionally NOT bundled and
- * are still resolved via the system linker; the Linux runtime is therefore not fully
- * self-contained (documented limitation), but it is loadable wherever those system libraries
- * are present.
- */
-private fun setLinuxRunpathOrigin(
+/** Closes the portable ELF dependency graph and makes every bundled library load siblings. */
+private fun bundleLinuxElfDependencies(
     execOperations: ExecOperations,
     logger: Logger,
     libDir: File,
 ) {
     if (!libDir.isDirectory) return
-    val soFiles = libDir.listFiles()
-        ?.filter { it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) && it.name.contains(".so") }
-        .orEmpty()
 
-    soFiles.forEach { so ->
-        execOperations.exec {
-            commandLine("patchelf", "--set-rpath", "\$ORIGIN", so.absolutePath)
+    val queue = ArrayDeque<File>()
+    val visited = mutableSetOf<String>()
+    val copiedSources = mutableMapOf<String, File>()
+    libDir.listFiles()
+        ?.filter { it.isFile && it.name.contains(".so") }
+        ?.map(File::getCanonicalFile)
+        ?.distinctBy(File::getAbsolutePath)
+        ?.forEach(queue::addLast)
+
+    while (queue.isNotEmpty()) {
+        val binary = queue.removeFirst().canonicalFile
+        if (!visited.add(binary.absolutePath)) continue
+
+        val resolvedDependencies = resolveLinuxElfDependencies(execOperations, binary, libDir)
+        printLinuxNeededLibraries(execOperations, binary).forEach { neededName ->
+            require('/' !in neededName) {
+                "Unsupported path-based ELF dependency '$neededName' required by ${binary.absolutePath}"
+            }
+
+            val bundled = libDir.resolve(neededName)
+            if (bundled.isFile) {
+                queue.addLast(bundled.canonicalFile)
+                return@forEach
+            }
+            if (isLinuxHostLibrary(neededName)) return@forEach
+
+            val source = resolvedDependencies[neededName]
+                ?: error("Unresolved Linux runtime dependency '$neededName' required by ${binary.absolutePath}")
+            val canonicalSource = source.canonicalFile
+            copiedSources[neededName]?.let { previous ->
+                require(previous == canonicalSource) {
+                    "Conflicting Linux runtime dependency '$neededName': " +
+                            "${previous.absolutePath} and ${canonicalSource.absolutePath}"
+                }
+            }
+            copiedSources[neededName] = canonicalSource
+            canonicalSource.copyTo(bundled, overwrite = false)
+            bundled.setExecutable(true, false)
+            queue.addLast(bundled)
         }
     }
 
-    if (soFiles.isNotEmpty()) {
-        logger.lifecycle("Set RUNPATH=\$ORIGIN on Linux runtime libraries: ${soFiles.map { it.name }.sorted().joinToString()}")
+    val bundledLibraries = libDir.listFiles()
+        ?.filter { it.isFile && it.name.contains(".so") && !Files.isSymbolicLink(it.toPath()) }
+        .orEmpty()
+    bundledLibraries.forEach { library ->
+        execOperations.exec {
+            commandLine("patchelf", "--set-rpath", "\$ORIGIN", library.absolutePath)
+        }
+    }
+
+    bundledLibraries.forEach { library ->
+        printLinuxNeededLibraries(execOperations, library).forEach { neededName ->
+            require(isLinuxHostLibrary(neededName) || libDir.resolve(neededName).isFile) {
+                "Linux runtime closure is incomplete: '${library.name}' requires '$neededName'"
+            }
+        }
+    }
+
+    if (bundledLibraries.isNotEmpty()) {
+        logger.lifecycle(
+            "Bundled Linux ELF dependency closure and set RUNPATH=\$ORIGIN: " +
+                    bundledLibraries.map { it.name }.sorted().joinToString(),
+        )
     }
 }
+
+private fun printLinuxNeededLibraries(execOperations: ExecOperations, binary: File): List<String> {
+    val stdout = ByteArrayOutputStream()
+    execOperations.exec {
+        commandLine("patchelf", "--print-needed", binary.absolutePath)
+        standardOutput = stdout
+    }
+    return stdout.toString(Charsets.UTF_8)
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .toList()
+}
+
+private fun resolveLinuxElfDependencies(
+    execOperations: ExecOperations,
+    binary: File,
+    libDir: File,
+): Map<String, File> {
+    val stdout = ByteArrayOutputStream()
+    val stderr = ByteArrayOutputStream()
+    val inheritedLibraryPath = System.getenv("LD_LIBRARY_PATH").orEmpty()
+    val libraryPath = listOf(libDir.absolutePath, inheritedLibraryPath)
+        .filter(String::isNotEmpty)
+        .joinToString(File.pathSeparator)
+    val result = execOperations.exec {
+        commandLine("ldd", binary.absolutePath)
+        environment("LC_ALL", "C")
+        environment("LD_LIBRARY_PATH", libraryPath)
+        standardOutput = stdout
+        errorOutput = stderr
+        isIgnoreExitValue = true
+    }
+    require(result.exitValue == 0) {
+        "Failed to inspect ELF dependencies of ${binary.absolutePath}: " +
+                stderr.toString(Charsets.UTF_8).trim()
+    }
+
+    return buildMap {
+        stdout.toString(Charsets.UTF_8).lineSequence().forEach { line ->
+            val match = LDD_RESOLVED_LIBRARY.matchEntire(line.trim()) ?: return@forEach
+            val name = match.groupValues[1]
+            val path = match.groupValues[2]
+            if (path != "not found") {
+                val file = File(path)
+                if (file.isFile) put(name, file)
+            }
+        }
+    }
+}
+
+private val LDD_RESOLVED_LIBRARY = Regex("^(\\S+)\\s+=>\\s+(\\S+)(?:\\s+\\(.*)?$")
+
+/** Libraries that must stay matched to the host ABI, loader, JVM, or graphics driver stack. */
+private fun isLinuxHostLibrary(name: String): Boolean {
+    if (name.startsWith("linux-vdso.so") || name.startsWith("ld-linux-")) return true
+    if (name.startsWith("libnss_") || name.startsWith("libcuda.so")) return true
+    return name in LINUX_HOST_LIBRARIES
+}
+
+private val LINUX_HOST_LIBRARIES = setOf(
+    // glibc and its loader/runtime family
+    "libc.so.6",
+    "libm.so.6",
+    "libmvec.so.1",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libanl.so.1",
+    "libutil.so.1",
+    "libBrokenLocale.so.1",
+    "libthread_db.so.1",
+    // compiler runtimes may already be loaded by the JVM
+    "libstdc++.so.6",
+    "libgcc_s.so.1",
+    // base X11 ABI used by the Compose process
+    "libX11.so.6",
+    "libX11-xcb.so.1",
+    "libxcb.so.1",
+    // GL/EGL dispatch and hardware-facing libraries must match the host driver stack
+    "libGL.so.1",
+    "libEGL.so.1",
+    "libGLX.so.0",
+    "libOpenGL.so.0",
+    "libGLdispatch.so.0",
+    "libGLX_mesa.so.0",
+    "libglapi.so.0",
+    "libdrm.so.2",
+    "libgbm.so.1",
+    "libvulkan.so.1",
+)
 
 /**
  * Makes the macOS runtime self-contained: recursively copies every non-system dylib
