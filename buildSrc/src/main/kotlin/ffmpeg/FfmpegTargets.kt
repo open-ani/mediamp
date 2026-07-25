@@ -59,6 +59,21 @@ internal data class FfmpegBuildTarget(
     val rewriteAppleInstallNames: Boolean = false,
     /** Copy the ffmpeg CLI binary into the runtime output when the build produced one. */
     val bundleFfmpegExecutable: Boolean = true,
+
+    // ---- dav1d (AV1 software decoding) ----
+
+    /**
+     * Build dav1d from the `mediamp-ffmpeg/dav1d` submodule and statically link it into
+     * libavcodec (`--enable-libdav1d --enable-decoder=libdav1d`). Required for software
+     * AV1 playback: FFmpeg 8 removed the native AV1 software decoder, leaving
+     * `libavcodec/av1dec.c` as a hwaccel-only shim that fails with ENOSYS when no AV1
+     * hardware decoder exists on the machine.
+     */
+    val dav1dEnabled: Boolean = false,
+    /** Extra `meson setup` arguments for the dav1d build (e.g. macOS version-min flags). */
+    val dav1dMesonArgs: List<String> = emptyList(),
+    /** MSYS2 packages the dav1d meson build needs (Windows targets). */
+    val dav1dMsys2Packages: List<String> = emptyList(),
 )
 
 // ---------------------------------------------------------------------------------------
@@ -206,6 +221,16 @@ private val linuxRuntimeSearchPathFlags: List<String> = listOf(
     "--extra-ldflags=-Wl,-rpath,'${'$'}ORIGIN'",
 )
 
+// dav1d software AV1 decoding. FFmpeg 8 removed the native AV1 software decoder (the
+// remaining `av1` decoder is a hwaccel-only shim), so software AV1 needs the external
+// libdav1d decoder, built from the mediamp-ffmpeg/dav1d submodule and linked statically
+// into libavcodec. The native `av1` decoder stays enabled: the AV1 hwaccels
+// (d3d11va/videotoolbox/nvdec/vaapi) attach to it.
+private val dav1dFlags: List<String> = listOf(
+    "--enable-libdav1d",
+    "--enable-decoder=libdav1d",
+)
+
 // ---------------------------------------------------------------------------------------
 // Windows
 // ---------------------------------------------------------------------------------------
@@ -232,7 +257,7 @@ private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget {
             "--target-os=mingw32",
             "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
             "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
-        ) + opensslHttpTlsFlags + windowsD3d11vaFlags,
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + dav1dFlags,
         env = mapOf("MSYSTEM" to "UCRT64"),
         shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
         libExtension = "dll",
@@ -245,6 +270,13 @@ private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget {
         jniWrapperExtraLibs = listOf("-lstdc++"),
         msysSubsystem = "ucrt64",
         collectWindowsRuntime = true,
+        dav1dEnabled = true,
+        dav1dMsys2Packages = listOf(
+            "mingw-w64-ucrt-x86_64-gcc",
+            "mingw-w64-ucrt-x86_64-meson",
+            "mingw-w64-ucrt-x86_64-ninja",
+            "mingw-w64-ucrt-x86_64-nasm",
+        ),
     )
 }
 
@@ -266,7 +298,7 @@ private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget {
             "--target-os=mingw32",
             "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
             "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
-        ) + opensslHttpTlsFlags + windowsD3d11vaFlags,
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + dav1dFlags,
         env = mapOf("MSYSTEM" to "CLANGARM64"),
         shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
         libExtension = "dll",
@@ -279,6 +311,12 @@ private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget {
         jniWrapperExtraLibs = listOf("-lstdc++"),
         msysSubsystem = "clangarm64",
         collectWindowsRuntime = true,
+        dav1dEnabled = true,
+        dav1dMsys2Packages = listOf(
+            "mingw-w64-clang-aarch64-clang",
+            "mingw-w64-clang-aarch64-meson",
+            "mingw-w64-clang-aarch64-ninja",
+        ),
     )
 }
 
@@ -308,7 +346,7 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
         "--enable-hwaccel=hevc_vaapi",
         "--enable-hwaccel=vp9_vaapi",
         "--enable-hwaccel=av1_vaapi",
-    ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags,
+    ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags + dav1dFlags,
     libExtension = "so",
     toolchainProbes = listOf(
         listOf("cc", "--version"),
@@ -316,6 +354,7 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
         listOf("pkg-config", "--modversion", "openssl"),
     ),
     jniWrapperName = "libffmpegkitjni.so",
+    dav1dEnabled = true,
 )
 
 // ---------------------------------------------------------------------------------------
@@ -337,7 +376,7 @@ private fun macosTarget(name: String, arch: String): FfmpegBuildTarget = FfmpegB
         "--cxx=clang++",
         "--extra-cflags=-arch $arch -mmacosx-version-min=12.0",
         "--extra-ldflags=-arch $arch -mmacosx-version-min=12.0",
-    ) + secureTransportHttpTlsFlags + macosVideotoolboxFlags,
+    ) + secureTransportHttpTlsFlags + macosVideotoolboxFlags + dav1dFlags,
     libExtension = "dylib",
     toolchainProbes = listOf(
         listOf("clang", "--version"),
@@ -345,6 +384,13 @@ private fun macosTarget(name: String, arch: String): FfmpegBuildTarget = FfmpegB
     jniWrapperName = "libffmpegkitjni.dylib",
     jniWrapperLinkFlags = listOf("-dynamiclib", "-Wl,-install_name,@loader_path/libffmpegkitjni.dylib"),
     rewriteAppleInstallNames = true,
+    dav1dEnabled = true,
+    // Match the FFmpeg deployment target so the linker does not warn about object files
+    // built for a newer macOS version than the libraries they end up in.
+    dav1dMesonArgs = listOf(
+        "-Dc_args=-mmacosx-version-min=12.0",
+        "-Dc_link_args=-mmacosx-version-min=12.0",
+    ),
 )
 
 // ---------------------------------------------------------------------------------------
