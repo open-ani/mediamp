@@ -119,6 +119,10 @@
 
 ### Linux
 
+最低运行时基线为 Ubuntu 24.04 的 glibc 2.39。Linux runtime 必须在该发行版上构建，
+使 `ldd` 解析和递归收集的整个 ELF 依赖图都来自这一基线；打包任务还会对最终 jar 中
+的每个 ELF 执行 `readelf --version-info`，拒绝任何高于 `GLIBC_2.39` 的符号版本引用。
+
 依赖来源设计如下：
 
 1. `FFmpeg`

@@ -1,9 +1,21 @@
 package nativebuild
 
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
+import java.util.zip.ZipFile
+import javax.inject.Inject
+
+internal const val MINIMUM_LINUX_GLIBC_VERSION = "2.39"
 
 internal fun manifestRelativePath(rootDir: File, file: File): String =
     file.relativeTo(rootDir).path.replace("\\", "/")
@@ -184,3 +196,124 @@ private val LINUX_HOST_LIBRARIES = setOf(
     "libgbm.so.1",
     "libvulkan.so.1",
 )
+
+/** Verifies that every ELF in a runtime jar is compatible with [MINIMUM_LINUX_GLIBC_VERSION]. */
+internal fun verifyLinuxGlibcVersionsInJar(
+    execOperations: ExecOperations,
+    runtimeJar: File,
+    temporaryDir: File,
+    minimumVersionName: String = MINIMUM_LINUX_GLIBC_VERSION,
+) {
+    require(runtimeJar.isFile) { "Linux runtime jar not found at ${runtimeJar.absolutePath}" }
+    temporaryDir.deleteRecursively()
+    temporaryDir.mkdirs()
+
+    val minimumVersion = parseGlibcVersion(minimumVersionName)
+    val violations = mutableListOf<String>()
+    var elfCount = 0
+
+    ZipFile(runtimeJar).use { zip ->
+        zip.entries().asSequence()
+            .filterNot { it.isDirectory }
+            .forEachIndexed { index, entry ->
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                if (bytes.size < ELF_MAGIC.size || !bytes.copyOfRange(0, ELF_MAGIC.size).contentEquals(ELF_MAGIC)) {
+                    return@forEachIndexed
+                }
+                elfCount++
+
+                val extracted = temporaryDir.resolve("$index-${entry.name.substringAfterLast('/')}")
+                extracted.writeBytes(bytes)
+                val stdout = ByteArrayOutputStream()
+                execOperations.exec {
+                    commandLine("readelf", "--version-info", "--wide", extracted.absolutePath)
+                    environment("LC_ALL", "C")
+                    standardOutput = stdout
+                }
+
+                val requiredVersions = parseRequiredGlibcVersions(stdout.toString(Charsets.UTF_8))
+                val incompatibleVersions = requiredVersions
+                    .filterNot { version -> isGlibcRequirementCompatible(version, minimumVersion) }
+                    .sorted()
+                if (incompatibleVersions.isNotEmpty()) {
+                    violations += "${entry.name}: ${incompatibleVersions.joinToString()}"
+                }
+            }
+    }
+
+    require(elfCount > 0) { "No ELF files found in ${runtimeJar.absolutePath}" }
+    require(violations.isEmpty()) {
+        "Linux runtime requires glibc newer than the declared $minimumVersionName baseline:\n" +
+            violations.joinToString("\n")
+    }
+}
+
+abstract class VerifyLinuxGlibcBaselineTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val runtimeJar: RegularFileProperty
+
+    @get:Input
+    abstract val minimumVersion: Property<String>
+
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    @TaskAction
+    fun verify() {
+        verifyLinuxGlibcVersionsInJar(
+            execOperations = execOperations,
+            runtimeJar = runtimeJar.get().asFile,
+            temporaryDir = temporaryDir,
+            minimumVersionName = minimumVersion.get(),
+        )
+        logger.lifecycle(
+            "Verified every ELF in ${runtimeJar.get().asFile.name} against glibc ${minimumVersion.get()}",
+        )
+    }
+}
+
+internal fun parseRequiredGlibcVersions(readelfOutput: String): Set<String> {
+    var readingNeeds = false
+    return buildSet {
+        readelfOutput.lineSequence().forEach { line ->
+            if (line.startsWith("Version needs section")) {
+                readingNeeds = true
+                return@forEach
+            }
+            if (line.startsWith("Version ") && line.contains(" section ")) {
+                readingNeeds = false
+                return@forEach
+            }
+            if (readingNeeds) {
+                GLIBC_NEEDED_NAME.findAll(line).forEach { match -> add(match.groupValues[1]) }
+            }
+        }
+    }
+}
+
+internal fun isGlibcRequirementCompatible(
+    requirement: String,
+    baselineVersion: List<Int> = parseGlibcVersion(MINIMUM_LINUX_GLIBC_VERSION),
+): Boolean {
+    val numericVersion = GLIBC_NUMERIC_VERSION.matchEntire(requirement)?.groupValues?.get(1)
+        ?: GLIBC_SPECIAL_VERSION_INTRODUCED[requirement]
+        ?: return false
+    return compareVersions(parseGlibcVersion(numericVersion), baselineVersion) <= 0
+}
+
+private fun parseGlibcVersion(version: String): List<Int> =
+    version.split('.').map { component -> component.toInt() }
+
+private fun compareVersions(left: List<Int>, right: List<Int>): Int {
+    repeat(maxOf(left.size, right.size)) { index ->
+        val comparison = (left.getOrElse(index) { 0 }).compareTo(right.getOrElse(index) { 0 })
+        if (comparison != 0) return comparison
+    }
+    return 0
+}
+
+private val ELF_MAGIC = byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte())
+private val GLIBC_NEEDED_NAME = Regex("\\bName:\\s+(GLIBC_\\S+)")
+private val GLIBC_NUMERIC_VERSION = Regex("GLIBC_(\\d+(?:\\.\\d+)+)")
+private val GLIBC_SPECIAL_VERSION_INTRODUCED = mapOf("GLIBC_ABI_DT_RELR" to "2.36")

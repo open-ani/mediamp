@@ -1,7 +1,9 @@
 package mpv
 
 import nativebuild.DesktopRuntimeTarget
+import nativebuild.MINIMUM_LINUX_GLIBC_VERSION
 import nativebuild.PublishedArtifact
+import nativebuild.VerifyLinuxGlibcBaselineTask
 import nativebuild.addCompilePomDependency
 import nativebuild.artifactSuffix
 import nativebuild.createDependencyOnlyJvmRuntimeElements
@@ -81,7 +83,22 @@ internal fun registerDesktopRuntimeJarTasks(
                     from(manifestFile)
                 }
             }
-            runtimeJarTasks[target] = PublishedArtifact(jarTask.flatMap { it.archiveFile }, jarTask)
+            val builtBy = if (target.os == "linux") {
+                val verificationTask = context.project.tasks.register<VerifyLinuxGlibcBaselineTask>(
+                    "verifyMpvRuntimeGlibc${target.publicationSuffix()}",
+                ) {
+                    group = "verification"
+                    description = "Verify the ${target.artifactSuffix()} runtime against the declared glibc baseline"
+                    runtimeJar.set(jarTask.flatMap { it.archiveFile })
+                    minimumVersion.set(MINIMUM_LINUX_GLIBC_VERSION)
+                    dependsOn(jarTask)
+                }
+                jarTask.configure { finalizedBy(verificationTask) }
+                verificationTask
+            } else {
+                jarTask
+            }
+            runtimeJarTasks[target] = PublishedArtifact(jarTask.flatMap { it.archiveFile }, builtBy)
             return@forEach
         }
 

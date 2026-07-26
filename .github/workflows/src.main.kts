@@ -304,6 +304,7 @@ sealed class Runner(
         labels = setOf("macos-15"),
     )
 
+    // Linux native dependency closure baseline; keep in sync with MINIMUM_LINUX_GLIBC_VERSION.
     object GithubUbuntu2404 : GithubHosted(
         id = "github-ubuntu-2404",
         displayName = "Ubuntu 24.04 x86_64 (GitHub)",

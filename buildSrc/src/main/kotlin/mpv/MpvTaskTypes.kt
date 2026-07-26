@@ -722,14 +722,10 @@ private fun resolveLinuxElfDependencies(
 ): Map<String, File> {
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
-    val inheritedLibraryPath = System.getenv("LD_LIBRARY_PATH").orEmpty()
-    val libraryPath = listOf(libDir.absolutePath, inheritedLibraryPath)
-        .filter(String::isNotEmpty)
-        .joinToString(File.pathSeparator)
     val result = execOperations.exec {
         commandLine("ldd", binary.absolutePath)
         environment("LC_ALL", "C")
-        environment("LD_LIBRARY_PATH", libraryPath)
+        environment("LD_LIBRARY_PATH", libDir.absolutePath)
         standardOutput = stdout
         errorOutput = stderr
         isIgnoreExitValue = true
