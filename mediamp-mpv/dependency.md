@@ -139,10 +139,11 @@
 - Linux 组装阶段会先复制：
   - `mpv install prefix`
   - FFmpeg 的 `lib`
-- 随后递归分析 ELF `DT_NEEDED`，把 `libass`、`libplacebo`、X11 扩展、音频客户端等
-  可移植依赖复制到输出目录，并为所有打包库设置 `RUNPATH=$ORIGIN`。
-- glibc、JVM 已加载的编译器 runtime、基础 X11 ABI，以及 GL/EGL/驱动调度栈继续由宿主提供，
-  避免将构建机 ABI 或 GPU 驱动实现带到用户系统。
+- 随后递归分析 ELF `DT_NEEDED`，把 `libass`、`libplacebo`、X11 扩展等可移植依赖
+  复制到输出目录，并为所有打包库设置 `RUNPATH=$ORIGIN`。
+- glibc、JVM 已加载的编译器 runtime、基础 X11 ABI、GL/EGL/驱动调度栈，以及依赖
+  宿主配置、插件或服务的 PulseAudio、ALSA、D-Bus、systemd、udev 和 fontconfig
+  继续由宿主提供，避免将构建机 ABI 或系统集成实现带到用户系统。
 
 ### Android
 
