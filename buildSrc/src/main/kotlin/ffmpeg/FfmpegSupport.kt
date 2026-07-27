@@ -61,6 +61,8 @@ internal class FfmpegBuildContext(
 
     val ffmpegSrcDir: File = project.projectDir.resolve("ffmpeg")
 
+    val dav1dSrcDir: File = project.projectDir.resolve("dav1d")
+
     val appleFrameworkName: String = "MediampFFmpegKit"
     val commandWrapperSource: File = project.projectDir.resolve("src/appleMain/c/ffmpegkit_wrapper.c")
     val applePublicHeaderSource: File = project.projectDir.resolve("src/appleMain/include/MediampFFmpegKit.h")

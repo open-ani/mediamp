@@ -277,6 +277,14 @@ abstract class JvmMpvMediampPlayer(
 
         handle.option("hwdec", "auto")
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
+        // FFmpeg 8 removed the native AV1 software decoder: the remaining "av1" decoder
+        // is a hwaccel-only shim (upstream registers it after the external decoders with
+        // "hwaccel hooks only, so prefer external decoders"). Software AV1 therefore goes
+        // through libdav1d, which is statically linked into our desktop FFmpeg builds.
+        // State the preference explicitly so decoder selection does not silently depend
+        // on FFmpeg's registration order; harmless on runtimes without libdav1d, and the
+        // hwdec path is unaffected (it binds hwaccels to the native "av1" decoder).
+        handle.option("vd", "libdav1d")
         handle.option("input-default-bindings", "no")
         handle.option("volume-max", "200")
 

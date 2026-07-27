@@ -12,6 +12,7 @@ import nativebuild.restoreExecutablePermissions
 import nativebuild.rewriteMachOToLoaderPath
 import nativebuild.sanitizeAbsolutePaths
 import nativebuild.shellQuote
+import nativebuild.shellScriptWithExports
 import nativebuild.toMsysPath
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
@@ -81,6 +82,16 @@ abstract class FfmpegConfigureTask : DefaultTask() {
     @get:OutputFile
     abstract val configStamp: RegularFileProperty
 
+    /**
+     * dav1d install prefix for targets with dav1d enabled. Its `lib/pkgconfig` is
+     * prepended to `PKG_CONFIG_PATH` so configure's `require_pkg_config libdav1d`
+     * finds the statically built decoder.
+     */
+    @get:Optional
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val dav1dInstallDir: DirectoryProperty
+
     /** Tool location, not content input: versions are captured by the toolchain fingerprint. */
     @get:Internal
     abstract val msys2Dir: DirectoryProperty
@@ -142,11 +153,28 @@ abstract class FfmpegConfigureTask : DefaultTask() {
         val buildDirShellPath = if (hostOs == "Windows") buildDir.absolutePath.toMsysPath() else buildDir.absolutePath
         val flagsStr = allFlags.joinToString(" ") { flag -> if (' ' in flag) "'$flag'" else flag }
 
+        val configureEnv = envVars.get().toMutableMap()
+        dav1dInstallDir.orNull?.let { dav1dInstall ->
+            val pkgConfigDir = dav1dInstall.asFile.resolve("lib/pkgconfig")
+            require(pkgConfigDir.isDirectory) {
+                "dav1d pkg-config directory not found at ${pkgConfigDir.absolutePath}. " +
+                    "Run the matching dav1dBuild task first."
+            }
+            val pkgConfigPath = if (hostOs == "Windows") pkgConfigDir.absolutePath.toMsysPath() else pkgConfigDir.absolutePath
+            val existing = configureEnv["PKG_CONFIG_PATH"]?.takeIf { it.isNotBlank() }
+            configureEnv["PKG_CONFIG_PATH"] = listOfNotNull(pkgConfigPath, existing).joinToString(":")
+        }
+
         val configureCommand = "cd '$buildDirShellPath' && bash '$configurePath' $flagsStr"
 
+        // NOTE: PKG_CONFIG_PATH must be exported *inside* the shell, not merely passed in
+        // the process environment: on Windows this runs through `bash -l`, and MSYS2's
+        // login profile overwrites PKG_CONFIG_PATH with the subsystem defaults
+        // (/clangarm64/lib/pkgconfig:...), discarding the inherited value (the same
+        // reason MpvConfigureTask exports via shellScriptWithExports).
         execOperations.exec {
-            commandLine(shell.get(), "-l", "-c", configureCommand)
-            environment(envVars.get())
+            commandLine(shell.get(), "-l", "-c", shellScriptWithExports(configureEnv, configureCommand))
+            environment(configureEnv)
         }
 
         // The stamp feeds the build task's cache key, so it must not contain the
@@ -183,6 +211,15 @@ abstract class FfmpegBuildTask : DefaultTask() {
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val configStamp: RegularFileProperty
+
+    /**
+     * dav1d install prefix for targets with dav1d enabled. Static-linked into libavcodec,
+     * so its content participates in the cache key like the staged FFmpeg source.
+     */
+    @get:Optional
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val dav1dInstallDir: DirectoryProperty
 
     @get:Input
     abstract val shell: Property<String>
@@ -246,13 +283,13 @@ abstract class FfmpegBuildTask : DefaultTask() {
  * place of the raw file, which embeds worktree-absolute paths and would defeat
  * cross-worktree cache hits.
  */
-internal fun sanitizedFfmpegToolchainSummary(buildDir: File): String {
+internal fun sanitizedFfmpegToolchainSummary(buildDir: File, extraRoots: List<File> = emptyList()): String {
     val configFile = buildDir.resolve("ffbuild/config.mak")
     if (!configFile.isFile) return "config.mak missing"
     val config = readFfmpegConfig(configFile)
     val summary = listOf("CC", "CPPFLAGS", "CFLAGS", "LDFLAGS", "EXTRALIBS")
         .joinToString("\n") { key -> "$key=${expandMakeVariables(config[key].orEmpty(), config)}" }
-    return sanitizeAbsolutePaths(summary, listOf(buildDir))
+    return sanitizeAbsolutePaths(summary, listOf(buildDir) + extraRoots)
 }
 
 /**

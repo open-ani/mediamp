@@ -112,12 +112,50 @@ private fun registerFfmpegTasks(
     val buildStamp = project.layout.buildDirectory.file("ffmpeg/${target.name}/.build_stamp")
     val msys2Dir = if (context.hostOs == Os.Windows) context.project.resolveMsys2Dir() else null
     val toolchainFingerprint = project.toolchainFingerprint(target.toolchainProbes)
-    val toolchainConfigSummary = buildDir.map { sanitizedFfmpegToolchainSummary(it.asFile) }
+
+    val dav1dInstall = project.layout.buildDirectory.dir("dav1d/${target.name}/install")
+    val dav1dBuildTask = if (target.dav1dEnabled) {
+        val dav1dProbes = if (msys2Dir != null) {
+            listOf(listOf(msys2Dir.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + target.dav1dMsys2Packages)
+        } else {
+            listOf(listOf("meson", "--version"), listOf("cc", "--version"))
+        }
+        project.tasks.register<Dav1dBuildTask>("dav1dBuild${target.name}") {
+            group = "ffmpeg"
+            description = "Build dav1d (AV1 software decoder) for ${target.name}"
+            sourceDir.set(context.dav1dSrcDir)
+            mesonArgs.set(target.dav1dMesonArgs)
+            shell.set(target.shell)
+            envVars.set(target.env)
+            hostOsName.set(context.hostOs.name)
+            msys2Packages.set(target.dav1dMsys2Packages)
+            this.toolchainFingerprint.set(project.toolchainFingerprint(dav1dProbes))
+            buildDirPath.set(project.layout.buildDirectory.dir("dav1d/${target.name}/meson"))
+            this.installDir.set(dav1dInstall)
+            this.buildStamp.set(project.layout.buildDirectory.file("dav1d/${target.name}/.build_stamp"))
+            if (msys2Dir != null) {
+                this.msys2Dir.set(msys2Dir)
+            }
+        }
+    } else {
+        null
+    }
+
+    val toolchainConfigSummary = buildDir.map {
+        sanitizedFfmpegToolchainSummary(
+            it.asFile,
+            extraRoots = if (target.dav1dEnabled) listOf(dav1dInstall.get().asFile) else emptyList(),
+        )
+    }
 
     val configureTask = project.tasks.register<FfmpegConfigureTask>("ffmpegConfigure${target.name}") {
         group = "ffmpeg"
         description = "Run FFmpeg configure for ${target.name}"
         dependsOn(sourceTemplateTask)
+        if (dav1dBuildTask != null) {
+            dependsOn(dav1dBuildTask)
+            this.dav1dInstallDir.set(dav1dInstall)
+        }
         this.sourceTemplateDir.set(templateSnapshotDir)
         configureFlags.set(commonConfigureFlags + target.configureFlags)
         shell.set(target.shell)
@@ -138,6 +176,9 @@ private fun registerFfmpegTasks(
         description = "Build FFmpeg for ${target.name}"
         dependsOn(configureTask)
         stagedSourceDir.set(configureTask.flatMap { it.stagedSourceDir })
+        if (dav1dBuildTask != null) {
+            this.dav1dInstallDir.set(dav1dInstall)
+        }
         this.configStamp.set(configStamp)
         shell.set(target.shell)
         envVars.set(target.env)

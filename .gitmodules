@@ -6,3 +6,6 @@
 	path = mediamp-mpv/mpv
 	url = https://github.com/mpv-player/mpv
 	branch = release/0.41
+[submodule "mediamp-ffmpeg/dav1d"]
+	path = mediamp-ffmpeg/dav1d
+	url = https://github.com/videolan/dav1d.git

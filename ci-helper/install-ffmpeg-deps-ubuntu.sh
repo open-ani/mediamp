@@ -18,4 +18,6 @@ sudo apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
     nasm \
+    meson \
+    ninja-build \
     make
