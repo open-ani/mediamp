@@ -136,3 +136,51 @@ internal fun isWindowsSystemLibrary(dllName: String): Boolean {
             "ws2_32.dll",
         )
 }
+
+/** Libraries that must stay matched to the host ABI, services, configuration, or driver stack. */
+internal fun isLinuxHostLibrary(name: String): Boolean {
+    if (name.startsWith("linux-vdso.so") || name.startsWith("ld-linux-")) return true
+    if (name.startsWith("libnss_") || name.startsWith("libcuda.so")) return true
+    if (name.startsWith("libpulsecommon-") && name.endsWith(".so")) return true
+    return name in LINUX_HOST_LIBRARIES
+}
+
+private val LINUX_HOST_LIBRARIES = setOf(
+    // glibc and its loader/runtime family
+    "libc.so.6",
+    "libm.so.6",
+    "libmvec.so.1",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libanl.so.1",
+    "libutil.so.1",
+    "libBrokenLocale.so.1",
+    "libthread_db.so.1",
+    // compiler runtimes may already be loaded by the JVM
+    "libstdc++.so.6",
+    "libgcc_s.so.1",
+    // audio, fonts, and service clients must use the host configuration and plugins
+    "libpulse.so.0",
+    "libsystemd.so.0",
+    "libasound.so.2",
+    "libdbus-1.so.3",
+    "libudev.so.1",
+    "libfontconfig.so.1",
+    // base X11 ABI used by the Compose process
+    "libX11.so.6",
+    "libX11-xcb.so.1",
+    "libxcb.so.1",
+    // GL/EGL dispatch and hardware-facing libraries must match the host driver stack
+    "libGL.so.1",
+    "libEGL.so.1",
+    "libGLX.so.0",
+    "libOpenGL.so.0",
+    "libGLdispatch.so.0",
+    "libGLX_mesa.so.0",
+    "libglapi.so.0",
+    "libdrm.so.2",
+    "libgbm.so.1",
+    "libvulkan.so.1",
+)

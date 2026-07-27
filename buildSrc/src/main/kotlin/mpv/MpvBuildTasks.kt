@@ -201,6 +201,9 @@ private fun registerMpvTasks(
         jniLibrary.set(jniOutputFile)
         runtimeDirName.set(target.runtime.runtimeDirName)
         postProcessing.set(target.runtime.postProcessing.name)
+        if (target.runtime.postProcessing == MpvRuntimePostProcessing.LINUX_BUNDLE_ELF_DEPENDENCIES) {
+            doNotTrackState("Linux runtime assembly discovers dependency files from the build host")
+        }
         target.msysSubsystem?.let { msysSubsystem.set(it) }
         this.outputDir.set(outputDirProvider)
         if (msys2Dir != null) {
