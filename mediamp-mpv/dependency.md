@@ -16,6 +16,7 @@
 - [buildSrc/src/main/kotlin/mpv/MpvSupport.kt](/C:/Users/StageGuard/Desktop/Projects/mediamp/buildSrc/src/main/kotlin/mpv/MpvSupport.kt)
 - [buildSrc/src/main/kotlin/mpv/MpvTaskTypes.kt](/C:/Users/StageGuard/Desktop/Projects/mediamp/buildSrc/src/main/kotlin/mpv/MpvTaskTypes.kt)
 - [buildSrc/src/main/kotlin/mpv/MpvBuildTasks.kt](/C:/Users/StageGuard/Desktop/Projects/mediamp/buildSrc/src/main/kotlin/mpv/MpvBuildTasks.kt)
+- [buildSrc/src/main/kotlin/ffmpeg/Dav1dTasks.kt](/C:/Users/StageGuard/Desktop/Projects/mediamp/buildSrc/src/main/kotlin/ffmpeg/Dav1dTasks.kt)
 - [mediamp-mpv/src/cpp](/C:/Users/StageGuard/Desktop/Projects/mediamp/mediamp-mpv/src/cpp)
 
 ## 总览
@@ -23,6 +24,7 @@
 当前 `libmpv` 构建链中显式进入依赖声明的核心第三方库有：
 
 - `FFmpeg`
+- `dav1d`
 - `libass`
 - `libplacebo`
 - `zlib`
@@ -30,6 +32,10 @@
 其中：
 
 - `FFmpeg` 来自 `mediamp-ffmpeg`，通过 `pkg-config` 提供给 mpv。
+- `dav1d` 提供 AV1 软件解码。FFmpeg 8 起原生 `av1` 解码器退化为纯硬解壳
+  （无 hwaccel 时解码直接失败），软件 AV1 必须走外部解码器；`dav1d` 由
+  `mediamp-ffmpeg/dav1d` submodule 以 meson 静态编译，随 `--enable-libdav1d`
+  链接进 `libavcodec`，因此不新增任何运行时库文件。
 - `libass` 用于字幕和 OSD 文本渲染。
 - `libplacebo` 用于 GPU 渲染路径。
 - `zlib` 在当前配置里被显式启用，同时也被部分 Android fallback 子项目间接使用。
@@ -57,6 +63,7 @@
 | 依赖 | 作用 | Windows | Linux | macOS | Android | 最终产物情况 |
 |---|---|---|---|---|---|---|
 | `FFmpeg` | 解复用、解码、滤镜、缩放、重采样等核心媒体能力 | 来自 `mediamp-ffmpeg` 安装目录，通过 `pkg-config` 导入 | 来自 `mediamp-ffmpeg` 安装目录，通过 `pkg-config` 导入 | 来自 `mediamp-ffmpeg` 安装目录，通过 `pkg-config` 导入 | 来自 `mediamp-ffmpeg` 安装目录，通过 cross file 的 `pkg_config_libdir` 导入 | Win: `av*.dll` / `sw*.dll`；macOS: `libav*.dylib` / `libsw*.dylib`；Android: `libav*.so` / `libsw*.so` |
+| `dav1d` | AV1 软件解码（`--enable-libdav1d`，FFmpeg 8 原生 `av1` 解码器仅剩硬解壳） | `mediamp-ffmpeg/dav1d` submodule，meson 静态编译，链接进 `libavcodec` | 同左 | 同左 | 未启用 | 静态链接进 `av*` 库，无额外运行时文件 |
 | `libass` | 字幕、OSD 文本渲染 | MSYS2 UCRT64 包，通过 `pkg-config` 导入 | 预期由 Linux 系统开发包提供，通过 `pkg-config` 导入 | 预期由 macOS 系统包管理器提供，通过 `pkg-config` 导入 | Git wrap fallback 交叉编译 | Win: `libass-9.dll`；macOS: `libass*.dylib`；Android: `libass.so` |
 | `libplacebo` | GPU 渲染后端 | MSYS2 UCRT64 包，通过 `pkg-config` 导入 | 预期由 Linux 系统开发包提供，通过 `pkg-config` 导入 | 预期由 macOS 系统包管理器提供，通过 `pkg-config` 导入 | Git wrap fallback 交叉编译 | Win: `libplacebo-351.dll`；macOS: `libplacebo*.dylib`；Android: 当前安装为 `libplacebo.a` |
 | `zlib` | 压缩基础库；同时被部分子项目传递使用 | MSYS2 / 系统路径传递提供 | 预期由 Linux 系统包提供 | 预期由 macOS 系统 / 包管理器提供 | WrapDB fallback | Win: `zlib1.dll`；macOS: `libz*.dylib`；Android: `libz.so` |

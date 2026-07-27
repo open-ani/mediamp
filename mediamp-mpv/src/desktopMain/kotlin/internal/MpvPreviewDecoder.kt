@@ -71,6 +71,9 @@ internal class MpvPreviewDecoder(
         handle.option("target-trc", "srgb")
         handle.option("hwdec", "auto")
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
+        // Prefer libdav1d for software AV1 — same rationale as the main player (see
+        // JvmMpvMediampPlayer.configureNativeHandle).
+        handle.option("vd", "libdav1d")
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
 
