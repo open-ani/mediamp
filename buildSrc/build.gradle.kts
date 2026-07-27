@@ -43,4 +43,5 @@ dependencies {
     api(libs.kotlin.compose.compiler.gradle.plugin)
     api(libs.gradle.maven.publish.plugin)
     implementation(kotlin("script-runtime"))
+    testImplementation(kotlin("test"))
 }
