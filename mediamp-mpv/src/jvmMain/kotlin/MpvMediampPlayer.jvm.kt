@@ -24,6 +24,7 @@ import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
+import org.openani.mediamp.internal.Arch
 import org.openani.mediamp.internal.Platform
 import org.openani.mediamp.internal.currentPlatform
 import org.openani.mediamp.metadata.MediaProperties
@@ -276,6 +277,16 @@ abstract class JvmMpvMediampPlayer(
         }
 
         handle.option("hwdec", "auto")
+        if (currentPlatform().let { it is Platform.Windows && it.arch == Arch.AARCH64 }) {
+            // TODO: restore multi-threaded hwdec once FFmpeg fixes the race this works
+            // around: dxva2/d3d11va hwaccels attach the decoder interface ref to
+            // frame->buf[1] in end_frame, and FFmpeg frame threading copies that frame
+            // concurrently (update_thread_context DPB copy). The AVBufferRef publication
+            // is unfenced, so on ARM64's weak memory model the copy can observe the
+            // pointer before the ref contents, yielding a blank ref and crashing
+            // av_buffer_replace (NULL AVBuffer->refcount). x86 TSO hides this.
+            handle.option("hwdec-threads", "1")
+        }
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         // FFmpeg 8 removed the native AV1 software decoder: the remaining "av1" decoder
         // is a hwaccel-only shim (upstream registers it after the external decoders with
