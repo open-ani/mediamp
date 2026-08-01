@@ -99,6 +99,20 @@ internal val commonConfigureFlags: List<String> = buildList {
     // Small built-in codec used by the native-runtime smoke tests to generate fixtures
     // without relying on an externally installed libx264-enabled ffmpeg.
     add("--enable-decoder=mpeg4")
+    // MPEG-2 video: DVD rips, older TV rips, and Japanese broadcast TS.
+    add("--enable-decoder=mpeg2video")
+    // VC-1: early Blu-ray (2006-2010) releases.
+    add("--enable-decoder=vc1")
+    // WMV family. wmv3 (WMV9) rides on the vc1 decoder; wmv1/wmv2 cover older
+    // ASF-era files.
+    add("--enable-decoder=wmv1")
+    add("--enable-decoder=wmv2")
+    add("--enable-decoder=wmv3")
+    // DivX 3 in early-2000s AVI fansubs; shares msmpeg4dec with wmv1/wmv2.
+    add("--enable-decoder=msmpeg4v3")
+    // RealMedia (rmvb): the dominant format of 2000s Chinese-community anime rips.
+    add("--enable-decoder=rv30")
+    add("--enable-decoder=rv40")
     add("--enable-decoder=wrapped_avframe")
     add("--enable-decoder=pcm_s16le")
     add("--enable-encoder=mpeg4")
@@ -108,6 +122,32 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-decoder=opus")
     add("--enable-decoder=mp3")
     add("--enable-decoder=flac")
+    // Dolby Digital (AC-3) and Dolby Digital Plus (E-AC-3), common audio tracks in
+    // WEB-DLs and BDRips. eac3 selects the ac3 decoder in configure; both are listed
+    // explicitly for clarity.
+    add("--enable-decoder=ac3")
+    add("--enable-decoder=eac3")
+    // DTS incl. DTS-HD MA (the dca decoder handles core + lossless extensions).
+    add("--enable-decoder=dca")
+    // Dolby TrueHD (BD remuxes; Atmos carriers decode as TrueHD).
+    add("--enable-decoder=truehd")
+    // Vorbis audio in older Matroska releases; the ogg demuxer is already enabled
+    // but had no matching decoder.
+    add("--enable-decoder=vorbis")
+    // LPCM variants beyond pcm_s16le: Blu-ray LPCM in m2ts and 24-bit PCM in mkv.
+    add("--enable-decoder=pcm_bluray")
+    add("--enable-decoder=pcm_s24le")
+    // Japanese broadcast TS uses LATM/LOAS AAC, which the plain aac decoder does
+    // not accept.
+    add("--enable-decoder=aac_latm")
+    // WMA audio for WMV/ASF files.
+    add("--enable-decoder=wmav1")
+    add("--enable-decoder=wmav2")
+    add("--enable-decoder=wmapro")
+    // RealAudio codecs found in rmvb: cook is the common one, sipr appears in
+    // some speech-heavy rips.
+    add("--enable-decoder=cook")
+    add("--enable-decoder=sipr")
     // Subtitle decoders. The Matroska/mov demuxers still enumerate subtitle streams
     // without these, so track pickers list tracks that then fail to open — mpv logs
     // "Could not find subtitle decoder for format 'subrip'" and silently deselects
@@ -124,6 +164,8 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-decoder=movtext")
     add("--enable-decoder=pgssub")
     add("--enable-decoder=dvdsub")
+    add("--enable-decoder=sami")
+    add("--enable-decoder=microdvd")
     add("--enable-muxer=mp4")
     add("--enable-muxer=matroska")
     add("--enable-muxer=mpegts")
@@ -135,10 +177,21 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-demuxer=ogg")
     add("--enable-demuxer=aac")
     add("--enable-demuxer=concat")
+    // WMV/WMA container.
+    add("--enable-demuxer=asf")
+    // Legacy fansub releases: XviD/DivX in AVI.
+    add("--enable-demuxer=avi")
+    // RealMedia container (.rm/.rmvb).
+    add("--enable-demuxer=rm")
     // External subtitle files (mpv loads them through libavformat).
     add("--enable-demuxer=ass")
     add("--enable-demuxer=srt")
     add("--enable-demuxer=webvtt")
+    // External VobSub (.idx/.sub pairs, AVI-era releases; selects mpegps_demuxer),
+    // SAMI (.smi, Korean fansubs) and MicroDVD (text .sub).
+    add("--enable-demuxer=vobsub")
+    add("--enable-demuxer=sami")
+    add("--enable-demuxer=microdvd")
     // Local encrypted HLS still needs the HLS demuxer so FFmpeg can interpret
     // EXT-X-KEY metadata instead of treating segments as plain concatenated TS.
     add("--enable-demuxer=hls")
@@ -151,9 +204,16 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-parser=av1")
     add("--enable-parser=vp9")
     add("--enable-parser=aac")
+    add("--enable-parser=aac_latm")
+    add("--enable-parser=ac3")
+    add("--enable-parser=dca")
+    add("--enable-parser=mlp")
     add("--enable-parser=opus")
     add("--enable-parser=mpegaudio")
+    add("--enable-parser=mpegvideo")
+    add("--enable-parser=vc1")
     add("--enable-parser=flac")
+    add("--enable-parser=vorbis")
     add("--enable-bsf=h264_mp4toannexb")
     add("--enable-bsf=hevc_mp4toannexb")
     add("--enable-bsf=aac_adtstoasc")
@@ -201,6 +261,13 @@ private val windowsD3d11vaFlags: List<String> = listOf(
     "--enable-hwaccel=vp9_d3d11va2",
     "--enable-hwaccel=av1_d3d11va",
     "--enable-hwaccel=av1_d3d11va2",
+    "--enable-hwaccel=mpeg2_d3d11va",
+    "--enable-hwaccel=mpeg2_d3d11va2",
+    "--enable-hwaccel=vc1_d3d11va",
+    "--enable-hwaccel=vc1_d3d11va2",
+    "--enable-hwaccel=wmv3_d3d11va",
+    "--enable-hwaccel=wmv3_d3d11va2",
+    // FFmpeg has no mpeg4 D3D11VA hwaccel; mpeg4 stays software on Windows.
 )
 
 // VideoToolbox hardware decoding: hwcontext_videotoolbox for mpv's hwdec=videotoolbox
@@ -215,6 +282,12 @@ private val macosVideotoolboxFlags: List<String> = listOf(
     "--enable-hwaccel=hevc_videotoolbox",
     "--enable-hwaccel=vp9_videotoolbox",
     "--enable-hwaccel=av1_videotoolbox",
+    // Apple Silicon media engines have no MPEG-2 hardware decoder; VideoToolbox
+    // still accepts the session (software path inside VT) and mpv falls back
+    // cleanly, so enabling this is harmless there and a real win on Intel Macs.
+    "--enable-hwaccel=mpeg2_videotoolbox",
+    "--enable-hwaccel=mpeg4_videotoolbox",
+    // FFmpeg has no vc1 VideoToolbox hwaccel; VC-1 stays software on macOS.
 )
 
 private val linuxRuntimeSearchPathFlags: List<String> = listOf(
@@ -338,6 +411,10 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
         "--enable-hwaccel=hevc_nvdec",
         "--enable-hwaccel=vp9_nvdec",
         "--enable-hwaccel=av1_nvdec",
+        "--enable-hwaccel=mpeg2_nvdec",
+        "--enable-hwaccel=mpeg4_nvdec",
+        "--enable-hwaccel=vc1_nvdec",
+        "--enable-hwaccel=wmv3_nvdec",
         // Intel and AMD share FFmpeg's VAAPI hwdevice. mediamp deliberately uses
         // mpv's vaapi-copy path with the GLX renderer; direct DMA-BUF/EGL import is
         // a separate capability and is not claimed by this build.
@@ -346,6 +423,10 @@ internal fun FfmpegBuildContext.linuxX64Target(): FfmpegBuildTarget = FfmpegBuil
         "--enable-hwaccel=hevc_vaapi",
         "--enable-hwaccel=vp9_vaapi",
         "--enable-hwaccel=av1_vaapi",
+        "--enable-hwaccel=mpeg2_vaapi",
+        "--enable-hwaccel=mpeg4_vaapi",
+        "--enable-hwaccel=vc1_vaapi",
+        "--enable-hwaccel=wmv3_vaapi",
     ) + opensslHttpTlsFlags + linuxRuntimeSearchPathFlags + dav1dFlags,
     libExtension = "so",
     toolchainProbes = listOf(
