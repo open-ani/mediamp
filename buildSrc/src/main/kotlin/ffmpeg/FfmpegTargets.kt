@@ -145,9 +145,19 @@ internal val commonConfigureFlags: List<String> = buildList {
     add("--enable-decoder=wmav2")
     add("--enable-decoder=wmapro")
     // RealAudio codecs found in rmvb: cook is the common one, sipr appears in
-    // some speech-heavy rips.
+    // some speech-heavy rips, atrac3 in pre-rmvb .rm files.
     add("--enable-decoder=cook")
     add("--enable-decoder=sipr")
+    add("--enable-decoder=atrac3")
+    // DVD / DVB broadcast audio; shares the mpegaudio core with mp3.
+    add("--enable-decoder=mp2")
+    // Early-2000s AVI audio tracks and old QuickTime PCM.
+    add("--enable-decoder=adpcm_ms")
+    add("--enable-decoder=adpcm_ima_wav")
+    add("--enable-decoder=pcm_u8")
+    add("--enable-decoder=pcm_s16be")
+    // Apple Lossless in m4a/mov.
+    add("--enable-decoder=alac")
     // Subtitle decoders. The Matroska/mov demuxers still enumerate subtitle streams
     // without these, so track pickers list tracks that then fail to open — mpv logs
     // "Could not find subtitle decoder for format 'subrip'" and silently deselects
