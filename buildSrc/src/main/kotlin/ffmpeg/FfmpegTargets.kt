@@ -248,6 +248,8 @@ private val httpTlsProtocolFlags: List<String> = listOf(
     "--enable-protocol=tls",
     "--enable-protocol=http",
     "--enable-protocol=https",
+    // tls opens via httpproxy instead of tcp when an HTTP proxy (option/env) is set.
+    "--enable-protocol=httpproxy",
 )
 
 private val opensslHttpTlsFlags: List<String> = listOf(
