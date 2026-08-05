@@ -8,6 +8,8 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.DirectContext
@@ -20,13 +22,26 @@ import org.openani.mediamp.mpv.internal.MpvSurfaceRing
 import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
+import javax.swing.SwingUtilities
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(InternalMediampApi::class)
 actual class MpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
-) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
+    /**
+     * The dispatcher the state machine is confined to (spec §4). Defaults to
+     * [Dispatchers.Main], which on desktop JVM is the Swing EDT.
+     */
+    mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    /**
+     * Fail-fast check for the playback-command thread assertion. Defaults to
+     * [SwingUtilities.isEventDispatchThread] when [mainDispatcher] is the Swing main
+     * dispatcher; for custom dispatchers (headless tests) the assertion is disabled unless
+     * a check is provided.
+     */
+    isOnMainThread: () -> Boolean = defaultIsOnMainThread(mainDispatcher),
+) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher, isOnMainThread) {
 
     // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
     private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()
@@ -147,3 +162,14 @@ actual class MpvMediampPlayer(
 }
 
 actual fun limitDemuxer(): Boolean = false
+
+private fun defaultIsOnMainThread(mainDispatcher: CoroutineDispatcher): () -> Boolean =
+    if (mainDispatcher === Dispatchers.Main || mainDispatcher === Dispatchers.Main.immediate) {
+        // Dispatchers.Main on desktop JVM is the Swing EDT (kotlinx-coroutines-swing).
+        { SwingUtilities.isEventDispatchThread() }
+    } else {
+        // A custom dispatcher's thread cannot be known up front here; the fail-fast
+        // assertion is disabled, matching AbstractMediampPlayer's default. Headless tests
+        // that want the check pass their own.
+        { true }
+    }

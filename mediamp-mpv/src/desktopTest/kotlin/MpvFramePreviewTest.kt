@@ -96,7 +96,7 @@ class MpvFramePreviewTest {
         if (!prepareOrSkip()) return
         val video = generateColorVideo()!!
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
                 val preview = assertNotNull(player.features[FramePreview.Key])
@@ -138,7 +138,7 @@ class MpvFramePreviewTest {
             return
         }
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
                 val preview = assertNotNull(player.features[FramePreview.Key])
@@ -163,7 +163,7 @@ class MpvFramePreviewTest {
         if (!prepareOrSkip()) return
         val video = generateColorVideo()!!
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
                 val preview = assertNotNull(player.features[FramePreview.Key])
@@ -192,7 +192,7 @@ class MpvFramePreviewTest {
             return
         }
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 player.setMediaData(UriMediaData(audio.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
                 val preview = assertNotNull(player.features[FramePreview.Key])
@@ -216,7 +216,7 @@ class MpvFramePreviewTest {
 
     private fun runScenario(mediaData: MediaData) {
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 player.setMediaData(mediaData)
                 val preview = assertNotNull(player.features[FramePreview.Key], "FramePreview feature missing")
@@ -344,7 +344,7 @@ class MpvFramePreviewTest {
         if (!prepareOrSkip()) return
         val video = generateColorVideo()!!
         runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+            val player = createHeadlessPlayer(coroutineContext)
             try {
                 // Slow reads stretch each seek to >100ms so a cancelled request's seek is
                 // reliably still in flight when the next request starts; with instant local
@@ -417,4 +417,14 @@ class MpvFramePreviewTest {
             "ffmpeg",
             "ffmpeg.exe",
         ).firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
+}
+
+/**
+ * Creates a player whose state machine is confined to a dedicated serial dispatcher instead
+ * of the Swing EDT (these tests never call playback commands, only setMediaData/close, which
+ * are callable from any thread).
+ */
+private fun createHeadlessPlayer(parentCoroutineContext: CoroutineContext): MpvMediampPlayer {
+    val main = Dispatchers.Default.limitedParallelism(1)
+    return MpvMediampPlayer(Any(), parentCoroutineContext, mainDispatcher = main, isOnMainThread = { true })
 }

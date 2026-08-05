@@ -12,7 +12,9 @@ import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.PlaybackException
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
 import java.net.InetSocketAddress
@@ -41,7 +43,8 @@ class MpvZeroConfigTest {
             println("[ZeroConfigTest] skipped: run via :mediamp-mpv:zeroConfigTest")
             return
         }
-        val player = MpvMediampPlayer(Any(), Dispatchers.Default)
+        val main = Dispatchers.Default.limitedParallelism(1)
+        val player = MpvMediampPlayer(Any(), main, mainDispatcher = main, isOnMainThread = { true })
         try {
             assertTrue((player.impl as MPVHandle).ptr != 0L, "MPVHandle must be created from classpath natives")
         } finally {
@@ -51,10 +54,10 @@ class MpvZeroConfigTest {
 
     @OptIn(InternalMediampApi::class)
     @Test
-    fun `http uri opens through bundled runtime with request headers`() = runBlocking {
+    fun `http uri opens through bundled runtime with request headers`() {
         if (System.getProperty("mediamp.mpv.zeroconfig") != "true") {
             println("[ZeroConfigTest] skipped: run via :mediamp-mpv:zeroConfigTest")
-            return@runBlocking
+            return
         }
 
         val requestSeen = CountDownLatch(1)
@@ -68,39 +71,49 @@ class MpvZeroConfigTest {
         }
         server.start()
 
+        val main = Dispatchers.Default.limitedParallelism(1)
         try {
-            val player = MpvMediampPlayer(Any(), Dispatchers.Default)
-            try {
-                player.setMediaData(
-                    UriMediaData(
-                        uri = "http://127.0.0.1:${server.address.port}/video.mp4",
-                        headers = mapOf("X-Mediamp-Test" to "present"),
-                        extraFiles = MediaExtraFiles.EMPTY,
-                    ),
-                )
-                if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {
-                    // Linux public playback intentionally waits for a live Skiko GLX
-                    // environment before loadfile. This zero-config case only probes the
-                    // bundled runtime's HTTP/header support against an intentional 404;
-                    // the real public playback path is covered by the GLX validation lane.
-                    assertTrue(
-                        player.handle.command(
-                            "loadfile",
-                            "http://127.0.0.1:${server.address.port}/video.mp4",
-                            "replace",
-                        ),
-                    )
-                } else {
-                    player.resume()
-                }
+            runBlocking(main) {
+                val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = main, isOnMainThread = { true })
+                try {
+                    val uri = "http://127.0.0.1:${server.address.port}/video.mp4"
+                    if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {
+                        // Linux public playback intentionally holds setMediaData in Opening
+                        // until a live Skiko GLX environment exists (degraded
+                        // surface-independent-open, spec §6). This zero-config case only
+                        // probes the bundled runtime's HTTP/header support against an
+                        // intentional 404; the real public playback path is covered by the
+                        // GLX validation lane.
+                        assertTrue(player.handle.option("http-header-fields", "X-Mediamp-Test: present"))
+                        assertTrue(player.handle.command("loadfile", uri, "replace"))
+                    } else {
+                        // v2 open contract: the 404 must fail fast INSIDE setMediaData.
+                        val result = withTimeout(30_000) {
+                            runCatching {
+                                player.setMediaData(
+                                    UriMediaData(
+                                        uri = uri,
+                                        headers = mapOf("X-Mediamp-Test" to "present"),
+                                        extraFiles = MediaExtraFiles.EMPTY,
+                                    ),
+                                )
+                            }
+                        }
+                        assertTrue(
+                            result.exceptionOrNull() is PlaybackException,
+                            "opening a 404 must throw PlaybackException from setMediaData, " +
+                                    "got ${result.exceptionOrNull()}",
+                        )
+                    }
 
-                val didOpenHttpStream = withContext(Dispatchers.IO) {
-                    requestSeen.await(10, TimeUnit.SECONDS)
+                    val didOpenHttpStream = withContext(Dispatchers.IO) {
+                        requestSeen.await(10, TimeUnit.SECONDS)
+                    }
+                    assertTrue(didOpenHttpStream, "Bundled mpv runtime must open HTTP streams")
+                    assertEquals("present", receivedHeader.get())
+                } finally {
+                    player.close()
                 }
-                assertTrue(didOpenHttpStream, "Bundled mpv runtime must open HTTP streams")
-                assertEquals("present", receivedHeader.get())
-            } finally {
-                player.close()
             }
         } finally {
             server.stop(0)

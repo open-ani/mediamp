@@ -18,7 +18,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     // Baseline for benchmarking: the current production VLC stack.
-    implementation(projects.mediampVlc)
+    // mediamp-vlc is deprecated, not migrated to state-spec-v2 (VlcMain.kt no longer compiles).
+    // implementation(projects.mediampVlc)
     implementation(projects.mediampApi)
     // Production mpv path (runD3D11 smoke demo).
     implementation(projects.mediampMpv)

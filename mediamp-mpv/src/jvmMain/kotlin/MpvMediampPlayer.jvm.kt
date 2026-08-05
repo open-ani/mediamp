@@ -8,13 +8,22 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import org.openani.mediamp.AbstractMediampPlayer
+import org.openani.mediamp.ExperimentalMediampApi
+import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.mpv.internal.MpvPlaybackStateMachine
+import org.openani.mediamp.OpenResult
+import org.openani.mediamp.PlaybackErrorCode
+import org.openani.mediamp.PlaybackException
+import org.openani.mediamp.PlaybackSessionHandle
+import org.openani.mediamp.TransportSnapshot
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.FramePreview
@@ -28,9 +37,14 @@ import org.openani.mediamp.internal.Arch
 import org.openani.mediamp.internal.Platform
 import org.openani.mediamp.internal.currentPlatform
 import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
+import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
+import org.openani.mediamp.mpv.internal.MpvSessionAdapter
+import org.openani.mediamp.mpv.internal.mpvErrorToPlaybackException
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
+import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
 
 private const val SEEKABLE_INPUT_LOAD_TARGET_PREFIX = "mediamp://seekble_input_media/"
@@ -40,59 +54,72 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
 }
 
 /**
- * How stale position reports are filtered during a seek: mpv keeps reporting the
- * pre-seek time until the demuxer/decoder lands on the target, which would make the
- * progress bar jump backwards. While "seeking" is true we keep [currentPositionMillis]
- * at the user's intent and drop mpv's reports.
+ * The shared JVM (desktop + Android) mpv backend.
+ *
+ * All state transitions are owned by [AbstractMediampPlayer] (the single-writer machine of
+ * `docs/playback-state-v2.md`); this class only implements the backend SPI and reports native
+ * facts through the per-session [PlaybackSessionHandle]:
+ *
+ * - The Ready point of an open is `MPV_EVENT_FILE_LOADED`; `loadfile` is issued during
+ *   [openImpl] with the requested `pause` level and start position applied natively first,
+ *   so a bad source fails inside `setMediaData` (spec §3 — v1's defer-loadfile-to-resume is
+ *   abolished).
+ * - Transport levels (`pause`, `paused-for-cache`) are reported level-triggered, plus a
+ *   read-after-command report after every [playImpl]/[pauseImpl] (spec §5).
+ * - `eof-reached` rising edge is the Ended fact; the keep-open auto-pause it entails is part
+ *   of that fact and never reported as a transport change.
+ * - `MPV_EVENT_PLAYBACK_RESTART` completes machine-issued seeks with latest-generation
+ *   attribution; a synchronously rejected `seek` command synthesizes its completion so the
+ *   seek gate can never wedge.
+ *
+ * Capability notes (spec §6): mpv cannot measure data starvation while user-paused
+ * (`paused-for-cache` does not engage at pause) — the `paused-stall` capability is degraded;
+ * `isStalled` is authoritative only while the native transport is playing. On Linux the
+ * `surface-independent-open` capability is degraded: [openImpl] suspends until the GLX render
+ * context exists (see [ensureRenderContextForLoad]).
  */
-@kotlin.OptIn(InternalMediampApi::class)
+@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
-) : AbstractMediampPlayer<JvmMpvMediampPlayer.MPVPlayerData>(parentCoroutineContext) {
-    open class MPVPlayerData(
-        mediaData: MediaData,
-        val loadTarget: String,
-    ) : Data(mediaData)
-
-    private class SeekableInputPlayerData(
-        mediaData: SeekableInputMediaData,
-        loadTarget: String,
-        private val handle: MPVHandle,
-    ) : MPVPlayerData(mediaData, loadTarget) {
-        override fun release() {
-            handle.unregisterSeekableInput(loadTarget)
-            super.release()
-        }
-    }
-
+    mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    isOnMainThread: () -> Boolean = { true },
+) : AbstractMediampPlayer(
+    parentCoroutineContext = parentCoroutineContext,
+    mainDispatcher = mainDispatcher,
+    isOnMainThread = isOnMainThread,
+) {
     internal val handle by lazy { MPVHandle(context) }
-    private val stateMachine = MpvPlaybackStateMachine()
-
-    // Platforms whose render context depends on an externally attached environment may
-    // resume before that environment exists. Preserve that load until the context
-    // becomes ready; eagerly-created contexts never use this state.
-    private val pendingLoadLock = Any()
-    private var pendingPlaybackLoad: MPVPlayerData? = null
 
     override val impl: Any get() = handle
 
-    private val _currentPositionMillis: MutableStateFlow<Long> = MutableStateFlow(0L)
-    override val currentPositionMillis: StateFlow<Long> = _currentPositionMillis
+    /**
+     * The active media session as seen by the persistent event listener; `null` while no
+     * session is bound. Written on the machine thread, read from the mpv event thread.
+     */
+    @Volatile
+    private var sessionAdapter: MpvSessionAdapter? = null
 
-    private val _mediaProperties: MutableStateFlow<MediaProperties?> = MutableStateFlow(null)
-    override val mediaProperties: StateFlow<MediaProperties?> = _mediaProperties
+    /**
+     * Set once [closeImpl] starts native teardown: the event listener stops dispatching and
+     * late per-session resource closers must not touch the handle (the native destructor
+     * closes all stream_cb registrations itself).
+     */
+    @Volatile
+    private var nativeTeardownStarted = false
 
-    private val playbackSpeed = MpvPlaybackSpeed(handle)
+    /** Bumped by [renderContextBecameReady]; [awaitRenderContextForLoad] waits on it. */
+    private val renderContextReadySignal = MutableStateFlow(0L)
+
     private val audioLevelController = MpvAudioLevelController(handle)
-    private val buffering = MpvBuffering(playbackState)
+    private val buffering = MpvBuffering(state)
     private val screenshots = MpvScreenshots { path -> takeScreenshotImpl(path) }
     private val videoAspectRatio = MpvVideoAspectRatio(handle)
     private val mediaMetadata = MpvMediaMetadata(handle)
     private val framePreview: FramePreview? = createMpvFramePreview(this, context, parentCoroutineContext)
 
     override val features: PlayerFeatures = buildPlayerFeatures {
-        add(PlaybackSpeed.Key, playbackSpeed)
+        add(PlaybackSpeed.Key, machinePlaybackSpeed())
         add(AudioLevelController.Key, audioLevelController)
         add(Buffering.Key, buffering)
         add(Screenshots.Key, screenshots)
@@ -103,6 +130,7 @@ abstract class JvmMpvMediampPlayer(
 
     private val eventListener = object : EventListener {
         override fun onPropertyChange(name: String) {
+            if (nativeTeardownStarted) return
             when (name) {
                 "track-list" -> mediaMetadata.refreshTracks()
                 "chapter-list" -> mediaMetadata.refreshChapters()
@@ -110,81 +138,130 @@ abstract class JvmMpvMediampPlayer(
         }
 
         override fun onPropertyChange(name: String, value: Boolean) {
+            if (nativeTeardownStarted) return
             when (name) {
                 "pause" -> {
-                    stateMachine.onPauseProperty(value, playbackState.value)?.let { playbackState.value = it }
+                    val adapter = sessionAdapter ?: return
+                    // The keep-open auto-pause at EOF is part of the Ended fact and must not
+                    // be reported as a transport change (spec §5). eof-reached is read live
+                    // because mpv may deliver this notification before the eof-reached one.
+                    if (value && (adapter.eofReached || handle.getPropertyBoolean("eof-reached"))) return
+                    adapter.session.reportTransport(liveTransportSnapshot())
                 }
 
                 "paused-for-cache" -> {
-                    stateMachine.onPausedForCacheProperty(value, playbackState.value)?.let { playbackState.value = it }
+                    sessionAdapter?.session?.reportTransport(liveTransportSnapshot())
                 }
-
-                "seeking" -> stateMachine.onSeekingProperty(value)
 
                 "mute" -> audioLevelController.onMuteChanged(value)
 
                 "eof-reached" -> {
-                    stateMachine.onEofReachedProperty(value, playbackState.value)?.let { playbackState.value = it }
-                }
-
-                "idle-active" -> {
-                    stateMachine.onIdleActiveProperty(value, playbackState.value)?.let { playbackState.value = it }
+                    val adapter = sessionAdapter ?: return
+                    if (adapter.onEofReachedChanged(value)) {
+                        adapter.session.notifyEnded()
+                    }
                 }
             }
         }
 
         override fun onPropertyChange(name: String, value: Long) {
+            if (nativeTeardownStarted) return
             when (name) {
                 "cache-buffering-state" -> buffering.bufferedPercentage.value = value.toInt().coerceIn(0, 100)
             }
         }
 
         override fun onPropertyChange(name: String, value: Double) {
+            if (nativeTeardownStarted) return
             when (name) {
                 "time-pos" -> {
-                    if (!stateMachine.shouldIgnoreTimePos()) {
-                        _currentPositionMillis.value = (value * 1000).toLong()
-                    }
+                    // Stale pre-seek reports are dropped by the machine's seek gating.
+                    sessionAdapter?.session?.notifyPosition((value * 1000).toLong().coerceAtLeast(0L))
                 }
 
                 "duration" -> {
-                    val durationMillis = (value * 1000).toLong()
-                    _mediaProperties.value = _mediaProperties.value?.copy(durationMillis = durationMillis)
-                        ?: MediaProperties(null, durationMillis)
+                    val adapter = sessionAdapter ?: return
+                    adapter.lastDurationMillis = (value * 1000).toLong().takeIf { it > 0 } // unknown -> null
+                    adapter.session.notifyProperties(MediaProperties(adapter.lastTitle, adapter.lastDurationMillis))
                 }
 
-                "speed" -> playbackSpeed.onSpeedChanged(value)
                 "volume" -> audioLevelController.onVolumeChanged(value)
             }
         }
 
         override fun onPropertyChange(name: String, value: String) {
+            if (nativeTeardownStarted) return
             when (name) {
-                "media-title" -> _mediaProperties.value = _mediaProperties.value?.copy(title = value)
-                    ?: MediaProperties(value, -1)
+                "media-title" -> {
+                    val adapter = sessionAdapter ?: return
+                    adapter.lastTitle = value
+                    adapter.session.notifyProperties(MediaProperties(adapter.lastTitle, adapter.lastDurationMillis))
+                }
             }
         }
 
         override fun onEvent(event: Int) {
+            if (nativeTeardownStarted) return
+            val adapter = sessionAdapter ?: return
+            when (event) {
+                MPVEvent.FILE_LOADED -> adapter.pendingOpen?.complete(Unit)
+
+                MPVEvent.PLAYBACK_RESTART -> {
+                    // Seek completion — but only for machine-issued seeks: mpv also fires
+                    // playback-restart at initial file load. mpv coalesces rapid seeks into
+                    // one restart; stamping the CURRENT seek generation at processing time
+                    // closes every superseded generation at once (spec §5).
+                    if (adapter.takeSeekCompletion()) {
+                        adapter.session.notifySeekCompleted(
+                            adapter.session.currentSeekGeneration,
+                            currentNativePositionMillis(),
+                            liveTransportSnapshot(),
+                        )
+                    }
+                }
+            }
         }
 
         override fun onEndFile(reason: Int, mpvError: Int) {
-            stateMachine.onEndFile(reason, playbackState.value)?.let { playbackState.value = it }
-        }
-    }
+            if (nativeTeardownStarted) return
+            val adapter = sessionAdapter ?: return
+            when (reason) {
+                MPV_END_FILE_REASON_ERROR -> {
+                    val error = mpvErrorToPlaybackException(mpvError)
+                    // Before FILE_LOADED this fails the open (setMediaData throws, spec §3);
+                    // after it, it is an asynchronous mid-session failure.
+                    if (adapter.pendingOpen?.completeExceptionally(error) != true) {
+                        adapter.session.notifyError(error)
+                    }
+                }
 
-    override fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
+                MPV_END_FILE_REASON_EOF -> {
+                    // keep-open=always normally reports natural EOF via 'eof-reached'; this
+                    // covers configurations where the file still unloads at EOF.
+                    if (adapter.pendingOpen?.completeExceptionally(
+                            PlaybackException(
+                                PlaybackErrorCode.INTERNAL,
+                                "mpv unloaded the file (EOF) before it finished opening",
+                            ),
+                        ) != true
+                    ) {
+                        adapter.session.notifyEnded()
+                    }
+                }
 
-    override fun getCurrentPlaybackState(): PlaybackState = playbackState.value
-
-    override fun getCurrentPositionMillis(): Long = currentPositionMillis.value
-
-    private fun clearPlaybackSession(resetPosition: Boolean) {
-        stateMachine.reset()
-        _mediaProperties.value = null
-        mediaMetadata.clear()
-        if (resetPosition) {
-            _currentPositionMillis.value = 0L
+                else -> {
+                    // STOP/QUIT/REDIRECT: mid-session these are machine-initiated (stop/close)
+                    // and already handled; during an open the file can no longer reach
+                    // FILE_LOADED, so fail the open. (When the machine itself cancelled the
+                    // open, the awaiting coroutine is already cancelled and this is a no-op.)
+                    adapter.pendingOpen?.completeExceptionally(
+                        PlaybackException(
+                            PlaybackErrorCode.INTERNAL,
+                            "mpv unloaded the file before it finished opening (reason=$reason)",
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -313,14 +390,11 @@ abstract class JvmMpvMediampPlayer(
         handle.option("idle", "yes")
         handle.option("keep-open", "always")
 
-        handle.observeProperty("idle-active", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("eof-reached", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("time-pos", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("duration", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("pause", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("paused-for-cache", MPVFormat.MPV_FORMAT_FLAG)
-        handle.observeProperty("seeking", MPVFormat.MPV_FORMAT_FLAG)
-        handle.observeProperty("speed", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("volume", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
@@ -341,161 +415,227 @@ abstract class JvmMpvMediampPlayer(
     }
 
     /**
-     * Platform subclasses whose render context is unavailable until an external render
-     * environment is attached override this. `vo=libmpv` requires the context before
-     * `loadfile`; false defers the load while staying READY.
+     * Whether the producer render context may exist for `loadfile` right now. Platform
+     * subclasses whose render context is unavailable until an external render environment is
+     * attached (Linux/GLX) return `false`; [openImpl] then suspends (holding the machine in
+     * Opening — spec §6, degraded `surface-independent-open`) until [renderContextBecameReady].
      */
     protected open fun ensureRenderContextForLoad(): Boolean = true
 
     /**
-     * Environment-bound render backends reject render-environment replacement while
-     * this playback session is active.
+     * Environment-bound render backends reject render-environment replacement while a
+     * playback session is active.
      */
-    protected fun hasActivePlaybackSession(): Boolean = stateMachine.playbackSessionActive
+    protected fun hasActivePlaybackSession(): Boolean = sessionAdapter != null
 
-    /**
-     * Completes a load deferred until the render context became ready; shares a lock
-     * with [resumeImpl].
-     */
+    /** Wakes an [openImpl] suspended waiting for the render context. */
     protected fun renderContextBecameReady() {
-        synchronized(pendingLoadLock) {
-            val pending = pendingPlaybackLoad ?: return
-            pendingPlaybackLoad = null
-            if (openResource.value !== pending) return
-            loadForPlayback(pending)
+        renderContextReadySignal.update { it + 1 }
+    }
+
+    private suspend fun awaitRenderContextForLoad() {
+        while (true) {
+            // Capture the signal before probing so a callback firing between the probe and
+            // the wait cannot be missed.
+            val seen = renderContextReadySignal.value
+            if (ensureRenderContextForLoad()) return
+            renderContextReadySignal.first { it != seen }
         }
     }
 
-    // Clear deferred loads on replace/stop/close so a later render-context attach
-    // cannot resurrect a cancelled request.
-    private fun cancelPendingPlaybackLoad() {
-        synchronized(pendingLoadLock) { pendingPlaybackLoad = null }
-    }
+    // region SPI
 
-    // Shared by the eager path and the deferred path so state transitions stay equal.
-    private fun loadForPlayback(media: MPVPlayerData): Boolean {
-        handle.setPropertyBoolean("pause", false)
-        if (!handle.command("loadfile", media.loadTarget, "replace")) return false
-        stateMachine.onPlaybackStarted()
-        playbackState.value = PlaybackState.PLAYING
-        return true
-    }
+    override suspend fun openImpl(
+        data: MediaData,
+        session: PlaybackSessionHandle,
+        playWhenReady: Boolean,
+        startPositionMillis: Long,
+    ): OpenResult {
+        // Linux/GLX (spec §6): with vo=libmpv, `loadfile` before the render context exists
+        // permanently disables the video track, and the producer context can only join
+        // Skiko's live GLX share group. Suspend here (machine stays in Opening) until the
+        // surface attach provides it. Eager platforms (macOS Metal, Windows D3D11) and
+        // headless modes proceed immediately.
+        awaitRenderContextForLoad()
 
-    override suspend fun setMediaDataImpl(data: MediaData): MPVPlayerData = when (data) {
-        is UriMediaData -> {
-            // Do not let a later render-context attach load the resource being replaced.
-            cancelPendingPlaybackLoad()
-            clearPlaybackSession(resetPosition = true)
-            handle.command("stop")
-            handle.command("playlist-clear")
+        buffering.bufferedPercentage.value = 0
 
-            val headers = data.headers.toMutableMap()
-            headers.remove("User-Agent")?.let { handle.option("user-agent", it) }
-            headers.remove("Referer")?.let { handle.option("referrer", it) }
-            val headerFields = headers.entries.joinToString(",") { (key, value) -> "$key: $value" }
-            handle.option("http-header-fields", headerFields)
-
-            MPVPlayerData(data, data.uri)
-        }
-
-        is SeekableInputMediaData -> {
-            // Do not let a later render-context attach load the resource being replaced.
-            cancelPendingPlaybackLoad()
-            clearPlaybackSession(resetPosition = true)
-            handle.command("stop")
-            handle.command("playlist-clear")
-
-            val loadTarget = buildSeekableInputLoadTarget(data)
-            val input = data.createInput(currentCoroutineContext())
-            val registeredTarget = try {
-                handle.registerSeekableInput(input, loadTarget)
-            } catch (t: Throwable) {
-                input.close()
-                throw t
+        var sessionResources: AutoCloseable? = null
+        val loadTarget: String = when (data) {
+            is UriMediaData -> {
+                val headers = data.headers.toMutableMap()
+                headers.remove("User-Agent")?.let { handle.option("user-agent", it) }
+                headers.remove("Referer")?.let { handle.option("referrer", it) }
+                val headerFields = headers.entries.joinToString(",") { (key, value) -> "$key: $value" }
+                handle.option("http-header-fields", headerFields)
+                data.uri
             }
 
-            SeekableInputPlayerData(data, registeredTarget, handle)
-        }
-    }
-
-    override fun resumeImpl() {
-        when (playbackState.value) {
-            PlaybackState.READY -> {
-                val media = openResource.value ?: return
-                // Atomic with renderContextBecameReady(): the render context may become
-                // ready between the check and recording the pending load, which would
-                // lose the wake-up.
-                synchronized(pendingLoadLock) {
-                    if (!ensureRenderContextForLoad()) {
-                        pendingPlaybackLoad = media
-                        return
+            is SeekableInputMediaData -> {
+                val target = buildSeekableInputLoadTarget(data)
+                val input = data.createInput(currentCoroutineContext())
+                val registered = try {
+                    handle.registerSeekableInput(input, target)
+                } catch (t: Throwable) {
+                    input.close()
+                    throw t
+                }
+                // The native registry owns (and closes) the SeekableInput. Once close()
+                // started native teardown the registry is torn down wholesale and the
+                // handle must not be touched anymore.
+                sessionResources = AutoCloseable {
+                    if (!nativeTeardownStarted) {
+                        runCatching { handle.unregisterSeekableInput(registered) }
                     }
-                    pendingPlaybackLoad = null
-                    loadForPlayback(media)
                 }
+                registered
             }
-
-            PlaybackState.PAUSED, PlaybackState.PAUSED_BUFFERING -> {
-                if (handle.setPropertyBoolean("pause", false)) {
-                    stateMachine.onResumed()
-                    playbackState.value = PlaybackState.PLAYING
-                }
-            }
-
-            else -> {}
         }
+
+        val adapter = MpvSessionAdapter(session)
+        val opened = CompletableDeferred<Unit>()
+        adapter.pendingOpen = opened
+        try {
+            // Apply the requested intent natively BEFORE loadfile (spec §5 open handoff):
+            // the file starts in the requested transport state instead of being toggled
+            // afterwards.
+            handle.setPropertyBoolean("pause", !playWhenReady)
+            sessionAdapter = adapter
+
+            // The start position is applied as part of the open itself (spec §3) — it is
+            // not a seek and involves no seek generation. mpv clamps it into the file.
+            val loaded = if (startPositionMillis > 0) {
+                handle.command(
+                    "loadfile", loadTarget, "replace", "-1",
+                    "start=${formatSeconds(startPositionMillis / 1000.0)}",
+                )
+            } else {
+                handle.command("loadfile", loadTarget, "replace")
+            }
+            if (!loaded) {
+                throw PlaybackException(
+                    PlaybackErrorCode.INTERNAL,
+                    "mpv rejected the 'loadfile' command for $loadTarget",
+                )
+            }
+
+            // Ready point (spec §3): MPV_EVENT_FILE_LOADED — the source is accepted and
+            // metadata is available. An END_FILE arriving first fails the open with a
+            // mapped PlaybackException.
+            opened.await()
+
+            val durationMillis = (handle.getPropertyDouble("duration") * 1000).toLong().takeIf { it > 0 }
+            val title = handle.getPropertyString("media-title")
+            adapter.lastDurationMillis = durationMillis
+            adapter.lastTitle = title
+            val atEnd = handle.getPropertyBoolean("eof-reached")
+            if (atEnd) {
+                // Already at EOF (start position at/beyond the end): this IS the Ended fact;
+                // suppress the redundant rising-edge notification.
+                adapter.eofReached = true
+            }
+            return OpenResult(
+                sessionResources = sessionResources,
+                initialSnapshot = liveTransportSnapshot(),
+                atEnd = atEnd,
+                initialProperties = MediaProperties(title = title, durationMillis = durationMillis),
+            )
+        } catch (e: Throwable) {
+            // Open failure or suspend-cancellation: unload whatever loadfile started and
+            // release the adapter-owned per-session resources (the machine only owns them
+            // once OpenResult is returned). The machine releases the MediaData itself.
+            if (sessionAdapter === adapter) {
+                sessionAdapter = null
+            }
+            runCatching { handle.command("stop") }
+            runCatching { sessionResources?.close() }
+            throw e
+        }
+    }
+
+    override fun playImpl() {
+        handle.setPropertyBoolean("pause", false)
+        reportTransportAfterCommand()
     }
 
     override fun pauseImpl() {
-        if (handle.setPropertyBoolean("pause", true)) {
-            stateMachine.onPauseRequested()
-            playbackState.value = PlaybackState.PAUSED
+        handle.setPropertyBoolean("pause", true)
+        reportTransportAfterCommand()
+    }
+
+    override fun seekImpl(positionMillis: Long, seekGeneration: Int) {
+        val adapter = sessionAdapter ?: return
+        adapter.seekPending = true
+        val targetSeconds = positionMillis.coerceAtLeast(0L) / 1000.0
+        if (!handle.command("seek", formatSeconds(targetSeconds), "absolute+exact")) {
+            // Synchronous refusal (unseekable/live media): the seek gate must never wedge
+            // (spec §5) — synthesize the completion at the actual native position.
+            adapter.seekPending = false
+            adapter.session.notifySeekCompleted(
+                seekGeneration,
+                currentNativePositionMillis(),
+                liveTransportSnapshot(),
+            )
         }
     }
 
-    override fun seekTo(positionMillis: Long) {
-        if (playbackState.value < PlaybackState.READY || openResource.value == null) return
-
-        val targetPositionMillis = positionMillis.coerceAtLeast(0L)
-        val targetSeconds = targetPositionMillis / 1000.0
-        stateMachine.onSeekStarted()
-        if (handle.command("seek", formatSeconds(targetSeconds), "absolute+exact")) {
-            // Optimistic: keep the intent so rapid skip() calls accumulate correctly and
-            // the progress bar never jumps back to a stale pre-seek position.
-            _currentPositionMillis.value = targetPositionMillis
-        } else {
-            stateMachine.onSeekRejected()
-        }
+    override fun setRateImpl(rate: Float) {
+        handle.setPropertyDouble("speed", rate.toDouble())
     }
 
-    override fun skip(deltaMillis: Long) {
-        seekTo(_currentPositionMillis.value + deltaMillis)
-    }
-
-    override fun stopPlaybackImpl() {
-        // A load may still be waiting for the render context.
-        cancelPendingPlaybackLoad()
+    override fun stopImpl() {
+        sessionAdapter = null
         handle.command("stop")
-        clearPlaybackSession(resetPosition = true)
-        playbackState.value = PlaybackState.FINISHED
+        mediaMetadata.clear()
+        buffering.bufferedPercentage.value = 0
     }
 
     override fun closeImpl() {
-        // Prevent a late render-context attach from loading into a closing player.
-        cancelPendingPlaybackLoad()
+        nativeTeardownStarted = true
+        sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
-        clearPlaybackSession(resetPosition = true)
-        handle.command("stop")
-        handle.destroy()
-        handle.close()
-        playbackState.value = PlaybackState.DESTROYED
+        mediaMetadata.clear()
+        // Released is already committed and the session detached; do the heavy native
+        // teardown off the machine thread (spec §4): mpv destruction joins the native event
+        // thread, which used to hang the UI thread (v1 defect M8).
+        thread(name = "mediamp-mpv-teardown") {
+            runCatching { handle.command("stop") }
+            runCatching { handle.destroy() }
+            runCatching { handle.close() }
+        }
+    }
+    // endregion
+
+    /**
+     * Read-after-command (spec §5): report the actual native transport level after every
+     * play/pause command — even when the command was a native no-op or failed —
+     * reconciliation converges on observations, never on expectations.
+     */
+    private fun reportTransportAfterCommand() {
+        sessionAdapter?.session?.reportTransport(liveTransportSnapshot())
     }
 
     /**
-     * Returns the media currently set via [setMediaData], or `null`.
+     * A fresh transport observation read directly from mpv (thread-safe from any thread).
+     *
+     * `paused-for-cache` is mpv's only starvation signal and does not engage while
+     * user-paused: the `paused-stall` capability is degraded (spec §6). It is authoritative
+     * while the transport is playing, so a stall with play intent is never reported as
+     * `isStalled = false`.
+     */
+    private fun liveTransportSnapshot(): TransportSnapshot = TransportSnapshot(
+        nativePlayWhenReady = !handle.getPropertyBoolean("pause"),
+        isStalled = handle.getPropertyBoolean("paused-for-cache"),
+    )
+
+    private fun currentNativePositionMillis(): Long =
+        (handle.getPropertyDouble("time-pos") * 1000).toLong().coerceAtLeast(0L)
+
+    /**
+     * Returns the media currently loaded, or `null`.
      * Used by the frame-preview decoder to mirror the main player's media.
      */
-    internal fun currentMediaDataOrNull(): MediaData? = openResource.value?.mediaData
+    internal fun currentMediaDataOrNull(): MediaData? = mediaData.value
 }
 
 /**

@@ -15,12 +15,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.PlayerState
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
-import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.metadata.AudioTrack
@@ -29,23 +28,6 @@ import org.openani.mediamp.metadata.SubtitleTrack
 import org.openani.mediamp.metadata.Track
 import org.openani.mediamp.metadata.TrackGroup
 import org.openani.mediamp.metadata.TrackLabel
-
-@OptIn(InternalForInheritanceMediampApi::class)
-internal class MpvPlaybackSpeed(private val handle: MPVHandle) : PlaybackSpeed {
-    override val valueFlow: MutableStateFlow<Float> = MutableStateFlow(1f)
-    override val value: Float get() = valueFlow.value
-
-    override fun set(speed: Float) {
-        require(speed > 0f) { "speed must be positive, but was $speed" }
-        handle.setPropertyDouble("speed", speed.toDouble())
-        valueFlow.value = speed
-    }
-
-    /** Called from the mpv event thread on "speed" property change. */
-    fun onSpeedChanged(speed: Double) {
-        valueFlow.value = speed.toFloat()
-    }
-}
 
 @OptIn(InternalForInheritanceMediampApi::class)
 internal class MpvAudioLevelController(private val handle: MPVHandle) : AudioLevelController {
@@ -77,11 +59,19 @@ internal class MpvAudioLevelController(private val handle: MPVHandle) : AudioLev
 }
 
 @OptIn(InternalForInheritanceMediampApi::class, org.openani.mediamp.ExperimentalMediampApi::class)
-internal class MpvBuffering(playbackState: StateFlow<PlaybackState>) : Buffering {
+internal class MpvBuffering(state: StateFlow<PlayerState>) : Buffering {
+    @Deprecated(
+        "Buffering is part of the core state now. Use player.state.map { it.isBuffering }.",
+        ReplaceWith("player.state.map { it.isBuffering }"),
+    )
     override val isBuffering: Flow<Boolean> =
-        playbackState.map { it == PlaybackState.PAUSED_BUFFERING }.distinctUntilChanged()
+        state.map { it.isBuffering }.distinctUntilChanged()
 
-    /** 0-100 while mpv is waiting for the cache, updated from "cache-buffering-state". */
+    /**
+     * mpv's underrun-fill metric ("cache-buffering-state"): counts 0-100 while mpv refills
+     * the cache after an underrun and reads 100 during normal playback. It is NOT a
+     * buffered-ahead ratio of the whole media.
+     */
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
 }
 

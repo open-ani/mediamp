@@ -129,6 +129,11 @@ public abstract class AbstractMediampPlayer(
     private var desiredRate = 1f
 
     private val closed = MutableStateFlow(false)
+
+    // Declared before the init block: the drain loop launched there may run immediately when
+    // mainDispatcher executes inline (e.g. Dispatchers.Unconfined in tests), so this field
+    // must already be initialized at that point.
+    private val factChannel = Channel<Fact>(Channel.UNLIMITED)
     // endregion
 
     init {
@@ -535,8 +540,6 @@ public abstract class AbstractMediampPlayer(
         class Position(override val session: SessionImpl, val positionMillis: Long) : Fact()
     }
 
-    private val factChannel = Channel<Fact>(Channel.UNLIMITED)
-
     /**
      * Coalesces queued transport reports to the newest level at drain time (spec §5): stale
      * event-thread captures must not consume the retry budget or masquerade as external.
@@ -590,7 +593,21 @@ public abstract class AbstractMediampPlayer(
             }
             is Fact.Error -> {
                 when (_state.value.mediaStatus) {
-                    MediaStatus.Ready, MediaStatus.Ended, MediaStatus.Opening -> errorEntry(fact.error)
+                    MediaStatus.Ready, MediaStatus.Ended -> errorEntry(fact.error)
+                    MediaStatus.Opening -> {
+                        // Fail the in-flight open (spec §5 matrix): cancel it so a late
+                        // openImpl success cannot commit Ready on top of Error, and deliver
+                        // the error to the setMediaData caller.
+                        val attempt = activeOpen
+                        if (attempt != null) {
+                            activeOpen = null
+                            attempt.job?.cancel(MediaLoadCancellationException("Open failed: ${fact.error.message}"))
+                            errorEntry(fact.error)
+                            attempt.completion.completeExceptionally(fact.error)
+                        } else {
+                            errorEntry(fact.error)
+                        }
+                    }
                     else -> {}
                 }
             }

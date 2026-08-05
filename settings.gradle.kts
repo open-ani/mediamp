@@ -24,7 +24,7 @@ plugins {
 include(":mediamp-internal-utils")
 include(":mediamp-api")
 
-include(":mediamp-vlc")
+//include(":mediamp-vlc") // deprecated, not migrated to state-spec-v2
 include(":mediamp-vlc-loader")
 include(":mediamp-exoplayer")
 include(":mediamp-mpv")

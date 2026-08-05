@@ -16,6 +16,11 @@ public object MediampPlayerSurfaceProviderLoader {
 
     /**
      * Register a [MediampPlayerSurfaceProvider] implementation.
+     *
+     * The latest registration takes precedence: [ConcurrentRegistryManager] inserts at the
+     * head, so [first] (and [getByInstance] when multiple providers match the same player
+     * class) deterministically returns the most recent registration — matching the JVM
+     * loader where explicit registrations win.
      */
     public fun register(factory: MediampPlayerSurfaceProvider<*>) {
         factories.append(factory)

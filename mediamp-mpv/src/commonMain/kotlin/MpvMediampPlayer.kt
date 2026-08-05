@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -8,32 +8,15 @@
 
 package org.openani.mediamp.mpv
 
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.MediampPlayer
-import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.features.PlayerFeatures
-import org.openani.mediamp.metadata.MediaProperties
-import org.openani.mediamp.source.MediaData
 
+/**
+ * [MediampPlayer] backed by libmpv.
+ *
+ * The playback state model is implemented by the shared state machine
+ * ([org.openani.mediamp.AbstractMediampPlayer], spec: `docs/playback-state-v2.md`); the mpv
+ * backend adapts native mpv events and properties onto it.
+ */
 @OptIn(InternalForInheritanceMediampApi::class)
-expect class MpvMediampPlayer : MediampPlayer {
-    override val impl: Any
-    override val playbackState: MutableStateFlow<PlaybackState>
-    override val mediaData: Flow<MediaData?>
-    override val mediaProperties: StateFlow<MediaProperties?>
-    override fun getCurrentMediaProperties(): MediaProperties?
-    override val currentPositionMillis: StateFlow<Long>
-    override val playbackProgress: Flow<Float>
-    override val features: PlayerFeatures
-    override suspend fun setMediaData(data: MediaData)
-    override fun getCurrentPlaybackState(): PlaybackState
-    override fun getCurrentPositionMillis(): Long
-    override fun resume()
-    override fun pause()
-    override fun stopPlayback()
-    override fun seekTo(positionMillis: Long)
-    override fun close()
-}
+expect class MpvMediampPlayer : MediampPlayer

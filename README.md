@@ -147,22 +147,35 @@ dependencies {
 }
 ```
 
-A mock player `TestMediampPlayer` is provided for unit testing.
-It implements all the features and follow the same specification (e.g. state transitions) as the
-real
-player.
+A scriptable player `TestMediampPlayer` is provided for unit testing.
+It runs the same state machine (and follows the same specification, `docs/playback-state-v2.md`)
+as the real players, backed by a fake native transport that you drive from the test: control how
+opens complete (`openBehavior`), and inject native facts (`injectStall`, `injectEnded`,
+`injectError`, `injectExternalPlayWhenReady`, `injectPosition`, `injectProperties`).
 
 ```kotlin
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
 class MyTest {
-    private val player = TestMediampPlayer()
-
+    @Test
     fun test() = runTest {
-        player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4") // Will not actually make network requests
-        player.currentPositionMillis.value = 1000L // Move playback position to 1s
+        val player = TestMediampPlayer(StandardTestDispatcher(testScheduler))
 
-        assertEquals(PlaybackState.PLAYING, player.getCurrentPlaybackState())
+        // Will not actually make network requests. playUri defaults to playWhenReady = true.
+        player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4")
+        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+        assertTrue(player.state.value.isPlaying)
+
+        player.injectPosition(1000L) // The fake playback clock is driven by the test
+        advanceUntilIdle()           // Let the state machine process the injected fact
+        assertEquals(1000L, player.currentPositionMillis.value)
+
+        player.injectStall(true)     // Simulate a mid-playback buffering stall
+        advanceUntilIdle()
+        assertTrue(player.state.value.isBuffering)
+        assertTrue(player.state.value.playWhenReady) // Buffering does not change the play intent
     }
 }
 ```

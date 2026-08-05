@@ -26,8 +26,9 @@ catalog {
         library("mediamp-exoplayer-compose", group, "mediamp-exoplayer-compose").versionRef("mediamp")
         library("mediamp-mpv", group, "mediamp-mpv").versionRef("mediamp")
         library("mediamp-mpv-compose", group, "mediamp-mpv-compose").versionRef("mediamp")
-        library("mediamp-vlc", group, "mediamp-vlc").versionRef("mediamp")
-        library("mediamp-vlc-compose", group, "mediamp-vlc-compose").versionRef("mediamp")
+        // mediamp-vlc is deprecated, not migrated to state-spec-v2.
+        // library("mediamp-vlc", group, "mediamp-vlc").versionRef("mediamp")
+        // library("mediamp-vlc-compose", group, "mediamp-vlc-compose").versionRef("mediamp")
         library("mediamp-avkit", group, "mediamp-avkit").versionRef("mediamp")
         library("mediamp-avkit-compose", group, "mediamp-avkit-compose").versionRef("mediamp")
         library("mediamp-all", group, "mediamp-all").versionRef("mediamp")
