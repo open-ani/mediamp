@@ -21,9 +21,13 @@ public object MediampPlayerFactoryLoader {
 
     /**
      * Register a [MediampPlayerFactory] implementation.
+     *
+     * Explicitly registered factories take precedence over the built-in
+     * [WebMediampPlayer.Factory], so [first] deterministically returns the latest
+     * registration (matching the JVM loader's precedence).
      */
     public fun register(factory: MediampPlayerFactory<*>) {
-        factories = (factories + factory).distinctBy { it.forClass }
+        factories = (listOf(factory) + factories).distinctBy { it.forClass }
     }
 
     public fun first(): MediampPlayerFactory<*> = factories.firstOrNull()
