@@ -51,6 +51,8 @@ fun DemoOverlay(
     onTogglePause: () -> Unit,
     onSeek: (seconds: Double) -> Unit,
     modifier: Modifier = Modifier,
+    /** Shows a loading spinner (media opening or playback stalled for data). */
+    isLoading: Boolean = false,
 ) {
     Box(modifier) {
         // Top status bar: semi-transparent gradient proves alpha compositing over video.
@@ -87,6 +89,14 @@ fun DemoOverlay(
             Modifier.align(Alignment.TopEnd).padding(24.dp).size(48.dp),
             color = Color.White,
         )
+
+        // Loading spinner: media opening or stalled for data.
+        if (isLoading) {
+            CircularProgressIndicator(
+                Modifier.align(Alignment.Center).size(64.dp),
+                color = Color(0xFF80D8FF),
+            )
+        }
 
         // Bottom control bar.
         Column(

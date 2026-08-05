@@ -13,6 +13,7 @@ import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.PlaybackErrorCode
 import org.openani.mediamp.PlaybackException
 import org.openani.mediamp.PlaybackSessionHandle
+import kotlin.concurrent.Volatile
 
 /**
  * Per-media-session bookkeeping of the mpv backend, bridging the persistent mpv event

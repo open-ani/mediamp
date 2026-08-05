@@ -140,8 +140,31 @@ public abstract class AbstractMediampPlayer(
         // Fact drain loop: all backend notifications funnel through this channel, giving
         // cross-thread FIFO ordering and drain-after-commit semantics for re-entrant reports.
         mainScope.launch {
-            for (fact in factChannel) {
-                processFact(coalesce(fact))
+            var pending: Fact? = null
+            while (true) {
+                val fact = pending ?: factChannel.receive()
+                pending = null
+                if (fact !is Fact.Transport) {
+                    processFact(fact)
+                    continue
+                }
+                // Coalesce consecutive queued transport reports to the newest level at drain
+                // time (spec §5), WITHOUT reordering them across other fact types: a stale
+                // capture must neither consume the retry budget nor masquerade as an external
+                // change, and non-transport facts (e.g. a queued seek completion whose
+                // snapshot predates a later echo) keep their FIFO position so the *applying*
+                // window still covers them.
+                var newest: Fact.Transport = fact
+                while (true) {
+                    val next = factChannel.tryReceive().getOrNull() ?: break
+                    if (next is Fact.Transport && next.session === newest.session) {
+                        newest = next
+                    } else {
+                        pending = next
+                        break
+                    }
+                }
+                processFact(newest)
             }
         }
         // Machine lifetime bounded by parent: close when the parent completes.
@@ -538,26 +561,6 @@ public abstract class AbstractMediampPlayer(
 
         class Properties(override val session: SessionImpl, val properties: MediaProperties) : Fact()
         class Position(override val session: SessionImpl, val positionMillis: Long) : Fact()
-    }
-
-    /**
-     * Coalesces queued transport reports to the newest level at drain time (spec §5): stale
-     * event-thread captures must not consume the retry budget or masquerade as external.
-     */
-    private fun coalesce(first: Fact): Fact {
-        if (first !is Fact.Transport) return first
-        var newest = first
-        while (true) {
-            val next = factChannel.tryReceive().getOrNull() ?: return newest
-            if (next is Fact.Transport && next.session === newest.session) {
-                newest = next
-            } else {
-                // Non-transport fact (or different session): process the coalesced transport
-                // now and re-queue the interloper for the next loop turn.
-                factChannel.trySend(next)
-                return newest
-            }
-        }
     }
 
     private fun processFact(fact: Fact) {

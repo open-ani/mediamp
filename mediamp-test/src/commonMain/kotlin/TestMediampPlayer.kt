@@ -146,6 +146,30 @@ public class TestMediampPlayer private constructor(
         private set
 
     /**
+     * Number of times the machine invoked [playImpl]. Intent commands are bounded (spec §5:
+     * an attempt budget of 2 re-commands per intent change) — assert this to pin the absence
+     * of retry storms.
+     */
+    public var playCallCount: Int = 0
+        private set
+
+    /**
+     * Number of times the machine invoked [pauseImpl]. Note the machine issues its own
+     * `pauseImpl` on Ended/Error entry when the native side was last reported playing
+     * (spec §6) — account for it when asserting.
+     */
+    public var pauseCallCount: Int = 0
+        private set
+
+    /**
+     * When `true`, [playImpl]/[pauseImpl] leave [nativePlayWhenReady] unchanged while still
+     * emitting their read-after-command report — simulating a platform that silently ignores
+     * intent commands without reporting a refusal. Drives the machine's bounded
+     * retry-then-adopt path (spec §5: budget exhaustion adopts the observed level).
+     */
+    public var ignoreIntentCommands: Boolean = false
+
+    /**
      * The playback rate last applied natively via [setRateImpl]. The machine only applies
      * rates while playing (spec §6), so this lags [PlaybackSpeed.value] until playback starts.
      */
@@ -294,6 +318,10 @@ public class TestMediampPlayer private constructor(
         startPositionMillis: Long,
     ): OpenResult {
         openCallCount++
+        // The handle is taken at entry, before the open completes: a real backend registers
+        // its native listeners while preparing, so facts (e.g. a fatal error) can be reported
+        // during Opening. The machine drops facts of sessions that never install (spec §5).
+        sessionHandle = session
         when (val behavior = openBehavior) {
             is OpenBehavior.Immediate -> {}
             is OpenBehavior.Hold -> behavior.gate.await() // throws PlaybackException on fail()
@@ -314,7 +342,6 @@ public class TestMediampPlayer private constructor(
         nativePlayWhenReady = playWhenReady
         nativeStalled = false
         heldSeekPositionMillis = null
-        sessionHandle = session
 
         return OpenResult(
             sessionResources = null,
@@ -325,13 +352,20 @@ public class TestMediampPlayer private constructor(
     }
 
     override fun playImpl() {
-        nativePlayWhenReady = true
-        // Read-after-command (spec §5): every intent command yields an observation.
+        playCallCount++
+        if (!ignoreIntentCommands) {
+            nativePlayWhenReady = true
+        }
+        // Read-after-command (spec §5): every intent command yields an observation, even
+        // when it was a native no-op.
         sessionHandle?.reportTransport(currentTransportSnapshot())
     }
 
     override fun pauseImpl() {
-        nativePlayWhenReady = false
+        pauseCallCount++
+        if (!ignoreIntentCommands) {
+            nativePlayWhenReady = false
+        }
         sessionHandle?.reportTransport(currentTransportSnapshot())
     }
 

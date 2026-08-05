@@ -17,9 +17,6 @@ description = "Prototype: mpv hardware decoding rendered into Compose Desktop vi
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
-    // Baseline for benchmarking: the current production VLC stack.
-    // mediamp-vlc is deprecated, not migrated to state-spec-v2 (VlcMain.kt no longer compiles).
-    // implementation(projects.mediampVlc)
     implementation(projects.mediampApi)
     // Production mpv path (runD3D11 smoke demo).
     implementation(projects.mediampMpv)
@@ -78,13 +75,4 @@ tasks.register<JavaExec>("runD3D11") {
     )
     (findProperty("video") as String?)?.let { args(it) }
     (findProperty("screenshotDir") as String?)?.let { systemProperty("mpvdemo.screenshot.dir", it) }
-}
-
-// VLC baseline player for benchmarks: ./gradlew :mediamp-mpv-demo:runVlc -Pvideo=/path/to.mp4
-tasks.register<JavaExec>("runVlc") {
-    group = "mediamp"
-    description = "Run the VLC baseline demo (same window and overlay as the mpv demo)"
-    mainClass = "org.openani.mediamp.mpvdemo.VlcMainKt"
-    classpath = sourceSets["main"].runtimeClasspath
-    (findProperty("video") as String?)?.let { args(it) }
 }
