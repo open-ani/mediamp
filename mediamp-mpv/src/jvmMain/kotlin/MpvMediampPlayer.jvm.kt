@@ -129,8 +129,14 @@ abstract class JvmMpvMediampPlayer(
     }
 
     private val eventListener = object : EventListener {
+        private val debugProps = System.getProperty("mediamp.mpv.debug.props") != null
+        private fun dbg(kind: String, name: String, value: Any?) {
+            if (debugProps) System.err.println("[mpv-prop] $kind $name = $value (adapter=${sessionAdapter != null})")
+        }
+
         override fun onPropertyChange(name: String) {
             if (nativeTeardownStarted) return
+            dbg("none", name, null)
             when (name) {
                 "track-list" -> mediaMetadata.refreshTracks()
                 "chapter-list" -> mediaMetadata.refreshChapters()
@@ -139,6 +145,7 @@ abstract class JvmMpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: Boolean) {
             if (nativeTeardownStarted) return
+            dbg("bool", name, value)
             when (name) {
                 "pause" -> {
                     val adapter = sessionAdapter ?: return
@@ -173,6 +180,7 @@ abstract class JvmMpvMediampPlayer(
 
         override fun onPropertyChange(name: String, value: Double) {
             if (nativeTeardownStarted) return
+            dbg("double", name, value)
             when (name) {
                 "time-pos" -> {
                     // Stale pre-seek reports are dropped by the machine's seek gating.

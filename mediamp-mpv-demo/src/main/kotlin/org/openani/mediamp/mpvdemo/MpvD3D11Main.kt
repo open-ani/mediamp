@@ -28,6 +28,7 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.singleWindowApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import org.openani.mediamp.PlaybackEvent
 import org.openani.mediamp.PlaybackException
 import org.openani.mediamp.isLoadingOrBuffering
@@ -88,6 +89,52 @@ fun main(args: Array<String>) {
         LaunchedEffect(player) {
             player.events.filterIsInstance<PlaybackEvent.MediaEnded>().collect {
                 player.play()
+            }
+        }
+
+        // Smoke-test hook: every state snapshot and event on stdout, so playback state
+        // transitions can be verified from the run log without a visible window.
+        LaunchedEffect(player) {
+            player.state.collect { println("[demo] state: $it") }
+        }
+        LaunchedEffect(player) {
+            player.events.collect { println("[demo] event: $it") }
+        }
+        LaunchedEffect(player) {
+            var last = -1L
+            player.currentPositionMillis.collect { pos ->
+                if (pos / 1000 != last) {
+                    last = pos / 1000
+                    println("[demo] position: ${pos}ms")
+                }
+            }
+        }
+
+        // Self-driving smoke scenario: -Dmpvdemo.script=smoke drives the player through a
+        // scripted pause/play/seek/EOF sequence against the real backend, logging every
+        // state/event. Turns manual playback verification into a repeatable check:
+        // expected log shape: Ready(playing) -> pause -> play -> seek (SeekCompleted)
+        // -> seek-to-near-end -> MediaEnded -> replay via the events loop above.
+        if (System.getProperty("mpvdemo.script") == "smoke") {
+            LaunchedEffect(player) {
+                player.state.first { it.mediaStatus == org.openani.mediamp.MediaStatus.Ready }
+                kotlinx.coroutines.delay(5_000)
+                println("[demo][script] pause()")
+                player.pause()
+                kotlinx.coroutines.delay(2_000)
+                println("[demo][script] play()")
+                player.play()
+                kotlinx.coroutines.delay(2_000)
+                println("[demo][script] seekTo(current + 30s)")
+                player.skip(30_000)
+                kotlinx.coroutines.delay(3_000)
+                val duration = player.mediaProperties.value?.durationMillis
+                if (duration != null) {
+                    println("[demo][script] seekTo(duration - 2s) — expecting MediaEnded soon")
+                    player.seekTo(duration - 2_000)
+                } else {
+                    println("[demo][script] duration unknown (live source) — skipping EOF leg")
+                }
             }
         }
 

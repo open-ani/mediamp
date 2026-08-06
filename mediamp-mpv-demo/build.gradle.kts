@@ -75,4 +75,10 @@ tasks.register<JavaExec>("runD3D11") {
     )
     (findProperty("video") as String?)?.let { args(it) }
     (findProperty("screenshotDir") as String?)?.let { systemProperty("mpvdemo.screenshot.dir", it) }
+    // -PdemoScript=smoke runs the self-driving pause/play/seek/EOF verification scenario.
+    (findProperty("demoScript") as? String)?.let { systemProperty("mpvdemo.script", it) }
+    // -PruntimeDir=<dir> overrides the assembled-runtime location (e.g. the dev-native dir).
+    (findProperty("runtimeDir") as? String)?.let { systemProperty("mediamp.mpv.runtime.dir", it) }
+    // -PdebugProps=1 logs every mpv property notification to stderr.
+    (findProperty("debugProps") as? String)?.let { systemProperty("mediamp.mpv.debug.props", it) }
 }
