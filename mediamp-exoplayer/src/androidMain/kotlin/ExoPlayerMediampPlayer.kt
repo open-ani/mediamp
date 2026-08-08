@@ -12,7 +12,6 @@ package org.openani.mediamp.exoplayer
 
 import android.content.Context
 import android.net.Uri
-import android.os.Looper
 import android.util.Pair
 import androidx.annotation.MainThread
 import androidx.annotation.OptIn
@@ -33,6 +32,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.trackselection.TrackSelection
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -99,7 +99,9 @@ import androidx.media3.common.Player as Media3Player
  * - The Ready point of an open (spec §3) is the first `onTracksChanged` callback with
  *   non-empty tracks, which fires after the container is parsed — provably after real I/O.
  *   A failing source therefore fails inside [setMediaData]; the media source factories use a
- *   low-retry [DefaultLoadErrorHandlingPolicy] so open failures surface promptly.
+ *   phase-aware [LoadErrorHandlingPolicy] that retries minimally until the Ready point (so
+ *   open failures surface promptly) and applies media3's default retry schedule afterwards
+ *   (so mid-playback transient load errors are not fatal).
  * - Seek completions are media3's masked `onPositionDiscontinuity(DISCONTINUITY_REASON_SEEK)`,
  *   which fires at `seekTo` call time state-independently, so the seek gate cannot wedge.
  * - `STATE_ENDED` is forwarded as the Ended fact even for a paused seek-to-end (Ended-on-seek
@@ -121,7 +123,6 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = Dispatchers.Main.immediate,
-    isOnMainThread = { Looper.myLooper() === Looper.getMainLooper() },
 ) {
 
     // Keep the previous two-argument JVM constructor for binary compatibility. A Kotlin default
@@ -154,6 +155,14 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
 
     /** Monotonic open counter (main-thread confined), guarding cleanup of superseded opens. */
     private var openEpoch = 0
+
+    /**
+     * `true` while the current open has not yet reached the Ready point (spec §3). Written by
+     * [openImpl] on the main dispatcher; read by [loadErrorHandlingPolicy] on loader threads
+     * to pick the retry schedule per load attempt.
+     */
+    @Volatile
+    private var openingPhase = false
 
     private val mediaMetadataFeature = ExoPlayerMediaMetadata()
 
@@ -371,6 +380,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         startPositionMillis: Long,
     ): OpenResult {
         val epoch = ++openEpoch
+        openingPhase = true
         var sessionInput: SeekableInput? = null
         try {
             val prepared = buildMediaSource(data)
@@ -403,23 +413,33 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
             } finally {
                 exoPlayer.removeListener(openListener)
             }
+            // Ready point reached: restore media3's default retry schedule for this session.
+            openingPhase = false
 
             currentSession = session
             val nativeState = exoPlayer.playbackState
+            // atEnd (spec §5): STATE_ENDED covers zero-length media, but the Ready point fires
+            // while still STATE_BUFFERING, so a start-at/beyond-end open is detected from the
+            // requested start position against the now-known duration (STATE_ENDED only arrives
+            // asynchronously later).
+            val durationMillis = exoPlayer.duration
             return OpenResult(
                 sessionResources = sessionInput?.let { input -> AutoCloseable { input.close() } },
                 initialSnapshot = TransportSnapshot(
                     nativePlayWhenReady = exoPlayer.playWhenReady,
                     isStalled = nativeState == Media3Player.STATE_BUFFERING,
                 ),
-                atEnd = nativeState == Media3Player.STATE_ENDED,
+                atEnd = nativeState == Media3Player.STATE_ENDED ||
+                    (durationMillis != C.TIME_UNSET && durationMillis > 0 && startPositionMillis >= durationMillis),
                 initialProperties = readMediaProperties(),
             )
         } catch (e: Throwable) {
             // Open failed, was superseded, or was cancelled. We are back on the main dispatcher
             // here (cancellation resumes in the caller's context), so native calls are legal.
             if (openEpoch == epoch) {
-                // Only unload if no newer open owns the native player already.
+                // Only unload if no newer open owns the native player already (a newer open
+                // owns openingPhase too, so it is only cleared under the same guard).
+                openingPhase = false
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
             }
@@ -481,9 +501,33 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         val sessionInput: SeekableInput?,
     )
 
-    private val loadErrorHandlingPolicy = DefaultLoadErrorHandlingPolicy(
-        /* minimumLoadableRetryCount = */ 1, // surface open failures promptly (spec §3)
-    )
+    /**
+     * Phase-aware retry policy (spec §3): until the current open reaches the Ready point, load
+     * errors surface after a single attempt with no backoff, so a bad source fails
+     * `setMediaData` promptly. After Ready, media3's default schedule (3 attempts + backoff)
+     * applies, so a transient mid-playback network blip is retried instead of surfacing as a
+     * fatal [Media3Player.Listener.onPlayerError]. [LoadErrorHandlingPolicy.getMinimumLoadableRetryCount]
+     * is consulted per load attempt, so the [openingPhase] flip is picked up without rebuilding
+     * the media source. The fatal-error mapping ([C.TIME_UNSET] delays) is preserved in both phases.
+     */
+    private val loadErrorHandlingPolicy = object : LoadErrorHandlingPolicy {
+        private val delegate = DefaultLoadErrorHandlingPolicy()
+
+        override fun getFallbackSelectionFor(
+            fallbackOptions: LoadErrorHandlingPolicy.FallbackOptions,
+            loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo,
+        ): LoadErrorHandlingPolicy.FallbackSelection? =
+            delegate.getFallbackSelectionFor(fallbackOptions, loadErrorInfo)
+
+        override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+            val delayMs = delegate.getRetryDelayMsFor(loadErrorInfo)
+            // C.TIME_UNSET marks a non-retriable (fatal) error; only retriable delays shrink.
+            return if (openingPhase && delayMs != C.TIME_UNSET) 0L else delayMs
+        }
+
+        override fun getMinimumLoadableRetryCount(dataType: Int): Int =
+            if (openingPhase) 1 else delegate.getMinimumLoadableRetryCount(dataType)
+    }
 
     private suspend fun buildMediaSource(data: MediaData): PreparedSource = when (data) {
         is UriMediaData -> {
