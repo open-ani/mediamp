@@ -424,6 +424,45 @@ class NotificationMatrixTest {
     }
 
     @Test
+    fun `injectPosition during Opening is dropped keeping the optimistic start position`(): TestResult = runTest {
+        // Spec section 5 matrix: notifyPosition acts in Ready only — an early demuxer tick
+        // during Opening must not clobber the optimistic start position (section 9).
+        val player = createPlayer()
+        val hold = TestMediampPlayer.OpenBehavior.Hold()
+        player.openBehavior = hold
+        val call = async { player.setMediaData(TrackingMediaData(), startPositionMillis = 5_000L) }
+        advanceUntilIdle()
+        assertEquals(MediaStatus.Opening, player.state.value.mediaStatus)
+        assertEquals(5_000L, player.currentPositionMillis.value)
+
+        player.injectPosition(1_200L)
+        advanceUntilIdle()
+        assertEquals(5_000L, player.currentPositionMillis.value) // dropped
+
+        hold.release()
+        advanceUntilIdle()
+        call.await()
+        player.close()
+    }
+
+    @Test
+    fun `injectPosition at Ended is dropped keeping the position pinned to the duration`(): TestResult = runTest {
+        // Spec section 5 matrix: notifyPosition acts in Ready only — a late poller tick at
+        // Ended must not move the position off the duration (section 9 flow-reset table).
+        val player = createPlayer()
+        player.setMediaData(TrackingMediaData(), playWhenReady = true)
+        player.injectEnded()
+        advanceUntilIdle()
+        assertEquals(MediaStatus.Ended, player.state.value.mediaStatus)
+        assertEquals(100_000L, player.currentPositionMillis.value)
+
+        player.injectPosition(42L)
+        advanceUntilIdle()
+        assertEquals(100_000L, player.currentPositionMillis.value) // dropped
+        player.close()
+    }
+
+    @Test
     fun `injectProperties acts during Opening`(): TestResult = runTest {
         val player = createPlayer()
         val hold = TestMediampPlayer.OpenBehavior.Hold()

@@ -97,7 +97,6 @@ public class TestMediampPlayer private constructor(
 ) : AbstractMediampPlayer(
     parentCoroutineContext = coroutineContext,
     mainDispatcher = mainDispatcher,
-    isOnMainThread = { true }, // Tests are single-threaded; disable the fail-fast check.
     releaseDispatcher = mainDispatcher, // Deterministic resource release under test schedulers.
 ) {
     /**
@@ -137,6 +136,14 @@ public class TestMediampPlayer private constructor(
      * until [completeHeldSeek] is called. Default `false`: seeks complete synchronously.
      */
     public var holdSeeks: Boolean = false
+
+    /**
+     * When `true`, the fake native transport is stalled (data starvation) at the Ready point
+     * of the next open, so [OpenResult.initialSnapshot] carries `isStalled = true` — an
+     * autoplay open still prefetching when metadata arrives (spec §5 open handoff: the first
+     * Ready emission carries the handoff's data axis). Clear mid-session with [injectStall].
+     */
+    public var openInitiallyStalled: Boolean = false
 
     /**
      * Number of times [openImpl] has been invoked. Replay from [org.openani.mediamp.MediaStatus.Ended]
@@ -271,12 +278,20 @@ public class TestMediampPlayer private constructor(
      * Attribution follows real engines under coalescing (spec §5): the completion is stamped
      * with the **latest** seek generation at processing time, closing every generation issued
      * so far — rapid seeks yield a single completion, like mpv's `playback-restart`.
+     *
+     * @param stalledAtCompletion when non-null, sets the fake native stall flag before
+     *   building the completion snapshot — a seek landing in an unbuffered region (spec §5:
+     *   the machine runs full reconciliation on the completion snapshot; the post-seek stall
+     *   must surface in the same transition that delivers the SeekCompleted event).
      */
-    public fun completeHeldSeek() {
+    public fun completeHeldSeek(stalledAtCompletion: Boolean? = null) {
         val session = sessionHandle ?: return
         val position = heldSeekPositionMillis ?: return
         heldSeekPositionMillis = null
         nativePositionMillis = position
+        if (stalledAtCompletion != null) {
+            nativeStalled = stalledAtCompletion
+        }
         session.notifySeekCompleted(session.currentSeekGeneration, position, currentTransportSnapshot())
     }
     // endregion
@@ -340,7 +355,7 @@ public class TestMediampPlayer private constructor(
         // Ready point (spec §3/§5 open handoff).
         nativePositionMillis = clampedStart
         nativePlayWhenReady = playWhenReady
-        nativeStalled = false
+        nativeStalled = openInitiallyStalled
         heldSeekPositionMillis = null
 
         return OpenResult(

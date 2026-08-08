@@ -59,17 +59,15 @@ class LifecycleTest {
         TestMediampPlayer(StandardTestDispatcher(testScheduler))
 
     /**
-     * A minimal backend with a controllable [isOnMainThread] check, for exercising the
-     * fail-fast command assertion and the close() trampoline — paths [TestMediampPlayer]
-     * disables by construction.
+     * A minimal backend for exercising close() scheduling — the machine thread is captured on
+     * the machine's first execution, so behavior before that capture is observable here.
+     * Real off-thread checks need real threads and live in the JVM-only ThreadFenceJvmTest.
      */
     private class ThreadAwarePlayer(
         dispatcher: CoroutineDispatcher,
-        isOnMainThread: () -> Boolean,
     ) : AbstractMediampPlayer(
         parentCoroutineContext = dispatcher,
         mainDispatcher = dispatcher,
-        isOnMainThread = isOnMainThread,
         releaseDispatcher = dispatcher,
     ) {
         var closeImplCalls: Int = 0
@@ -99,45 +97,26 @@ class LifecycleTest {
     }
 
     @Test
-    fun `close from a non-main thread trampolines to the main dispatcher`(): TestResult = runTest {
-        // regression: C6 (v1 ran closeImpl on arbitrary threads; v2 close() is any-thread and
-        // trampolines, emitting Released exactly once on the machine's dispatcher)
-        val player = ThreadAwarePlayer(StandardTestDispatcher(testScheduler), isOnMainThread = { false })
-        player.setMediaData(TrackingMediaData()) // setMediaData is any-thread: hops internally
-        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+    fun `close before the machine thread is captured defers to the machine turn`(): TestResult = runTest {
+        // regression: C6 family (v1 ran closeImpl on arbitrary threads; v2 close() is
+        // any-thread and trampolines whenever it cannot prove it is on the machine thread —
+        // including before the machine ever ran and captured its thread identity)
+        val player = ThreadAwarePlayer(StandardTestDispatcher(testScheduler))
 
         player.close()
-        // Not on the main thread: Released is NOT committed synchronously…
-        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+        // Machine thread not captured yet: Released is NOT committed synchronously…
+        assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
         assertEquals(0, player.closeImplCalls)
 
         advanceUntilIdle()
-        // …but on the next main-dispatcher turn.
+        // …but on the next main-dispatcher turn, exactly once.
         assertEquals(playerState(MediaStatus.Released), player.state.value)
         assertEquals(1, player.closeImplCalls)
     }
 
     @Test
-    fun `commands off the main thread fail fast`(): TestResult = runTest {
-        // regression: C6 (v1's @UiThread was unenforced; v2 throws immediately)
-        val player = ThreadAwarePlayer(StandardTestDispatcher(testScheduler), isOnMainThread = { false })
-        player.setMediaData(TrackingMediaData())
-        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
-
-        assertFailsWith<IllegalStateException> { player.play() }
-        assertFailsWith<IllegalStateException> { player.pause() }
-        assertFailsWith<IllegalStateException> { player.seekTo(1_000L) }
-        assertFailsWith<IllegalStateException> { player.stopPlayback() }
-        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus) // nothing acted
-
-        player.close() // close is exempt: any thread
-        advanceUntilIdle()
-        assertEquals(playerState(MediaStatus.Released), player.state.value)
-    }
-
-    @Test
     fun `close is idempotent and emits Released exactly once`(): TestResult = runTest {
-        val player = ThreadAwarePlayer(StandardTestDispatcher(testScheduler), isOnMainThread = { true })
+        val player = ThreadAwarePlayer(StandardTestDispatcher(testScheduler))
         player.setMediaData(TrackingMediaData())
         val log = recordStatesOf(player)
 
