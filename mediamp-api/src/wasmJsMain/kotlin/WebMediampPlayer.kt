@@ -11,6 +11,7 @@
 package org.openani.mediamp
 
 import kotlinx.browser.document
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,8 +58,8 @@ import kotlin.reflect.KClass
  * Notable platform behaviors handled here:
  * - The Ready point of an open is the `loadedmetadata` event. If the user agent defers
  *   fetching such that metadata cannot arrive without a user gesture (Data-Saver / Low Power
- *   mode, detected via a `suspend` event without metadata), the open completes in degraded
- *   mode with [MediampPlayer.mediaProperties] pending.
+ *   mode, detected via a zero-byte `suspend` that outlasts a short grace window), the open
+ *   completes in degraded mode with [MediampPlayer.mediaProperties] pending.
  * - An autoplay-policy rejection of `play()` is reported as a refused transport observation,
  *   which the machine adopts as an external pause (v1's stranded-PLAYING is unrepresentable).
  * - External pauses (Global Media Controls, Picture-in-Picture, native fullscreen controls)
@@ -75,7 +76,6 @@ public class WebMediampPlayer(
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = Dispatchers.Main,
-    isOnMainThread = { true }, // The browser is single-threaded.
 ) {
     override val impl: Any get() = videoElement
 
@@ -93,6 +93,13 @@ public class WebMediampPlayer(
     /** The session handle native facts are reported to; `null` while no media session is bound. */
     private var activeSessionHandle: PlaybackSessionHandle? = null
     private var sessionListenerRemovers: List<() -> Unit> = emptyList()
+
+    /**
+     * Ownership token for the element's media resource: bumped by every `openImpl` `src`
+     * assignment and every [unloadElement], so an abandoned open's cancellation cleanup can
+     * never reset the element out from under a successor open (single JS thread).
+     */
+    private var openEpoch: Int = 0
 
     init {
         videoElement.preload = "metadata"
@@ -118,6 +125,7 @@ public class WebMediampPlayer(
         detachSessionListeners()
 
         clearTextTracks()
+        val epoch = ++openEpoch // this open owns the element until unload or a successor open
         videoElement.preload = "auto"
         videoElement.src = uri
         installSubtitleTracks(data)
@@ -125,7 +133,16 @@ public class WebMediampPlayer(
 
         // Ready point (spec §3): 'loadedmetadata', or degraded completion when the UA
         // suspends loading before metadata. A media error fails the open.
-        val metadataKnown = awaitReadyPoint(uri)
+        val metadataKnown = try {
+            awaitReadyPoint(uri)
+        } catch (e: CancellationException) {
+            // Abandoned open (stopPlayback during Opening, caller cancellation): the machine
+            // cancels the open WITHOUT stopImpl, so unload here or the element keeps fetching
+            // the abandoned media while the machine reports Idle. The epoch guard skips the
+            // reset when a successor open or unload has already taken ownership.
+            if (epoch == openEpoch) unloadElement()
+            throw e
+        }
 
         // Apply the start position natively before Ready commits (spec §3). Before metadata
         // (degraded mode) this sets the element's default playback start position.
@@ -191,15 +208,18 @@ public class WebMediampPlayer(
 
     override fun stopImpl() {
         detachSessionListeners()
-        videoElement.pause()
-        videoElement.removeAttribute("src")
-        clearTextTracks()
-        videoElement.load() // Standard unload: aborts fetching and resets the element.
+        unloadElement()
     }
 
     override fun closeImpl() {
         // Remove all listeners FIRST so queued native dispatches cannot re-enter (v1 property).
         detachSessionListeners()
+        unloadElement()
+    }
+
+    /** Standard unload idiom: aborts any in-flight fetch and resets the element. */
+    private fun unloadElement() {
+        openEpoch++ // invalidate any pending abandoned-open cleanup
         videoElement.pause()
         videoElement.removeAttribute("src")
         clearTextTracks()
@@ -227,26 +247,56 @@ public class WebMediampPlayer(
 
     /**
      * Suspends until the Ready point. Returns `true` when metadata is available, `false` for a
-     * degraded completion (UA suspended loading before metadata; properties arrive later via
+     * degraded completion (UA deferred fetching before metadata; properties arrive later via
      * the session's `loadedmetadata`/`durationchange` listeners). Throws [PlaybackException]
      * when the element reports a media error.
+     *
+     * Degraded completion (spec §3) requires ALL of: a `suspend` at `NETWORK_IDLE` with
+     * `readyState == HAVE_NOTHING`, zero bytes observed for this open (no `progress` event and
+     * `buffered` empty), and a grace window in which no normal completion arrives. The HTML
+     * resource-fetch algorithm also fires `suspend` at `NETWORK_IDLE` for a fully-fetched fast
+     * load and for a mid-load buffer-full suspension — both race `loadedmetadata` and must
+     * complete the open normally.
      */
     private suspend fun awaitReadyPoint(uri: String): Boolean = suspendCancellableCoroutine { cont ->
+        // Listeners install in the same JS task as load(), so no event of this open precedes them.
+        var progressSeen = false
+        var graceTimer: Int? = null
         var removers: List<() -> Unit> = emptyList()
-        fun cleanup() = removers.forEach { it() }
+        fun cleanup() {
+            graceTimer?.let { clearJsTimeout(it) }
+            graceTimer = null
+            removers.forEach { it() }
+        }
+        // Genuine UA fetch-deferral (Data-Saver / Low Power): idle with zero bytes observed.
+        fun deferredWithZeroBytes(): Boolean =
+            videoElement.networkState == HTMLMediaElement.NETWORK_IDLE &&
+                videoElement.readyState == HTMLMediaElement.HAVE_NOTHING &&
+                !progressSeen &&
+                videoElement.buffered.length == 0
         removers = listOf(
             videoElement.onEvent("loadedmetadata") {
                 cleanup()
                 if (cont.isActive) cont.resume(true)
             },
+            videoElement.onEvent("progress") {
+                // Bytes arrived: this open cannot be a fetch-deferral. A pending grace timer
+                // re-checks at expiry and no-ops.
+                progressSeen = true
+            },
             videoElement.onEvent("suspend") {
-                // Degraded open (spec §3): the UA intentionally stopped fetching without
-                // metadata (Data-Saver / Low Power). Complete Ready with properties pending.
-                if (videoElement.networkState == HTMLMediaElement.NETWORK_IDLE &&
-                    videoElement.readyState < HTMLMediaElement.HAVE_METADATA
-                ) {
-                    cleanup()
-                    if (cont.isActive) cont.resume(false)
+                // Degraded-open candidate. The grace window lets a racing 'loadedmetadata' /
+                // 'progress' / readyState advance complete the open normally; only when the
+                // zero-byte conditions still hold at expiry does the open complete degraded,
+                // with mediaProperties pending.
+                if (graceTimer == null && deferredWithZeroBytes()) {
+                    graceTimer = setJsTimeout(DEGRADED_OPEN_GRACE_MILLIS) {
+                        graceTimer = null
+                        if (cont.isActive && deferredWithZeroBytes()) {
+                            cleanup()
+                            cont.resume(false)
+                        }
+                    }
                 }
             },
             videoElement.onEvent("error") {
@@ -479,3 +529,18 @@ private fun HTMLVideoElement.onEvent(type: String, handler: () -> Unit): () -> U
 /** Reads `name` from a JS error object; empty string when absent. */
 private fun jsErrorName(error: JsAny?): String =
     js("(error && error.name) ? String(error.name) : ''")
+
+/**
+ * Grace after a qualifying zero-byte `suspend` before an open completes degraded (spec §3):
+ * a racing `loadedmetadata`, `progress`, or readyState advance within this window wins and
+ * completes the open normally.
+ */
+private const val DEGRADED_OPEN_GRACE_MILLIS: Int = 250
+
+/** Schedules [handler] on the browser event loop after [timeoutMillis]; returns a handle for [clearJsTimeout]. */
+private fun setJsTimeout(timeoutMillis: Int, handler: () -> Unit): Int =
+    js("setTimeout(handler, timeoutMillis)")
+
+private fun clearJsTimeout(handle: Int) {
+    js("clearTimeout(handle)")
+}
