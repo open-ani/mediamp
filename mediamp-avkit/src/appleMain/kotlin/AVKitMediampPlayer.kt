@@ -11,11 +11,13 @@ package org.openani.mediamp.avkit
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -85,7 +87,9 @@ import platform.AVFoundation.volume
 import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMake
 import platform.Foundation.NSError
+import platform.Foundation.NSKeyValueObservingOptionInitial
 import platform.Foundation.NSKeyValueObservingOptionNew
+import platform.Foundation.NSKeyValueObservingOptions
 import platform.Foundation.NSKeyValueObservingProtocol
 import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSOperationQueue
@@ -124,6 +128,10 @@ import kotlin.time.Duration.Companion.milliseconds
  *   not reported as a transport change (spec §5).
  * - External pauses (audio-session interruptions, route changes such as unplugging headphones,
  *   Control Center) surface as transport-level observations and are adopted by the machine.
+ * - After a media-services reset, `AVPlayer.status` is permanently `failed` and Apple requires
+ *   creating a new [AVPlayer]; this player instance must therefore be recreated. The failure
+ *   surfaces as an asynchronous `Error` status, and subsequent [setMediaData] calls fail fast
+ *   with the mapped [PlaybackException] instead of silently reusing the dead player.
  */
 @OptIn(
     InternalMediampApi::class,
@@ -136,7 +144,6 @@ public class AVKitMediampPlayer(
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = Dispatchers.Main,
-    isOnMainThread = { NSThread.isMainThread() },
 ) {
     override val impl: AVPlayer = AVPlayer()
 
@@ -197,6 +204,13 @@ public class AVKitMediampPlayer(
         playWhenReady: Boolean,
         startPositionMillis: Long,
     ): OpenResult {
+        // AVPlayer.status is an open-failure surface of its own (spec §7). After a
+        // media-services reset the player is permanently failed (Apple requires creating a
+        // new AVPlayer): fail fast instead of preparing an item on a dead player.
+        if (impl.status == AVPlayerStatusFailed) {
+            throw impl.error.toPlaybackException("AVPlayer is in the failed state and cannot open media")
+        }
+
         val playerItem = when (data) {
             is UriMediaData -> makePlayerItem(data)
             is SeekableInputMediaData -> throw UnsupportedOperationException(
@@ -211,11 +225,27 @@ public class AVKitMediampPlayer(
 
         impl.replaceCurrentItemWithPlayerItem(playerItem)
 
+        // AVPlayer.status is observed for the whole open window (spec §7): the player can fail
+        // without the item ever reaching Failed, which would otherwise suspend awaitItemReady
+        // indefinitely. `Initial` closes the gap between the entry check above and this
+        // registration.
+        val playerFailure = CompletableDeferred<Nothing>()
+        val playerStatusGuard = impl.observeKeyPathOnMain(
+            KEY_STATUS,
+            options = NSKeyValueObservingOptionInitial or NSKeyValueObservingOptionNew,
+        ) {
+            if (impl.status == AVPlayerStatusFailed) {
+                playerFailure.completeExceptionally(
+                    impl.error.toPlaybackException("AVPlayer entered the failed state during open"),
+                )
+            }
+        }
+
         val durationMillis: Long?
         val clampedStart: Long
         try {
             // Ready point (spec §3): item status ReadyToPlay; Failed throws PlaybackException.
-            awaitItemReady(playerItem)
+            raceAgainstPlayerFailure(playerFailure) { awaitItemReady(playerItem) }
             durationMillis = cmTimeToMillisOrNull(playerItem.duration)
             // Apply the start position natively before Ready commits (spec §3); no seek
             // generation is involved.
@@ -225,13 +255,17 @@ public class AVKitMediampPlayer(
                 startPositionMillis.coerceAtLeast(0L)
             }
             if (clampedStart > 0L) {
-                awaitInitialSeek(clampedStart)
+                raceAgainstPlayerFailure(playerFailure) { awaitInitialSeek(clampedStart) }
             }
         } catch (e: Throwable) {
             // Open failed or was cancelled: detach the dead item so it cannot linger in the
             // player (v1 defect A8). The status observer is removed by awaitItemReady itself.
             impl.replaceCurrentItemWithPlayerItem(null)
             throw e
+        } finally {
+            // Removal matches the addition above exactly, on every exit path (success,
+            // failure, cancellation).
+            impl.removeObserver(playerStatusGuard, KEY_STATUS)
         }
 
         // Attach session observers. No suspension points from here to return, so cancellation
@@ -308,20 +342,30 @@ public class AVKitMediampPlayer(
     // region native signal handling
 
     private fun onNativeSeekFinished(session: PlaybackSessionHandle, issuedGeneration: Int, finished: Boolean) {
-        // Latest-generation attribution (spec §5): a completion closes every generation <= it.
+        // Issue-time attribution (spec §5, non-coalescing engines): every AVPlayer seek
+        // invokes exactly its own completion handler, so `finished == true` can only belong
+        // to the seek issued as [issuedGeneration]. This handler is trampolined across
+        // queues, so a newer machine seek may already be in flight by now; stamping the
+        // issue-time generation makes the machine treat this completion as stale in that
+        // case — the newer seek's own completion closes the gate — instead of closing a
+        // seek that has not landed yet.
         val latestGeneration = session.currentSeekGeneration
         if (!finished && latestGeneration > issuedGeneration) {
-            // Interrupted by a newer machine-issued seek; that seek's completion closes the gate.
+            // Interrupted by a newer machine-issued seek; that seek's handler will complete.
             return
         }
         // Either the seek landed, or the native side refused it with no superseding machine
-        // seek (unseekable/live media): complete at the actual position — every issued seekImpl
-        // yields exactly one completion (spec §5).
+        // seek (unseekable/live media; issuedGeneration IS the latest generation then):
+        // complete at the actual position — every issued seekImpl yields exactly one
+        // completion (spec §5).
         val positionMillis = currentNativePositionMillis()
-        session.notifySeekCompleted(latestGeneration, positionMillis, transportSnapshotNow())
+        session.notifySeekCompleted(issuedGeneration, positionMillis, transportSnapshotNow())
 
         // Ended-on-seek normalization (spec §6): a completion landing at the native end
-        // position, with known duration, reports Ended.
+        // position, with known duration, reports Ended — only for the completion that closes
+        // the newest generation (the machine additionally drops Ended facts while a newer
+        // seek is still in flight).
+        if (issuedGeneration < latestGeneration) return
         val durationMillis = currentItemDurationMillis()
         if (durationMillis != null && positionMillis >= durationMillis - END_TOLERANCE_MILLIS) {
             session.notifyEnded()
@@ -378,6 +422,24 @@ public class AVKitMediampPlayer(
             )
         }
         return AVPlayerItem(asset)
+    }
+
+    /**
+     * Runs [block] racing it against [failure] (which only ever completes exceptionally):
+     * if [failure] completes, [block] is cancelled and the failure is rethrown. Used during
+     * the open window so an `AVPlayer.status` transition to `Failed` fails the open instead
+     * of leaving it suspended (spec §7) — the item may never reach `Failed` itself.
+     */
+    private suspend fun <T> raceAgainstPlayerFailure(
+        failure: CompletableDeferred<Nothing>,
+        block: suspend () -> T,
+    ): T = coroutineScope {
+        val guard = launch { failure.await() }
+        try {
+            block()
+        } finally {
+            guard.cancel()
+        }
     }
 
     /**
@@ -469,7 +531,14 @@ public class AVKitMediampPlayer(
             if (!detached) reportTransportLevel(session)
         }
 
-        private val playerStatusObserver = impl.observeKeyPathOnMain(KEY_STATUS) {
+        // `Initial` (spec §7): a player that is already failed when this session attaches
+        // (media-services reset racing the end of the open) must surface as an async Error
+        // instead of being silently reused — AVPlayer.status never leaves Failed, so a
+        // new-value-only observer would never fire.
+        private val playerStatusObserver = impl.observeKeyPathOnMain(
+            KEY_STATUS,
+            options = NSKeyValueObservingOptionInitial or NSKeyValueObservingOptionNew,
+        ) {
             if (!detached && impl.status == AVPlayerStatusFailed) {
                 session.notifyError(impl.error.toPlaybackException("AVPlayer entered the failed state"))
             }
@@ -718,12 +787,16 @@ private class MainQueueKvoObserver(
 
 /** Registers [onChange] for KVO changes of [keyPath], dispatched to the main queue. */
 @OptIn(ExperimentalForeignApi::class)
-private fun NSObject.observeKeyPathOnMain(keyPath: String, onChange: () -> Unit): NSObject {
+private fun NSObject.observeKeyPathOnMain(
+    keyPath: String,
+    options: NSKeyValueObservingOptions = NSKeyValueObservingOptionNew,
+    onChange: () -> Unit,
+): NSObject {
     val observer = MainQueueKvoObserver(onChange)
     addObserver(
         observer,
         forKeyPath = keyPath,
-        options = NSKeyValueObservingOptionNew,
+        options = options,
         context = null,
     )
     return observer
