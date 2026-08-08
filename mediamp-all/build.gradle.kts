@@ -37,9 +37,9 @@ kotlin {
             api(projects.mediampApi)
         }
         desktopMain.dependencies {
-            // mediamp-vlc is deprecated, not migrated to state-spec-v2.
-            // api(projects.mediampVlc)
-            // api(projects.mediampVlcLoader)
+            // mediamp-vlc is deprecated (not migrated to state-spec-v2); mpv is the
+            // production desktop backend since state-spec-v2.
+            api(projects.mediampMpv)
         }
         iosMain.dependencies {
             api(projects.mediampAvkit)

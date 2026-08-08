@@ -13,16 +13,17 @@ Supported targets and backends:
 |    Platform    | Architecture(s) | Implementation |
 |:--------------:|-----------------|----------------|
 |    Android     | Any             | ExoPlayer      |
-| JVM on Windows | x86_64          | VLC            |
-|  JVM on macOS  | x86_64, AArch64 | VLC            |
-|  JVM on Linux  | x86_64          | VLC            |
+| JVM on Windows | x86_64          | MPV            |
+|  JVM on macOS  | x86_64, AArch64 | MPV            |
+|  JVM on Linux  | x86_64          | MPV            |
 |      iOS       | AArch64         | AVKit          |
 | Browser (wasm) | Any             | HTMLVideoElement |
 
 Platforms that are not listed above are not supported yet. Feel free to file an issue if you need
 them.
 
-A unified MPV backend is in active development, and will be available soon.
+The VLC backend is deprecated and no longer maintained; MPV replaced it as the desktop backend
+in state spec v2.
 
 > [!WARNING]
 >
@@ -58,13 +59,9 @@ The `-all` bundle includes:
 - Mediamp common APIs and Compose UI APIs
 - ExoPlayer backend for Android
     - With `media3-exoplayer-hls` for streaming `.m3u8`
-- VLC backend for JVM
+- MPV backend for JVM (desktop)
 - AVKit backend for iOS
 - Browser player for Compose Web / `wasmJs`
-
-> [!NOTE]
-> The VLC backend requires VLC to be installed on the user's OS.
-> See [mediamp-vlc/README.md](mediamp-vlc/README.md) for shipping VLC binaries with your app.
 
 > [!WARNING]
 > **Compatibility Warning**
@@ -226,7 +223,7 @@ dependencies {
 
 ### Obtaining the Platform Player
 
-Access the underlying Android `ExoPlayer`, [vlcj][vlcj] `EmbeddedMediaPlayer` and iOS `AVPlayer` for
+Access the underlying Android `ExoPlayer`, desktop `MPVHandle` and iOS `AVPlayer` for
 advanced use cases.
 
 ```kotlin
@@ -243,8 +240,8 @@ val platform: AVPlayer = player.impl
 
 ```kotlin
 // On Desktop
-val player = VlcMediampPlayer()
-val platform: EmbeddedMediaPlayer = player.impl
+val player = MpvMediampPlayer(...)
+val platform: MPVHandle = player.impl
 ```
 
 ```kotlin
