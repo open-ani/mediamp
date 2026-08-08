@@ -117,7 +117,6 @@ class MpvHeadlessEofTest {
             val player = MpvMediampPlayer(
                 Any(), coroutineContext,
                 mainDispatcher = mainDispatcher,
-                isOnMainThread = { true },
             )
             val renderer = if (useSurfaceRing) {
                 check(player.createRenderContext()) { "createRenderContext failed" }

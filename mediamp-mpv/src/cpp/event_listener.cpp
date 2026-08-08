@@ -184,18 +184,33 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 break;
             case MPV_EVENT_IDLE:
                 break;
+            case MPV_EVENT_START_FILE: {
+                // playlist_entry_id exists since libmpv API 1.108 (mpv 0.33); data may be
+                // null on older cores — forward 0 ("unknown") then.
+                auto *start_file = (mpv_event_start_file *) event->data;
+                if (event_listener_ && jni_mediamp_method_EventListener_onStartFile) {
+                    env->CallVoidMethod(
+                        event_listener_,
+                        jni_mediamp_method_EventListener_onStartFile,
+                        static_cast<jlong>(start_file ? start_file->playlist_entry_id : 0));
+                    clear_jni_exception(env, this, "EventListener.onStartFile");
+                }
+                break;
+            }
             case MPV_EVENT_END_FILE: {
                 auto *end_file = (mpv_event_end_file *) event->data;
                 // reason != EOF/STOP with a non-zero error is a real playback failure.
                 const int level = end_file->error != 0 ? LOG_LEVEL_WARN : LOG_LEVEL_INFO;
-                LOG(this, level, "[event_loop] end-file: reason=%d error=%s",
-                    end_file->reason, mpv_error_string(end_file->error));
+                LOG(this, level, "[event_loop] end-file: reason=%d error=%s entry_id=%lld",
+                    end_file->reason, mpv_error_string(end_file->error),
+                    static_cast<long long>(end_file->playlist_entry_id));
                 if (event_listener_ && jni_mediamp_method_EventListener_onEndFile) {
                     env->CallVoidMethod(
                         event_listener_,
                         jni_mediamp_method_EventListener_onEndFile,
                         static_cast<jint>(end_file->reason),
-                        static_cast<jint>(end_file->error));
+                        static_cast<jint>(end_file->error),
+                        static_cast<jlong>(end_file->playlist_entry_id));
                     clear_jni_exception(env, this, "EventListener.onEndFile");
                 }
                 break;

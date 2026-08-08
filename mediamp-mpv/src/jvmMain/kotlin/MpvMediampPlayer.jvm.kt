@@ -68,9 +68,14 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  *   read-after-command report after every [playImpl]/[pauseImpl] (spec §5).
  * - `eof-reached` rising edge is the Ended fact; the keep-open auto-pause it entails is part
  *   of that fact and never reported as a transport change.
- * - `MPV_EVENT_PLAYBACK_RESTART` completes machine-issued seeks with latest-generation
- *   attribution; a synchronously rejected `seek` command synthesizes its completion so the
- *   seek gate can never wedge.
+ * - Machine-issued seeks are completed by the `MPV_EVENT_SEEK` → `MPV_EVENT_PLAYBACK_RESTART`
+ *   pair with latest-generation attribution (see [MpvSessionAdapter]): a restart with no
+ *   machine-attributable `SEEK` before it — the initial-load restart, or the open's own
+ *   `start=` positioning — completes nothing. A synchronously rejected `seek` command
+ *   synthesizes its completion so the seek gate can never wedge.
+ * - `END_FILE` events are attributed by playlist entry id: a queued `END_FILE` of a
+ *   previously unloaded file (episode switch) cannot fail or end the session that
+ *   replaced it.
  *
  * Capability notes (spec §6): mpv cannot measure data starvation while user-paused
  * (`paused-for-cache` does not engage at pause) — the `paused-stall` capability is degraded;
@@ -83,11 +88,9 @@ abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    isOnMainThread: () -> Boolean = { true },
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = mainDispatcher,
-    isOnMainThread = isOnMainThread,
 ) {
     internal val handle by lazy { MPVHandle(context) }
 
@@ -99,6 +102,14 @@ abstract class JvmMpvMediampPlayer(
      */
     @Volatile
     private var sessionAdapter: MpvSessionAdapter? = null
+
+    /**
+     * The highest playlist entry id observed so far (mpv ids are monotonically increasing).
+     * Written only on the mpv event thread; read on the machine thread at [openImpl] to seed
+     * the new session's stale-`END_FILE` ceiling (see [MpvSessionAdapter.isStaleEndFile]).
+     */
+    @Volatile
+    private var maxSeenPlaylistEntryId = 0L
 
     /**
      * Set once [closeImpl] starts native teardown: the event listener stops dispatching and
@@ -212,16 +223,24 @@ abstract class JvmMpvMediampPlayer(
             if (nativeTeardownStarted) return
             val adapter = sessionAdapter ?: return
             when (event) {
-                MPVEvent.FILE_LOADED -> adapter.pendingOpen?.complete(Unit)
+                MPVEvent.FILE_LOADED -> {
+                    adapter.onFileLoaded()
+                    adapter.pendingOpen?.complete(Unit)
+                }
+
+                MPVEvent.SEEK -> adapter.onSeekEvent()
 
                 MPVEvent.PLAYBACK_RESTART -> {
-                    // Seek completion — but only for machine-issued seeks: mpv also fires
-                    // playback-restart at initial file load. mpv coalesces rapid seeks into
-                    // one restart; stamping the CURRENT seek generation at processing time
-                    // closes every superseded generation at once (spec §5).
-                    if (adapter.takeSeekCompletion()) {
+                    // Seek completion — but only when a machine-issued generation was
+                    // stamped by a preceding MPV_EVENT_SEEK: mpv also fires
+                    // playback-restart at initial file load and after the open's own
+                    // `start=` positioning. mpv coalesces rapid seeks into one restart;
+                    // the stamped generation is the latest issued at SEEK-processing time,
+                    // closing every superseded generation at once (spec §5).
+                    val generation = adapter.onPlaybackRestart()
+                    if (generation != 0) {
                         adapter.session.notifySeekCompleted(
-                            adapter.session.currentSeekGeneration,
+                            generation,
                             currentNativePositionMillis(),
                             liveTransportSnapshot(),
                         )
@@ -230,9 +249,26 @@ abstract class JvmMpvMediampPlayer(
             }
         }
 
-        override fun onEndFile(reason: Int, mpvError: Int) {
+        override fun onStartFile(playlistEntryId: Long) {
+            if (nativeTeardownStarted) return
+            if (playlistEntryId > maxSeenPlaylistEntryId) {
+                maxSeenPlaylistEntryId = playlistEntryId
+            }
+            // Fallback binding for natives that could not resolve `playlist/0/id` in
+            // openImpl; normally a no-op re-store of the same id.
+            sessionAdapter?.bindEntryId(playlistEntryId)
+        }
+
+        override fun onEndFile(reason: Int, mpvError: Int, playlistEntryId: Long) {
             if (nativeTeardownStarted) return
             val adapter = sessionAdapter ?: return
+            if (playlistEntryId > maxSeenPlaylistEntryId) {
+                maxSeenPlaylistEntryId = playlistEntryId
+            }
+            // Entry-id attribution: a queued END_FILE of a previously unloaded file (e.g.
+            // the END_FILE(STOP) that `stop` emits for the old episode) must not fail the
+            // open, end, or error the session that replaced it.
+            if (adapter.isStaleEndFile(playlistEntryId)) return
             when (reason) {
                 MPV_END_FILE_REASON_ERROR -> {
                     val error = mpvErrorToPlaybackException(mpvError)
@@ -500,7 +536,11 @@ abstract class JvmMpvMediampPlayer(
             }
         }
 
-        val adapter = MpvSessionAdapter(session)
+        val adapter = MpvSessionAdapter(
+            session,
+            openStartSeekExpected = startPositionMillis > 0,
+            staleEntryIdCeiling = maxSeenPlaylistEntryId,
+        )
         val opened = CompletableDeferred<Unit>()
         adapter.pendingOpen = opened
         try {
@@ -526,6 +566,11 @@ abstract class JvmMpvMediampPlayer(
                     "mpv rejected the 'loadfile' command for $loadTarget",
                 )
             }
+            // The entry id of the just-loaded file, read synchronously (`loadfile ...
+            // replace` leaves exactly this entry in the playlist): authoritative binding
+            // for END_FILE attribution even before this session's START_FILE event is
+            // delivered. 0 on failure -> the START_FILE fallback binds instead.
+            adapter.bindEntryId(handle.getPropertyInt("playlist/0/id").toLong())
 
             // Ready point (spec §3): MPV_EVENT_FILE_LOADED — the source is accepted and
             // metadata is available. An END_FILE arriving first fails the open with a
@@ -573,17 +618,19 @@ abstract class JvmMpvMediampPlayer(
 
     override fun seekImpl(positionMillis: Long, seekGeneration: Int) {
         val adapter = sessionAdapter ?: return
-        adapter.seekPending = true
+        adapter.onSeekIssued(seekGeneration)
         val targetSeconds = positionMillis.coerceAtLeast(0L) / 1000.0
         if (!handle.command("seek", formatSeconds(targetSeconds), "absolute+exact")) {
             // Synchronous refusal (unseekable/live media): the seek gate must never wedge
-            // (spec §5) — synthesize the completion at the actual native position.
-            adapter.seekPending = false
-            adapter.session.notifySeekCompleted(
-                seekGeneration,
-                currentNativePositionMillis(),
-                liveTransportSnapshot(),
-            )
+            // (spec §5) — synthesize the completion at the actual native position, stamped
+            // with the issued generation.
+            if (adapter.onSeekRejected(seekGeneration)) {
+                adapter.session.notifySeekCompleted(
+                    seekGeneration,
+                    currentNativePositionMillis(),
+                    liveTransportSnapshot(),
+                )
+            }
         }
     }
 

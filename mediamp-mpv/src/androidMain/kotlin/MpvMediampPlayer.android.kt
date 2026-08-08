@@ -9,7 +9,6 @@
 package org.openani.mediamp.mpv
 
 import android.os.Build
-import android.os.Looper
 import kotlin.coroutines.CoroutineContext
 
 actual class MpvMediampPlayer(
@@ -18,16 +17,6 @@ actual class MpvMediampPlayer(
 ) : JvmMpvMediampPlayer(
     context,
     parentCoroutineContext,
-    isOnMainThread = {
-        // Fail-fast check for playback commands (spec §4): they must run on the thread of
-        // the machine's main dispatcher, which is Android's main looper thread.
-        val mainLooper = Looper.getMainLooper()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            mainLooper.isCurrentThread
-        } else {
-            mainLooper.thread === Thread.currentThread()
-        }
-    },
 )
 
 actual fun limitDemuxer(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1

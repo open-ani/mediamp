@@ -44,7 +44,7 @@ class MpvZeroConfigTest {
             return
         }
         val main = Dispatchers.Default.limitedParallelism(1)
-        val player = MpvMediampPlayer(Any(), main, mainDispatcher = main, isOnMainThread = { true })
+        val player = MpvMediampPlayer(Any(), main, mainDispatcher = main)
         try {
             assertTrue((player.impl as MPVHandle).ptr != 0L, "MPVHandle must be created from classpath natives")
         } finally {
@@ -74,7 +74,7 @@ class MpvZeroConfigTest {
         val main = Dispatchers.Default.limitedParallelism(1)
         try {
             runBlocking(main) {
-                val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = main, isOnMainThread = { true })
+                val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = main)
                 try {
                     val uri = "http://127.0.0.1:${server.address.port}/video.mp4"
                     if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {

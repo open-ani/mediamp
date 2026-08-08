@@ -182,7 +182,6 @@ class MpvMediampPlayerSmokeTest {
             val player = MpvMediampPlayer(
                 Any(), coroutineContext,
                 mainDispatcher = mainDispatcher,
-                isOnMainThread = { true },
             )
             val renderer = startHeadlessRenderer(player)
             try {

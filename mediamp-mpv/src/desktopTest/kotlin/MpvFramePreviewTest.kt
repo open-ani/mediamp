@@ -426,5 +426,5 @@ class MpvFramePreviewTest {
  */
 private fun createHeadlessPlayer(parentCoroutineContext: CoroutineContext): MpvMediampPlayer {
     val main = Dispatchers.Default.limitedParallelism(1)
-    return MpvMediampPlayer(Any(), parentCoroutineContext, mainDispatcher = main, isOnMainThread = { true })
+    return MpvMediampPlayer(Any(), parentCoroutineContext, mainDispatcher = main)
 }

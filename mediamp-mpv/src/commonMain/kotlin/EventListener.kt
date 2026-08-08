@@ -36,10 +36,20 @@ interface EventListener {
     fun onEvent(event: Int)
 
     /**
+     * Notify that a new playlist entry started playing (`MPV_EVENT_START_FILE`).
+     *
+     * @param playlistEntryId `mpv_event_start_file.playlist_entry_id`; `<= 0` when the
+     * native side cannot provide it
+     */
+    fun onStartFile(playlistEntryId: Long)
+
+    /**
      * Notify that the current file stopped playing (`MPV_EVENT_END_FILE`).
      *
      * @param reason `mpv_end_file_reason`: 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT
      * @param mpvError `mpv_error` code, only meaningful when [reason] is 4 (ERROR)
+     * @param playlistEntryId `mpv_event_end_file.playlist_entry_id` of the file this event
+     * is about; `<= 0` when the native side cannot provide it
      */
-    fun onEndFile(reason: Int, mpvError: Int)
+    fun onEndFile(reason: Int, mpvError: Int, playlistEntryId: Long)
 }

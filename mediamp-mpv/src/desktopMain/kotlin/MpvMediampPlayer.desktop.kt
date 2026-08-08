@@ -22,7 +22,6 @@ import org.openani.mediamp.mpv.internal.MpvSurfaceRing
 import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
-import javax.swing.SwingUtilities
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(InternalMediampApi::class)
@@ -31,17 +30,11 @@ actual class MpvMediampPlayer(
     parentCoroutineContext: CoroutineContext,
     /**
      * The dispatcher the state machine is confined to (spec §4). Defaults to
-     * [Dispatchers.Main], which on desktop JVM is the Swing EDT.
+     * [Dispatchers.Main], which on desktop JVM is the Swing EDT. The machine captures the
+     * dispatcher's thread identity itself for the fail-fast command check.
      */
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    /**
-     * Fail-fast check for the playback-command thread assertion. Defaults to
-     * [SwingUtilities.isEventDispatchThread] when [mainDispatcher] is the Swing main
-     * dispatcher; for custom dispatchers (headless tests) the assertion is disabled unless
-     * a check is provided.
-     */
-    isOnMainThread: () -> Boolean = defaultIsOnMainThread(mainDispatcher),
-) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher, isOnMainThread) {
+) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
 
     // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
     private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()
@@ -162,14 +155,3 @@ actual class MpvMediampPlayer(
 }
 
 actual fun limitDemuxer(): Boolean = false
-
-private fun defaultIsOnMainThread(mainDispatcher: CoroutineDispatcher): () -> Boolean =
-    if (mainDispatcher === Dispatchers.Main || mainDispatcher === Dispatchers.Main.immediate) {
-        // Dispatchers.Main on desktop JVM is the Swing EDT (kotlinx-coroutines-swing).
-        { SwingUtilities.isEventDispatchThread() }
-    } else {
-        // A custom dispatcher's thread cannot be known up front here; the fail-fast
-        // assertion is disabled, matching AbstractMediampPlayer's default. Headless tests
-        // that want the check pass their own.
-        { true }
-    }

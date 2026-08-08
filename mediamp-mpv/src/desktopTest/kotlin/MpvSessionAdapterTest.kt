@@ -68,20 +68,93 @@ class MpvSessionAdapterTest {
         assertFalse(adapter.onEofReachedChanged(true))
     }
 
-    // ---- seek completion latch (playback-restart attribution) ----
+    // ---- seek completion attribution (SEEK / PLAYBACK_RESTART pairing) ----
 
     @Test
     fun `initial playback-restart is not a seek completion`() {
-        assertFalse(adapter.takeSeekCompletion())
+        adapter.onFileLoaded()
+        assertEquals(0, adapter.onPlaybackRestart())
     }
 
     @Test
-    fun `machine-issued seek is completed exactly once`() {
-        adapter.seekPending = true
-        assertTrue(adapter.takeSeekCompletion())
-        // mpv coalesces N queued seeks into one restart; a second restart must not
-        // fabricate another completion.
-        assertFalse(adapter.takeSeekCompletion())
+    fun `SEEK and restart events before FILE_LOADED belong to a previous file`() {
+        adapter.onSeekEvent() // queued from the previously unloaded file
+        assertEquals(0, adapter.onPlaybackRestart())
+        adapter.onFileLoaded()
+        assertEquals(0, adapter.onPlaybackRestart())
+    }
+
+    @Test
+    fun `machine seek completes exactly once via its SEEK then restart`() {
+        adapter.onFileLoaded()
+        adapter.onSeekIssued(1)
+        adapter.onSeekEvent()
+        assertEquals(1, adapter.onPlaybackRestart())
+        // mpv may fire further restarts (track switch etc.); they complete nothing.
+        assertEquals(0, adapter.onPlaybackRestart())
+    }
+
+    @Test
+    fun `seek issued right after load is not completed by the initial restart`() {
+        // regression: a seekTo() issued right after setMediaData() returns armed the old
+        // boolean latch, and the initial-load restart consumed it — reporting a completion
+        // at the pre-seek position and closing the gate early.
+        adapter.onFileLoaded()
+        adapter.onSeekIssued(1)
+        assertEquals(0, adapter.onPlaybackRestart()) // initial-load restart: no SEEK stamp
+        adapter.onSeekEvent() // the machine seek actually executes
+        assertEquals(1, adapter.onPlaybackRestart()) // its own restart completes it
+    }
+
+    @Test
+    fun `the open's start-position seek consumes the budget and completes nothing`() {
+        val adapter = MpvSessionAdapter(NoopSessionHandle(), openStartSeekExpected = true)
+        adapter.onFileLoaded()
+        adapter.onSeekEvent() // loadfile ... start= positioning
+        assertEquals(0, adapter.onPlaybackRestart())
+        adapter.onSeekIssued(1) // a real machine seek afterwards
+        adapter.onSeekEvent()
+        assertEquals(1, adapter.onPlaybackRestart())
+    }
+
+    @Test
+    fun `a restart stamped by an older generation does not close a newer seek`() {
+        // regression: the old latch let seek G's restart be misattributed to G+1, closing
+        // the newer seek's gate before it landed.
+        adapter.onFileLoaded()
+        adapter.onSeekIssued(1)
+        adapter.onSeekEvent() // SEEK belonging to generation 1
+        adapter.onSeekIssued(2) // newer seek issued before the restart drains
+        assertEquals(0, adapter.onPlaybackRestart()) // must not close generation 2 early
+        adapter.onSeekEvent() // generation 2 executes
+        assertEquals(2, adapter.onPlaybackRestart()) // closes generations <= 2
+    }
+
+    @Test
+    fun `synchronous seek rejection synthesizes exactly one completion`() {
+        adapter.onFileLoaded()
+        adapter.onSeekIssued(1)
+        assertTrue(adapter.onSeekRejected(1)) // caller synthesizes the completion
+        assertFalse(adapter.onSeekRejected(1)) // idempotent
+        assertEquals(0, adapter.onPlaybackRestart()) // no stray completion afterwards
+    }
+
+    // ---- END_FILE attribution by playlist entry id ----
+
+    @Test
+    fun `end-file entry-id staleness follows ceiling then binding`() {
+        val adapter = MpvSessionAdapter(NoopSessionHandle(), staleEntryIdCeiling = 5L)
+        // regression: an episode switch's queued END_FILE(STOP) of the OLD file draining
+        // after the new adapter installed spuriously failed the healthy new open.
+        assertTrue(adapter.isStaleEndFile(3L)) // at/below the ceiling: stale before binding
+        assertTrue(adapter.isStaleEndFile(5L))
+        assertFalse(adapter.isStaleEndFile(6L)) // newer than the ceiling, unbound: ours
+        adapter.bindEntryId(7L)
+        assertTrue(adapter.isStaleEndFile(6L)) // bound: any other id is stale
+        assertFalse(adapter.isStaleEndFile(7L))
+        // Old natives without entry-id support never classify as stale.
+        assertFalse(adapter.isStaleEndFile(0L))
+        assertFalse(adapter.isStaleEndFile(-1L))
     }
 
     // ---- open failure routing ----
