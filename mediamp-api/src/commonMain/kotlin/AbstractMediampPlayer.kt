@@ -12,11 +12,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,22 +53,27 @@ import kotlin.coroutines.EmptyCoroutineContext
  *
  * Backends never mutate state directly and never call `*Impl` methods themselves.
  *
+ * ## Threading (spec §4)
+ *
+ * The machine captures the identity of [mainDispatcher]'s thread the first time it executes
+ * on it; the fail-fast command check compares against exactly that thread, so
+ * `Dispatchers.setMain(StandardTestDispatcher)` setups work. Commands issued synchronously
+ * from a `state`/`events` collector while a transition is committing are queued and run
+ * immediately after the transition completes, in order.
+ *
  * @param parentCoroutineContext parent for the machine's internal scope; its Job (if any)
  *   bounds the machine's lifetime — when it completes, the player closes itself.
  * @param mainDispatcher the dispatcher the machine is confined to (spec §4). Must dispatch to
  *   a single thread. Defaults to [Dispatchers.Main].
- * @param isOnMainThread platform check used for the fail-fast command thread assertion and
- *   for close() trampolining. Backends pass a platform-accurate implementation (e.g.
- *   `Looper.getMainLooper().isCurrentThread` on Android). Defaulting to `{ true }` disables
- *   the assertion (single-threaded platforms, tests).
+ * @param releaseDispatcher where [MediaData.close] runs (spec §8). Defaults to the IO
+ *   dispatcher where the platform has one ([Dispatchers.Default] on wasmJs).
  */
 @InternalMediampApi
 @OptIn(InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 public abstract class AbstractMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
     final override val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    private val isOnMainThread: () -> Boolean = { true },
-    private val releaseDispatcher: CoroutineContext = Dispatchers.Default,
+    private val releaseDispatcher: CoroutineContext = defaultReleaseDispatcher,
 ) : MediampPlayer {
 
     // region public flows (machine is the sole writer)
@@ -130,6 +138,20 @@ public abstract class AbstractMediampPlayer(
 
     private val closed = MutableStateFlow(false)
 
+    /**
+     * Identity of [mainDispatcher]'s thread, captured on the machine's first execution on it.
+     * `null` until captured; the fail-fast check is lenient while unknown.
+     */
+    @Volatile
+    private var machineThread: Any? = null
+
+    // Re-entrancy (spec §5 Ordering): commands issued synchronously from a state/events
+    // collector while a transition is committing are queued here and drained right after the
+    // transition (state + legacy + deferred events) completes. Main-thread confined.
+    private var inTransition = false
+    private var drainingCommands = false
+    private val pendingCommands = ArrayDeque<() -> Unit>()
+
     // Declared before the init block: the drain loop launched there may run immediately when
     // mainDispatcher executes inline (e.g. Dispatchers.Unconfined in tests), so this field
     // must already be initialized at that point.
@@ -140,6 +162,7 @@ public abstract class AbstractMediampPlayer(
         // Fact drain loop: all backend notifications funnel through this channel, giving
         // cross-thread FIFO ordering and drain-after-commit semantics for re-entrant reports.
         mainScope.launch {
+            machineThread = currentThreadToken()
             var pending: Fact? = null
             while (true) {
                 val fact = pending ?: factChannel.receive()
@@ -219,90 +242,108 @@ public abstract class AbstractMediampPlayer(
 
     final override fun play() {
         checkMainThread("play")
-        when (_state.value.mediaStatus) {
-            MediaStatus.Opening -> {
-                activeOpen?.playWhenReady = true
-                commit(_state.value.copy(playWhenReady = true))
-            }
-            MediaStatus.Ready -> {
-                if (!_state.value.playWhenReady) {
+        runCommand {
+            when (_state.value.mediaStatus) {
+                MediaStatus.Opening -> {
+                    activeOpen?.playWhenReady = true
                     commit(_state.value.copy(playWhenReady = true))
-                    issueIntentCommand(true)
                 }
+                MediaStatus.Ready -> {
+                    if (!_state.value.playWhenReady) {
+                        commit(_state.value.copy(playWhenReady = true))
+                        // A queued re-entrant command may have moved the machine on.
+                        if (_state.value.mediaStatus == MediaStatus.Ready && _state.value.playWhenReady) {
+                            issueIntentCommand(true)
+                        }
+                    }
+                }
+                MediaStatus.Ended -> replay()
+                else -> {}
             }
-            MediaStatus.Ended -> replay()
-            else -> {}
         }
     }
 
     final override fun pause() {
         checkMainThread("pause")
-        when (_state.value.mediaStatus) {
-            MediaStatus.Opening -> {
-                activeOpen?.playWhenReady = false
-                commit(_state.value.copy(playWhenReady = false))
-            }
-            MediaStatus.Ready -> {
-                if (_state.value.playWhenReady) {
+        runCommand {
+            when (_state.value.mediaStatus) {
+                MediaStatus.Opening -> {
+                    activeOpen?.playWhenReady = false
                     commit(_state.value.copy(playWhenReady = false))
-                    issueIntentCommand(false)
                 }
+                MediaStatus.Ready -> {
+                    if (_state.value.playWhenReady) {
+                        commit(_state.value.copy(playWhenReady = false))
+                        if (_state.value.mediaStatus == MediaStatus.Ready && !_state.value.playWhenReady) {
+                            issueIntentCommand(false)
+                        }
+                    }
+                }
+                else -> {}
             }
-            else -> {}
         }
     }
 
     final override fun seekTo(positionMillis: Long) {
         checkMainThread("seekTo")
-        when (_state.value.mediaStatus) {
-            MediaStatus.Opening -> {
-                val clamped = clampPosition(positionMillis)
-                activeOpen?.startPositionMillis = clamped
-                _currentPositionMillis.value = clamped
+        runCommand {
+            when (_state.value.mediaStatus) {
+                MediaStatus.Opening -> {
+                    val clamped = clampPosition(positionMillis)
+                    activeOpen?.startPositionMillis = clamped
+                    _currentPositionMillis.value = clamped
+                }
+                MediaStatus.Ready -> issueSeek(positionMillis)
+                MediaStatus.Ended -> {
+                    // Seek from Ended: back to Ready, paused, at the clamped position.
+                    val clamped = clampPosition(positionMillis)
+                    _currentPositionMillis.value = clamped
+                    commit(PlayerState(MediaStatus.Ready, playWhenReady = false, isBuffering = false))
+                    if (_state.value.mediaStatus == MediaStatus.Ready) {
+                        startSeekWindow()
+                        seekImpl(clamped, seekGeneration)
+                    }
+                }
+                else -> {}
             }
-            MediaStatus.Ready -> issueSeek(positionMillis)
-            MediaStatus.Ended -> {
-                // Seek from Ended: back to Ready, paused, at the clamped position.
-                val clamped = clampPosition(positionMillis)
-                _currentPositionMillis.value = clamped
-                commit(PlayerState(MediaStatus.Ready, playWhenReady = false, isBuffering = false))
-                startSeekWindow()
-                seekImpl(clamped, seekGeneration)
-            }
-            else -> {}
         }
     }
 
     final override fun stopPlayback() {
         checkMainThread("stopPlayback")
-        when (_state.value.mediaStatus) {
-            MediaStatus.Opening -> {
-                cancelActiveOpen("Aborted by stopPlayback")
-                resetSideFlowsToIdle()
-                commit(PlayerState.Initial)
+        runCommand {
+            when (_state.value.mediaStatus) {
+                MediaStatus.Opening -> {
+                    cancelActiveOpen("Aborted by stopPlayback")
+                    resetSideFlowsToIdle()
+                    commit(PlayerState.Initial)
+                }
+                MediaStatus.Ready, MediaStatus.Ended -> {
+                    unloadActiveSession()
+                    resetSideFlowsToIdle()
+                    commit(PlayerState.Initial)
+                }
+                is MediaStatus.Error -> {
+                    commit(PlayerState.Initial)
+                }
+                else -> {}
             }
-            MediaStatus.Ready, MediaStatus.Ended -> {
-                unloadActiveSession()
-                resetSideFlowsToIdle()
-                commit(PlayerState.Initial)
-            }
-            is MediaStatus.Error -> {
-                commit(PlayerState.Initial)
-            }
-            else -> {}
         }
     }
 
     final override fun close() {
         if (closed.value) return
-        if (isOnMainThread()) {
-            doClose()
+        val captured = machineThread
+        if (captured != null && captured == currentThreadToken()) {
+            runCommand { doClose() }
         } else {
+            // Off the machine thread (or thread identity not captured yet): trampoline.
             cleanupScope.launch { doClose() }
         }
     }
 
     private fun doClose() {
+        // Machine-thread confined (close() trampolines): plain check-then-set is race-free.
         if (closed.value) return
         closed.value = true
         cancelActiveOpen("Player closed")
@@ -319,60 +360,139 @@ public abstract class AbstractMediampPlayer(
         startPositionMillis: Long,
     ) {
         // The machine takes ownership of `data` at call entry (spec §3): every exit path
-        // either installs it or releases it exactly once.
-        val attempt = withContext(mainDispatcher) {
-            if (closed.value || _state.value.mediaStatus == MediaStatus.Released) {
-                releaseAsync(data, null)
-                return@withContext null
-            }
-            val current = activeSession
-            if (current != null && current.mediaData === data) {
-                // Equal-data at Ready/Ended: no reopen; params still applied.
-                applyParamsToCurrentSession(playWhenReady, startPositionMillis)
-                return@withContext null
-            }
-            cancelActiveOpen("Superseded by a newer setMediaData call")
-            unloadActiveSession()
-
-            val newAttempt = OpenAttempt(data, playWhenReady, clampToNonNegative(startPositionMillis))
-            activeOpen = newAttempt
-            // §9: side flows first, then Opening.
-            _mediaData.value = null
-            _mediaProperties.value = null
-            _currentPositionMillis.value = newAttempt.startPositionMillis
-            commit(PlayerState(MediaStatus.Opening, playWhenReady = playWhenReady, isBuffering = false))
-
-            newAttempt.job = mainScope.launch { runOpen(newAttempt) }
-            newAttempt
-        } ?: return
-
+        // either installs it or releases it exactly once. The entry block and all abort
+        // handling run on the machine thread, so ownership is settled in one place, in order.
+        val entry = SetMediaDataEntry(data)
         try {
+            runOnMachineThread { performSetMediaDataEntry(entry, playWhenReady, startPositionMillis) }
+            val attempt = entry.attempt ?: return
             attempt.completion.await()
         } catch (e: CancellationException) {
-            // Caller cancelled (or machine cancelled us — MediaLoadCancellationException).
-            // If the open had not completed, abort it; if Ready already committed, the
-            // session stays intact (spec §3).
-            if (!attempt.installed) {
-                attempt.job?.cancel(MediaLoadCancellationException("Caller cancelled"))
-            }
+            // Caller cancelled (or the machine cancelled us). The entry block may or may not
+            // have run; abortSetMediaData decides on the machine thread.
+            cleanupScope.launch { abortSetMediaData(entry) }
             throw e
         }
     }
 
+    /**
+     * Runs [block] on the machine thread. When invoked re-entrantly from a collector during a
+     * transition (an undispatched hop on an immediate dispatcher), the block is deferred like
+     * any other command and the caller resumes after it ran.
+     */
+    private suspend fun runOnMachineThread(block: () -> Unit) {
+        withContext(mainDispatcher) {
+            if (!inTransition) {
+                block()
+            } else {
+                val done = CompletableDeferred<Unit>()
+                pendingCommands.addLast {
+                    try {
+                        block()
+                        done.complete(Unit)
+                    } catch (e: Throwable) {
+                        done.completeExceptionally(e)
+                    }
+                }
+                done.await()
+            }
+        }
+    }
+
+    /** Holder for one setMediaData call's entry handoff. Fields are machine-thread confined. */
+    private class SetMediaDataEntry(val data: MediaData) {
+        var entered = false
+        var aborted = false
+        var attempt: OpenAttempt? = null
+    }
+
+    private fun performSetMediaDataEntry(
+        entry: SetMediaDataEntry,
+        playWhenReady: Boolean,
+        startPositionMillis: Long,
+    ) {
+        if (entry.aborted) return // caller cancelled before this ran; data already released.
+        entry.entered = true
+        val data = entry.data
+        if (closed.value || _state.value.mediaStatus == MediaStatus.Released) {
+            releaseAsync(data, null)
+            return
+        }
+        val current = activeSession
+        if (current != null && current.mediaData === data) {
+            // Equal-data at Ready/Ended: no reopen; params still applied.
+            applyParamsToCurrentSession(playWhenReady, startPositionMillis)
+            return
+        }
+        cancelActiveOpen("Superseded by a newer setMediaData call")
+        unloadActiveSession()
+
+        val newAttempt = OpenAttempt(
+            data, playWhenReady, clampToNonNegative(startPositionMillis),
+            SessionImpl(epochCounter++, data),
+        )
+        activeOpen = newAttempt
+        entry.attempt = newAttempt
+        // §9: side flows first, then Opening.
+        _mediaData.value = null
+        _mediaProperties.value = null
+        _currentPositionMillis.value = newAttempt.startPositionMillis
+        commit(PlayerState(MediaStatus.Opening, playWhenReady = playWhenReady, isBuffering = false))
+
+        // A command drained at the end of the Opening commit may already have cancelled this
+        // attempt (its job did not exist yet): settle ownership here instead of launching.
+        val cancelRequested = newAttempt.cancelRequested
+        if (cancelRequested != null) {
+            releaseAsync(data, null)
+            newAttempt.completion.completeExceptionally(cancelRequested)
+            return
+        }
+        // ATOMIC: the body runs even when the job is cancelled before its first dispatch, so
+        // runOpen's try/catch is guaranteed to settle `completion` and release `data`
+        // (spec §3 ownership; §8 exactly-once release).
+        newAttempt.job = mainScope.launch(start = CoroutineStart.ATOMIC) { runOpen(newAttempt) }
+    }
+
+    /** Runs on the machine thread (via [cleanupScope]) after the caller saw a CE. */
+    private fun abortSetMediaData(entry: SetMediaDataEntry) {
+        if (!entry.entered) {
+            // The entry block never ran and never will (or has not yet): take ownership of
+            // the data (spec §3: ownership transfers at call entry, unconditionally) and
+            // prevent a still-queued entry from running.
+            entry.aborted = true
+            releaseAsync(entry.data, null)
+            return
+        }
+        val attempt = entry.attempt ?: return // entry ran a no-attempt path; ownership settled.
+        if (!attempt.installed) {
+            // Open still in flight: abort it. runOpen's cancellation handler releases the
+            // resource and transitions Opening -> Idle iff this attempt still owns the
+            // active Opening (spec §3).
+            abortAttempt(attempt, MediaLoadCancellationException("setMediaData caller cancelled"))
+        }
+        // Ready already committed: the session stays intact (spec §3).
+    }
+
     private suspend fun runOpen(attempt: OpenAttempt) {
-        val session = SessionImpl(epochCounter++, attempt.data)
+        val session = attempt.session
         try {
-            val result = openImpl(attempt.data, session, attempt.playWhenReady, attempt.startPositionMillis)
+            // Cancelled before start (ATOMIC launch): skip openImpl entirely.
+            currentCoroutineContext().ensureActive()
+            // openImpl consumes the start position by value; remember it so installSession can
+            // converge natively if seekTo(Opening) updated the attempt while we were open.
+            val appliedStartPosition = attempt.startPositionMillis
+            val result = openImpl(attempt.data, session, attempt.playWhenReady, appliedStartPosition)
             if (activeOpen !== attempt || closed.value) {
                 // Superseded/closed after openImpl completed but before install.
                 session.invalidate()
                 releaseAsync(attempt.data, result.sessionResources)
+                stopOrphanedNativeMedia()
                 attempt.completion.completeExceptionally(
                     MediaLoadCancellationException("Superseded before install"),
                 )
                 return
             }
-            installSession(attempt, session, result)
+            installSession(attempt, session, result, appliedStartPosition)
             attempt.installed = true
             attempt.completion.complete(Unit)
         } catch (e: CancellationException) {
@@ -386,6 +506,7 @@ public abstract class AbstractMediampPlayer(
                     commit(PlayerState.Initial)
                 }
             }
+            stopOrphanedNativeMedia()
             attempt.completion.completeExceptionally(
                 (e as? MediaLoadCancellationException) ?: MediaLoadCancellationException("Open cancelled"),
             )
@@ -402,7 +523,12 @@ public abstract class AbstractMediampPlayer(
         }
     }
 
-    private fun installSession(attempt: OpenAttempt, session: SessionImpl, result: OpenResult) {
+    private fun installSession(
+        attempt: OpenAttempt,
+        session: SessionImpl,
+        result: OpenResult,
+        appliedStartPositionMillis: Long,
+    ) {
         activeOpen = null
         activeSession = session
         session.resources = result.sessionResources
@@ -420,11 +546,28 @@ public abstract class AbstractMediampPlayer(
         }
         _mediaData.value = attempt.data
         _currentPositionMillis.value = attempt.startPositionMillis
-        commit(PlayerState(MediaStatus.Ready, playWhenReady = attempt.playWhenReady, isBuffering = false))
-
-        // Process the handoff snapshot, then atEnd, in the same turn (spec §5).
+        // Fold the handoff snapshot's data axis into the first Ready emission (spec §5 open
+        // handoff): an autoplay open that is still prefetching commits as Ready+buffering, so
+        // the legacy neverPlayed latch cannot flip on a fabricated isPlaying, and the v2 flow
+        // never emits a transient isPlaying glitch.
+        commit(
+            PlayerState(
+                MediaStatus.Ready,
+                playWhenReady = attempt.playWhenReady,
+                isBuffering = result.initialSnapshot.isStalled,
+            ),
+        )
+        // A queued re-entrant command may have moved the machine on during the commit.
+        if (_state.value.mediaStatus != MediaStatus.Ready) return
+        // Process the handoff snapshot in the same turn (spec §5): intent reconciliation.
         reconcileTransport(result.initialSnapshot)
-        if (result.atEnd) {
+        if (_state.value.mediaStatus != MediaStatus.Ready) return
+        // seekTo during Opening after openImpl had already consumed the start position:
+        // converge natively now, under a real seek generation.
+        if (attempt.startPositionMillis != appliedStartPositionMillis) {
+            issueSeek(attempt.startPositionMillis)
+        }
+        if (result.atEnd && !seekInFlight) {
             endedEntry()
         }
     }
@@ -435,19 +578,51 @@ public abstract class AbstractMediampPlayer(
     /**
      * Commits a snapshot: legacy derivation, state emission, and deferred event delivery.
      * MUST be the last state mutation of any transition; events fire after the state commit.
+     * Commands issued re-entrantly by collectors resumed during the commit are queued and
+     * drained after it completes (spec §5 Ordering).
      */
     private fun commit(snapshot: PlayerState, vararg deferredEvents: PlaybackEvent) {
         if (snapshot.isPlaying && legacyNeverPlayed) {
             legacyNeverPlayed = false
         }
         val risingPlay = snapshot.isPlaying && !_state.value.isPlaying
-        _state.value = snapshot
-        _legacyPlaybackState.value = deriveLegacy(snapshot)
-        if (risingPlay && activeSession != null && desiredRate != 1f) {
-            setRateImpl(desiredRate)
+        val nested = inTransition
+        inTransition = true
+        try {
+            _state.value = snapshot
+            _legacyPlaybackState.value = deriveLegacy(snapshot)
+            if (risingPlay && activeSession != null && desiredRate != 1f) {
+                setRateImpl(desiredRate)
+            }
+            for (event in deferredEvents) {
+                _events.tryEmit(event)
+            }
+        } finally {
+            if (!nested) {
+                inTransition = false
+                drainPendingCommands()
+            }
         }
-        for (event in deferredEvents) {
-            _events.tryEmit(event)
+    }
+
+    private fun runCommand(command: () -> Unit) {
+        if (inTransition) {
+            pendingCommands.addLast(command)
+        } else {
+            command()
+        }
+    }
+
+    private fun drainPendingCommands() {
+        if (drainingCommands) return
+        drainingCommands = true
+        try {
+            while (true) {
+                val command = pendingCommands.removeFirstOrNull() ?: break
+                command()
+            }
+        } finally {
+            drainingCommands = false
         }
     }
 
@@ -493,12 +668,16 @@ public abstract class AbstractMediampPlayer(
     }
 
     private fun replay() {
-        val session = activeSession ?: return
+        if (activeSession == null) return
         _currentPositionMillis.value = 0L
         commit(PlayerState(MediaStatus.Ready, playWhenReady = true, isBuffering = false))
+        // A queued re-entrant command may have moved the machine on during the commit.
+        if (_state.value.mediaStatus != MediaStatus.Ready) return
         startSeekWindow()
         seekImpl(0L, seekGeneration)
-        issueIntentCommand(true)
+        if (_state.value.mediaStatus == MediaStatus.Ready && _state.value.playWhenReady) {
+            issueIntentCommand(true)
+        }
     }
 
     private fun issueSeek(positionMillis: Long) {
@@ -527,7 +706,11 @@ public abstract class AbstractMediampPlayer(
                 }
                 if (playWhenReady != _state.value.playWhenReady) {
                     commit(_state.value.copy(playWhenReady = playWhenReady))
-                    issueIntentCommand(playWhenReady)
+                    if (_state.value.mediaStatus == MediaStatus.Ready &&
+                        _state.value.playWhenReady == playWhenReady
+                    ) {
+                        issueIntentCommand(playWhenReady)
+                    }
                 }
             }
             MediaStatus.Ended -> {
@@ -535,9 +718,14 @@ public abstract class AbstractMediampPlayer(
                 val clamped = clampPosition(startPositionMillis)
                 _currentPositionMillis.value = clamped
                 commit(PlayerState(MediaStatus.Ready, playWhenReady = playWhenReady, isBuffering = false))
+                if (_state.value.mediaStatus != MediaStatus.Ready) return
                 startSeekWindow()
                 seekImpl(clamped, seekGeneration)
-                if (playWhenReady) issueIntentCommand(true)
+                if (playWhenReady &&
+                    _state.value.mediaStatus == MediaStatus.Ready && _state.value.playWhenReady
+                ) {
+                    issueIntentCommand(true)
+                }
             }
             else -> {}
         }
@@ -604,9 +792,11 @@ public abstract class AbstractMediampPlayer(
                         val attempt = activeOpen
                         if (attempt != null) {
                             activeOpen = null
-                            attempt.job?.cancel(MediaLoadCancellationException("Open failed: ${fact.error.message}"))
-                            errorEntry(fact.error)
+                            // Settle the caller with the real error first; runOpen's own
+                            // cancellation completion loses (first completion wins).
                             attempt.completion.completeExceptionally(fact.error)
+                            abortAttempt(attempt, MediaLoadCancellationException("Open failed: ${fact.error.message}"))
+                            errorEntry(fact.error)
                         } else {
                             errorEntry(fact.error)
                         }
@@ -616,13 +806,21 @@ public abstract class AbstractMediampPlayer(
             }
             is Fact.SeekCompleted -> {
                 if (fact.generation < seekGeneration) return // stale; a newer seek is pending
-                if (seekInFlight) {
+                val wasInFlight = seekInFlight
+                if (wasInFlight) {
                     seekInFlight = false
                     _currentPositionMillis.value = fact.positionMillis
-                    _events.tryEmit(PlaybackEvent.SeekCompleted(fact.positionMillis))
                 }
                 if (_state.value.mediaStatus == MediaStatus.Ready) {
-                    reconcileTransport(fact.snapshot)
+                    // The SeekCompleted event is delivered by the commit that carries the
+                    // completion snapshot's state (spec §5/§9: events after the state commit).
+                    if (wasInFlight) {
+                        reconcileTransport(fact.snapshot, PlaybackEvent.SeekCompleted(fact.positionMillis))
+                    } else {
+                        reconcileTransport(fact.snapshot)
+                    }
+                } else if (wasInFlight) {
+                    commit(_state.value, PlaybackEvent.SeekCompleted(fact.positionMillis))
                 }
             }
             is Fact.Properties -> {
@@ -635,6 +833,8 @@ public abstract class AbstractMediampPlayer(
             is Fact.Position -> {
                 if (seekInFlight) return
                 when (_state.value.mediaStatus) {
+                    // Spec §5 matrix: position facts act in Ready only — Opening keeps the
+                    // optimistic start position, Ended keeps position == duration.
                     MediaStatus.Ready -> _currentPositionMillis.value = fact.positionMillis
                     else -> {}
                 }
@@ -644,9 +844,11 @@ public abstract class AbstractMediampPlayer(
 
     /**
      * Desired-vs-observed intent reconciliation plus data-axis sync (spec §5).
-     * Only called while status is Ready.
+     * Only meaningful while status is Ready. [deferredEvents] are delivered by the commit
+     * even when the state itself is unchanged.
      */
-    private fun reconcileTransport(snapshot: TransportSnapshot) {
+    private fun reconcileTransport(snapshot: TransportSnapshot, vararg deferredEvents: PlaybackEvent) {
+        if (_state.value.mediaStatus != MediaStatus.Ready) return
         lastReportedNativePwr = snapshot.nativePlayWhenReady
         val current = _state.value
         val observed = snapshot.nativePlayWhenReady
@@ -672,15 +874,17 @@ public abstract class AbstractMediampPlayer(
         }
 
         val newSnapshot = PlayerState(MediaStatus.Ready, newPwr, snapshot.isStalled)
-        if (newSnapshot != current || externalChange) {
+        if (newSnapshot != current || externalChange || deferredEvents.isNotEmpty()) {
             if (externalChange) {
-                commit(newSnapshot, PlaybackEvent.ExternalPlayWhenReadyChanged(newPwr))
-                if (newPwr && desiredRate != 1f) {
+                commit(newSnapshot, PlaybackEvent.ExternalPlayWhenReadyChanged(newPwr), *deferredEvents)
+                if (newPwr && desiredRate != 1f &&
+                    _state.value.mediaStatus == MediaStatus.Ready && _state.value.isPlaying
+                ) {
                     // Re-apply the stored rate after an accepted external play (spec §6).
                     setRateImpl(desiredRate)
                 }
             } else {
-                commit(newSnapshot)
+                commit(newSnapshot, *deferredEvents)
             }
         }
     }
@@ -730,14 +934,16 @@ public abstract class AbstractMediampPlayer(
 
     private class OpenAttempt(
         val data: MediaData,
-        @Volatile var playWhenReady: Boolean,
-        @Volatile var startPositionMillis: Long,
+        var playWhenReady: Boolean,
+        var startPositionMillis: Long,
+        val session: SessionImpl,
     ) {
         var job: Job? = null
         val completion: CompletableDeferred<Unit> = CompletableDeferred()
-
-        @Volatile
         var installed: Boolean = false
+
+        /** Set when the attempt is cancelled before its job exists (mid-entry drain). */
+        var cancelRequested: MediaLoadCancellationException? = null
     }
 
     private fun unloadActiveSession() {
@@ -751,10 +957,35 @@ public abstract class AbstractMediampPlayer(
         lastReportedNativePwr = null
     }
 
+    /**
+     * A cancelled/superseded open may have loaded (or partially loaded) native media that now
+     * has no owner — e.g. stopPlayback aborting an open whose openImpl already assigned the
+     * source. Clears the backend unless a newer open/session owns it or close() handles
+     * teardown itself.
+     */
+    private fun stopOrphanedNativeMedia() {
+        if (activeOpen == null && activeSession == null && !closed.value) {
+            stopImpl()
+        }
+    }
+
     private fun cancelActiveOpen(reason: String) {
         val attempt = activeOpen ?: return
         activeOpen = null
-        attempt.job?.cancel(MediaLoadCancellationException(reason))
+        abortAttempt(attempt, MediaLoadCancellationException(reason))
+    }
+
+    private fun abortAttempt(attempt: OpenAttempt, cause: MediaLoadCancellationException) {
+        // Invalidate eagerly: facts from the cancelled open's session must not reach the
+        // machine in the window before the cancelled coroutine actually unwinds (spec §5
+        // session epochs).
+        attempt.session.invalidate()
+        val job = attempt.job
+        if (job != null) {
+            job.cancel(cause)
+        } else {
+            attempt.cancelRequested = cause
+        }
     }
 
     private fun releaseAsync(data: MediaData, resources: AutoCloseable?) {
@@ -783,15 +1014,18 @@ public abstract class AbstractMediampPlayer(
     private fun clampToNonNegative(value: Long): Long = value.coerceAtLeast(0L)
 
     private fun checkMainThread(method: String) {
-        check(isOnMainThread()) {
-            "MediampPlayer.$method must be called on the player's main thread (mainDispatcher=$mainDispatcher)"
+        val captured = machineThread ?: return // lenient until first machine execution
+        check(captured == currentThreadToken()) {
+            "MediampPlayer.$method must be called on the player's main-dispatcher thread " +
+                "(mainDispatcher=$mainDispatcher)"
         }
     }
 
     /**
      * Creates a [PlaybackSpeed] feature backed by the machine (spec §6): while not playing the
      * rate is only stored; the machine applies it on transitions to playing and after an
-     * accepted external play. Backends should register this in their features.
+     * accepted external play. [PlaybackSpeed.set] must be called on the machine thread
+     * (spec §4), like every other command.
      */
     protected fun machinePlaybackSpeed(): PlaybackSpeed = object : PlaybackSpeed {
         private val flow = MutableStateFlow(1f)
@@ -799,11 +1033,14 @@ public abstract class AbstractMediampPlayer(
         override val value: Float get() = flow.value
 
         override fun set(speed: Float) {
-            val coerced = speed.coerceAtLeast(0.1f)
-            flow.value = coerced
-            desiredRate = coerced
-            if (_state.value.isPlaying) {
-                setRateImpl(coerced)
+            checkMainThread("PlaybackSpeed.set")
+            runCommand {
+                val coerced = speed.coerceAtLeast(0.1f)
+                flow.value = coerced
+                desiredRate = coerced
+                if (_state.value.isPlaying) {
+                    setRateImpl(coerced)
+                }
             }
         }
     }

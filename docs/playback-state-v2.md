@@ -208,11 +208,12 @@ is NOT released) and the CE propagates. Callable from any thread.
 - The state machine is the **single writer** of all public flows, confined to
   `mainDispatcher`. Default: the platform UI dispatcher (`Dispatchers.Main` on
   Android/Apple/wasm; Swing EDT on desktop JVM). Constructor-overridable (headless/tests);
-  the fail-fast check compares against exactly this dispatcher's thread, so
+  the machine captures the identity of the dispatcher's thread on its first execution there,
+  and the fail-fast check compares against exactly that thread (lenient until captured), so
   `Dispatchers.setMain(StandardTestDispatcher)` test setups work.
-- `play/pause/stopPlayback/seekTo/skip`: must be called on the `mainDispatcher` thread;
-  violations throw `IllegalStateException` immediately (v1's unenforced `@UiThread` becomes a
-  real check).
+- `play/pause/stopPlayback/seekTo/skip` and `PlaybackSpeed.set`: must be called on the
+  `mainDispatcher` thread; violations throw `IllegalStateException` immediately (v1's
+  unenforced `@UiThread` becomes a real check).
 - `setMediaData`: any thread; hops internally (machine mutations on main, `MediaData.open` on
   IO).
 - `close()`: any thread; trampolines to the main dispatcher, emits Released exactly once.
@@ -262,7 +263,12 @@ data class TransportSnapshot(
   seeks (mpv emits one `playback-restart` for N queued seeks; the web seeking algorithm aborts
   a superseded seek without firing `seeked`), so a completion signal completes the **latest
   generation issued at its processing time**, and `notifySeekCompleted(G)` closes every
-  generation ≤ G. **Every issued `seekImpl` MUST eventually yield exactly one completion**,
+  generation ≤ G. On a **non-coalescing** engine (avkit: every `seek(to:)` invokes exactly
+  its own completion handler, exactly once), a successful completion is instead attributed to
+  the generation **stamped at seek issue time** — it closes every generation ≤ its own and
+  never a newer one, so a completion delivered late (e.g. trampolined across queues) cannot
+  close a seek that has not landed; the latest-at-processing rule applies only where the
+  engine actually coalesces. **Every issued `seekImpl` MUST eventually yield exactly one completion**,
   real or synthesized: on native refusal (mpv synchronous seek-command error — v1's
   `onSeekRejected` path; web `seekable` containing no ranges; avkit completion handler
   `finished == false` with no superseding machine-issued seek) the adapter synthesizes
@@ -313,10 +319,12 @@ data class TransportSnapshot(
 - **Ordering**: within a transition, the `state` emission commits **first**; `events`
   delivery is deferred to after the commit, in the same main-dispatcher turn. A
   `Main.immediate` events collector therefore always observes post-transition `state`
-  (I2 included). The machine is re-entrant for **commands** during the post-commit delivery
-  phase (the state is already committed, so a collector calling `play()` on receipt of
-  `MediaEnded` starts a well-defined new transition; later collectors of the same event may
-  observe the newer state).
+  (I2 included). Commands issued synchronously by a collector resumed **during** a transition
+  (from the `state` emission or the event delivery) are queued and run immediately after the
+  transition completes, in order, in the same main-dispatcher turn — so a collector calling
+  `play()` on receipt of `MediaEnded` starts a well-defined new transition, and a re-entrant
+  `close()` cannot interleave a transition half-way (I3 holds: the outer transition's events
+  fire before Released commits).
 
 **Notification × status matrix** (machine-side): `reportTransport` — intent component acts in
 Opening (updates pending intent) and Ready (reconciliation above); stall component acts only
@@ -324,8 +332,10 @@ in Ready (I1); everything dropped at Idle/Ended/Error/Released (an external play
 screen does NOT implicitly replay — replay requires an explicit `play()`; adapters SHOULD
 surface such platform commands to the app via their own channels if needed). `notifyEnded`
 acts in Ready (dropped in Opening/Idle/Ended). `notifyError` acts in Opening (fails the open:
-throw + Error) and Ready/Ended (→ Error). `notifyProperties`/`notifyPosition` act in
-Opening/Ready/Ended. Everything is dropped on an invalidated session.
+throw + Error) and Ready/Ended (→ Error). `notifyProperties` acts in Opening/Ready/Ended.
+`notifyPosition` acts in **Ready only**: during Opening the optimistic start position must
+not be clobbered by early demuxer ticks (§9), and at Ended the position stays pinned to the
+duration. Everything is dropped on an invalidated session.
 
 **Open handoff**: `openImpl` MUST apply the pending intent natively before completing the
 Ready point (mirroring `startPositionMillis`), and its completion hands the machine an initial
@@ -417,7 +427,8 @@ public class PlaybackException(
 ## 8. Resource lifecycle
 
 Single owner: the state machine. `MediaData.close()` is called exactly once per accepted
-resource, always `NonCancellable`, on the IO dispatcher, at: unload before a new open;
+resource, always `NonCancellable`, on the IO dispatcher (wasmJs, which has neither an IO
+dispatcher nor blocking IO, uses Default), at: unload before a new open;
 stopPlayback; close; Error entry; supersession of an in-flight open (after awaiting
 `openImpl`, §4); and `setMediaData` at Released (cell ², the caller's `data`). Ended
 **retains** the resource (replay is cheap); the next unload path releases it. Backend-
