@@ -13,7 +13,7 @@ Supported targets and backends:
 |    Platform    | Architecture(s) | Implementation |
 |:--------------:|-----------------|----------------|
 |    Android     | Any             | ExoPlayer      |
-| JVM on Windows | x86_64          | MPV            |
+| JVM on Windows | x86_64, AArch64 | MPV            |
 |  JVM on macOS  | x86_64, AArch64 | MPV            |
 |  JVM on Linux  | x86_64          | MPV            |
 |      iOS       | AArch64         | AVKit          |
