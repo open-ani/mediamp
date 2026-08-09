@@ -82,6 +82,46 @@ dependencies {
 > For multi-module projects, consider detailed
 > installation: [Detailed Installation](docs/detailed-installation.md).
 
+## Supported Media Formats
+
+Format support is determined by the backend on each platform.
+
+### Desktop JVM (MPV) — Windows, macOS, Linux
+
+The desktop backend bundles its own mpv and FFmpeg build, so the format list is fixed and
+identical across desktop platforms:
+
+- **Containers**: MP4/MOV, Matroska (MKV/WebM), MPEG-TS (incl. LATM/LOAS AAC broadcast streams),
+  AVI, ASF/WMV, RealMedia (RM/RMVB), MP3/FLAC/Ogg/AAC audio files, and HLS
+  (`http(s)` streaming and local playlists, incl. AES-encrypted)
+- **Video**: H.264, HEVC, AV1, VP9, MPEG-4 ASP (DivX/XviD), MPEG-2, VC-1, WMV 1/2/3,
+  RealVideo 3/4
+- **Audio**: AAC (incl. LATM), MP3, MP2, Opus, Vorbis, FLAC, AC-3, E-AC-3,
+  DTS (incl. DTS-HD MA), TrueHD, ALAC, WMA 1/2/Pro, RealAudio (Cook/Sipr/ATRAC3),
+  PCM/LPCM (incl. Blu-ray), ADPCM
+- **Subtitles**: ASS/SSA, SRT/SubRip, WebVTT, MP4 timed text, PGS, VobSub/DVD, SAMI, MicroDVD,
+  plain text — both embedded tracks and external files
+- **Hardware decoding**: D3D11VA (Windows), VideoToolbox (macOS), VAAPI (Linux);
+  AV1 additionally ships with dav1d for software fallback
+
+### Android (ExoPlayer)
+
+Containers (MP4, MKV/WebM, MPEG-TS, Ogg, FLAC, WAV) and HLS are handled by media3.
+Video/audio codec availability is device-dependent (`MediaCodec`): H.264 universally,
+HEVC/VP9/AV1 on devices shipping the decoders. Subtitles: SRT, SSA/ASS (basic styling), WebVTT,
+TTML, PGS, VobSub.
+
+### iOS (AVKit)
+
+Apple-native formats: MP4/MOV/M4V containers and HLS streams; H.264/HEVC (AV1 on devices with
+hardware decode); AAC/ALAC/AC-3/E-AC-3 audio; WebVTT subtitles. Matroska and ASS subtitles are
+not supported by AVFoundation.
+
+### Browser (wasm)
+
+Whatever the user's browser can play through `HTMLMediaElement` — typically MP4 (H.264, often
+HEVC/AV1/VP9) and WebM; HLS natively on Safari only.
+
 ## Usage
 
 ### Streaming Video
