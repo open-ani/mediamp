@@ -84,43 +84,57 @@ dependencies {
 
 ## Supported Media Formats
 
-Format support is determined by the backend on each platform.
+The desktop backend bundles its own mpv and FFmpeg build, so its format list is fixed and
+identical on Windows, macOS and Linux. The other backends delegate to the OS.
 
-### Desktop JVM (MPV) — Windows, macOS, Linux
+Legend: ✅ supported · 🔶 device/browser-dependent · ❌ not supported
 
-The desktop backend bundles its own mpv and FFmpeg build, so the format list is fixed and
-identical across desktop platforms:
+### Containers & Streaming
 
-- **Containers**: MP4/MOV, Matroska (MKV/WebM), MPEG-TS (incl. LATM/LOAS AAC broadcast streams),
-  AVI, ASF/WMV, RealMedia (RM/RMVB), MP3/FLAC/Ogg/AAC audio files, and HLS
-  (`http(s)` streaming and local playlists, incl. AES-encrypted)
-- **Video**: H.264, HEVC, AV1, VP9, MPEG-4 ASP (DivX/XviD), MPEG-2, VC-1, WMV 1/2/3,
-  RealVideo 3/4
-- **Audio**: AAC (incl. LATM), MP3, MP2, Opus, Vorbis, FLAC, AC-3, E-AC-3,
-  DTS (incl. DTS-HD MA), TrueHD, ALAC, WMA 1/2/Pro, RealAudio (Cook/Sipr/ATRAC3),
-  PCM/LPCM (incl. Blu-ray), ADPCM
-- **Subtitles**: ASS/SSA, SRT/SubRip, WebVTT, MP4 timed text, PGS, VobSub/DVD, SAMI, MicroDVD,
-  plain text — both embedded tracks and external files
-- **Hardware decoding**: D3D11VA (Windows), VideoToolbox (macOS), VAAPI (Linux);
-  AV1 additionally ships with dav1d for software fallback
+| Format                    | Desktop (MPV) | Android (ExoPlayer) | iOS (AVKit) | Browser (wasm) |
+|---------------------------|:-------------:|:-------------------:|:-----------:|:--------------:|
+| MP4 / MOV                 | ✅             | ✅                   | ✅           | ✅              |
+| Matroska (MKV)            | ✅             | ✅                   | ❌           | ❌              |
+| WebM                      | ✅             | ✅                   | ❌           | ✅              |
+| MPEG-TS                   | ✅             | ✅                   | ❌           | ❌              |
+| HLS (incl. AES-encrypted) | ✅             | ✅                   | ✅           | 🔶 Safari only  |
 
-### Android (ExoPlayer)
+### Video Codecs
 
-Containers (MP4, MKV/WebM, MPEG-TS, Ogg, FLAC, WAV) and HLS are handled by media3.
-Video/audio codec availability is device-dependent (`MediaCodec`): H.264 universally,
-HEVC/VP9/AV1 on devices shipping the decoders. Subtitles: SRT, SSA/ASS (basic styling), WebVTT,
-TTML, PGS, VobSub.
+| Codec        | Desktop (MPV) | Android (ExoPlayer) | iOS (AVKit) | Browser (wasm) |
+|--------------|:-------------:|:-------------------:|:-----------:|:--------------:|
+| H.264 / AVC  | ✅             | ✅                   | ✅           | ✅              |
+| H.265 / HEVC | ✅             | 🔶                   | ✅           | 🔶              |
+| AV1          | ✅             | 🔶                   | 🔶           | 🔶              |
+| VP9          | ✅             | 🔶                   | ❌           | ✅              |
 
-### iOS (AVKit)
+Hardware decoding on desktop: D3D11VA (Windows), VideoToolbox (macOS), VAAPI (Linux);
+AV1 additionally bundles dav1d for software fallback. Android/iOS/Browser use the
+platform decoders (`MediaCodec` / VideoToolbox / browser-managed).
 
-Apple-native formats: MP4/MOV/M4V containers and HLS streams; H.264/HEVC (AV1 on devices with
-hardware decode); AAC/ALAC/AC-3/E-AC-3 audio; WebVTT subtitles. Matroska and ASS subtitles are
-not supported by AVFoundation.
+### Audio Codecs
 
-### Browser (wasm)
+| Codec                 | Desktop (MPV) | Android (ExoPlayer) | iOS (AVKit) | Browser (wasm) |
+|-----------------------|:-------------:|:-------------------:|:-----------:|:--------------:|
+| AAC (incl. LATM/LOAS) | ✅             | ✅                   | ✅           | ✅              |
+| MP3                   | ✅             | ✅                   | ✅           | ✅              |
+| Opus                  | ✅             | ✅                   | ❌           | ✅              |
+| FLAC                  | ✅             | ✅                   | ✅           | ✅              |
+| AC-3 / E-AC-3         | ✅             | 🔶                   | ✅           | ❌              |
+| DTS (incl. DTS-HD MA) | ✅             | 🔶                   | ❌           | ❌              |
 
-Whatever the user's browser can play through `HTMLMediaElement` — typically MP4 (H.264, often
-HEVC/AV1/VP9) and WebM; HLS natively on Safari only.
+### Subtitles
+
+| Format       | Desktop (MPV)     | Android (ExoPlayer) | iOS (AVKit) | Browser (wasm) |
+|--------------|:-----------------:|:-------------------:|:-----------:|:--------------:|
+| ASS / SSA    | ✅ full rendering  | 🔶 basic styling     | ❌           | ❌              |
+| SRT / SubRip | ✅                 | ✅                   | ❌           | ❌              |
+| WebVTT       | ✅                 | ✅                   | ✅           | ✅              |
+| PGS          | ✅                 | ✅                   | ❌           | ❌              |
+
+The tables above list common formats only. The desktop backend additionally plays many legacy
+formats (AVI/WMV/RMVB, MPEG-2/VC-1/RealVideo, WMA/TrueHD, VobSub/SAMI, ...) — see
+[docs/supported-formats.md](docs/supported-formats.md) for the full per-platform breakdown.
 
 ## Usage
 
