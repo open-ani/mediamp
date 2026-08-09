@@ -9,6 +9,7 @@ import nativebuild.artifactSuffix
 import nativebuild.createDependencyOnlyJvmRuntimeElements
 import nativebuild.isSharedRuntimeLibrary
 import nativebuild.manifestRelativePath
+import nativebuild.markAsAlias
 import nativebuild.orderLibrariesByPrefixes
 import nativebuild.orderWindowsDllsByDependencies
 import nativebuild.publicationSuffix
@@ -145,6 +146,7 @@ internal fun configureRuntimePublishing(
                     artifactId = "mediamp-mpv",
                     version = deployVersion,
                 )
+                markAsAlias()
             }
         }
     }

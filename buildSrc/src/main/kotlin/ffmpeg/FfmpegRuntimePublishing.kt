@@ -9,6 +9,7 @@ import nativebuild.PublishedArtifact
 import nativebuild.addCompilePomDependency
 import nativebuild.artifactSuffix
 import nativebuild.createDependencyOnlyDesktopRuntimeElements
+import nativebuild.markAsAlias
 import nativebuild.isSharedRuntimeLibrary
 import nativebuild.manifestRelativePath
 import nativebuild.orderLibrariesByPrefixes
@@ -154,6 +155,7 @@ internal fun configureRuntimePublishing(
                     artifactId = "mediamp-ffmpeg",
                     version = deployVersion,
                 )
+                markAsAlias()
             }
         }
 
@@ -168,6 +170,7 @@ internal fun configureRuntimePublishing(
                     classifier = null
                     xcframeworkArtifact.builtBy?.let { builtBy(it) }
                 }
+                markAsAlias()
             }
         }
     }

@@ -106,7 +106,17 @@ internal fun Project.publishDesktopRuntimeAggregator(
         this.artifactId = artifactId
         this.version = version
         stripPomDependencies()
+        markAsAlias()
     }
+}
+
+/**
+ * Marks an artifact-only publication as an alias, so that a project dependency on a project
+ * carrying several publications still resolves to the main (component) publication's
+ * coordinates when a consumer's publication metadata is generated.
+ */
+internal fun MavenPublication.markAsAlias() {
+    (this as org.gradle.api.publish.maven.internal.publication.MavenPublicationInternal).isAlias = true
 }
 
 internal fun MavenPublication.addCompilePomDependency(
