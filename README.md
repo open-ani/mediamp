@@ -28,9 +28,7 @@ in state spec v2.
 > [!WARNING]
 >
 > **Pre-1.0**: minor releases may contain breaking API changes; they are called out in the release
-> notes. The playback state model is specified
-> in [docs/playback-state-v2.md](docs/playback-state-v2.md). Please open an issue if you have any
-> suggestions or find any bugs.
+> notes. Please open an issue if you have any suggestions or find any bugs.
 
 ## Installation
 
