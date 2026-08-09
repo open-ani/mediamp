@@ -27,10 +27,10 @@ in state spec v2.
 
 > [!WARNING]
 >
-> **This is a work in progress.**
->
-> No API/ABI guarantees are provided before `v0.1.0` release, but we would still like to hear your
-> feedback. Please open an issue if you have any suggestions or find any bugs.
+> **Pre-1.0**: minor releases may contain breaking API changes; they are called out in the release
+> notes. The playback state model is specified
+> in [docs/playback-state-v2.md](docs/playback-state-v2.md). Please open an issue if you have any
+> suggestions or find any bugs.
 
 ## Installation
 
@@ -42,7 +42,7 @@ is: [![Maven Central](https://img.shields.io/maven-central/v/org.openani.mediamp
 ```toml
 [versions]
 # Replace with the latest version
-mediamp = "0.0.23"
+mediamp = "0.3.0"
 
 [libraries]
 mediamp-all = { module = "org.openani.mediamp:mediamp-all", version.ref = "mediamp" }
@@ -76,7 +76,7 @@ The `-all` bundle includes:
 ```kotlin
 dependencies {
     // Replace with the latest version
-    commonMainApi("org.openani.mediamp:mediamp-all:0.0.23")
+    commonMainApi("org.openani.mediamp:mediamp-all:0.3.0")
 }
 ```
 
@@ -104,6 +104,28 @@ fun main() = singleWindowApplication {
         MediampPlayerSurface(player, Modifier.fillMaxSize())
     }
 }
+```
+
+### Observing Playback State
+
+The player state is an atomic snapshot [`PlayerState`](mediamp-api/src/commonMain/kotlin/PlayerState.kt)
+of three orthogonal axes, observed via `player.state` (spec: `docs/playback-state-v2.md`):
+
+```kotlin
+val state: PlayerState = player.state.value
+state.mediaStatus   // lifecycle: Idle / Opening / Ready / Ended / Error / Released
+state.playWhenReady // play/pause intent — drive the play/pause button icon with this
+state.isBuffering   // data availability — show a spinner when state.isLoadingOrBuffering
+```
+
+```kotlin
+// Play/pause button: never dead, no flicker during buffering.
+Button(onClick = { player.togglePlayWhenReady() }) {
+    Icon(if (state.playWhenReady) PauseIcon else PlayIcon)
+}
+
+// Session-advancing reactions (e.g. auto-play-next) use events, not state:
+player.events.filterIsInstance<PlaybackEvent.MediaEnded>().collect { playNextEpisode() }
 ```
 
 ### Accessing Player Features in commonMain
@@ -189,8 +211,7 @@ fun main() = singleWindowApplication {
     Column {
         Button(onClick = {
             scope.launch {
-                player.setMediaData(createMediaData())
-                player.resume()
+                player.setMediaData(createMediaData(), playWhenReady = true)
             }
         }) {
             Text("Play")
@@ -276,11 +297,9 @@ transitive dependencies, the backend-specific implementations may have different
 A breakdown of the licenses:
 
 - mediamp-exoplayer: Apache License 2.0 (Apache-v2)
-- mediamp-vlc: GNU GENERAL PUBLIC LICENSE Version 3 (GPLv3)
 - mediamp-mpv: Apache License 2.0
-- All other modules: Apache License 2.0
+- All other published modules: Apache License 2.0
 
+The deprecated, no-longer-published mediamp-vlc sources remain GPLv3 (`mediamp-vlc/LICENSE`).
 You can find the full license text of Apache-v2 in the `LICENSE` file from the root of the
-repository, and that of GPLv3 from `mediamp-vlc/LICENSE`.
-
-[vlcj]: https://github.com/caprica/vlcj
+repository.
