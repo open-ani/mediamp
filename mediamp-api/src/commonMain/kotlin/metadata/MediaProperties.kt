@@ -25,11 +25,12 @@ public class MediaProperties(
      */
     public val title: String? = null,
     /**
-     * Total duration of the media in milliseconds.
+     * Total duration of the media in milliseconds, or `null` if unknown (e.g. live streams).
      *
-     * This value might be `-1` if the duration is unknown.
+     * Never negative: sentinel values from backends (e.g. media3's `C.TIME_UNSET`) must be
+     * translated to `null`, not passed through.
      */
-    public val durationMillis: Long = -1L
+    public val durationMillis: Long? = null
 ) {
     public override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -43,7 +44,7 @@ public class MediaProperties(
 
     public override fun hashCode(): Int {
         var result = title?.hashCode() ?: 0
-        result = 31 * result + durationMillis.hashCode()
+        result = 31 * result + (durationMillis?.hashCode() ?: 0)
         return result
     }
 
@@ -52,7 +53,7 @@ public class MediaProperties(
      */
     public fun copy(
         title: String? = this.title,
-        durationMillis: Long = this.durationMillis,
+        durationMillis: Long? = this.durationMillis,
     ): MediaProperties = MediaProperties(
         title = title,
         durationMillis = durationMillis,
@@ -68,9 +69,9 @@ public class MediaProperties(
 }
 
 /**
- * Total duration of the media, in Kotlin [Duration].
+ * Total duration of the media, in Kotlin [Duration], or `null` if unknown.
  */
-public inline val MediaProperties.duration: Duration get() = durationMillis.milliseconds
+public inline val MediaProperties.duration: Duration? get() = durationMillis?.milliseconds
 
 /**
  * Returns an empty [MediaProperties] instance if [this] is `null`, or the original instance otherwise.

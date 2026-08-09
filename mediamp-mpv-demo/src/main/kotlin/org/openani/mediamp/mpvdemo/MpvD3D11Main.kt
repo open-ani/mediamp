@@ -15,8 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -27,10 +27,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.singleWindowApplication
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
+import org.openani.mediamp.PlaybackEvent
+import org.openani.mediamp.PlaybackException
+import org.openani.mediamp.isLoadingOrBuffering
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import org.openani.mediamp.mpv.compose.MpvMediampPlayerSurface
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
+import org.openani.mediamp.togglePlayWhenReady
 
 /**
  * Smoke-test entry for the production mediamp-mpv render path (Windows D3D11 / macOS
@@ -69,10 +75,67 @@ fun main(args: Array<String>) {
 
         var loadError by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(player) {
-            runCatching {
-                player.setMediaData(UriMediaData(videoUri, emptyMap(), MediaExtraFiles.EMPTY))
-                player.resume()
-            }.onFailure { loadError = it.toString() }
+            try {
+                player.setMediaData(
+                    UriMediaData(videoUri, emptyMap(), MediaExtraFiles.EMPTY),
+                    playWhenReady = true,
+                )
+            } catch (e: PlaybackException) {
+                loadError = e.toString()
+            }
+        }
+        // Loop for sustained smoke runs. Session-advancing reactions use `events`, not the
+        // conflated `state`; at Ended, play() replays from the beginning (state-spec v2).
+        LaunchedEffect(player) {
+            player.events.filterIsInstance<PlaybackEvent.MediaEnded>().collect {
+                player.play()
+            }
+        }
+
+        // Smoke-test hook: every state snapshot and event on stdout, so playback state
+        // transitions can be verified from the run log without a visible window.
+        LaunchedEffect(player) {
+            player.state.collect { println("[demo] state: $it") }
+        }
+        LaunchedEffect(player) {
+            player.events.collect { println("[demo] event: $it") }
+        }
+        LaunchedEffect(player) {
+            var last = -1L
+            player.currentPositionMillis.collect { pos ->
+                if (pos / 1000 != last) {
+                    last = pos / 1000
+                    println("[demo] position: ${pos}ms")
+                }
+            }
+        }
+
+        // Self-driving smoke scenario: -Dmpvdemo.script=smoke drives the player through a
+        // scripted pause/play/seek/EOF sequence against the real backend, logging every
+        // state/event. Turns manual playback verification into a repeatable check:
+        // expected log shape: Ready(playing) -> pause -> play -> seek (SeekCompleted)
+        // -> seek-to-near-end -> MediaEnded -> replay via the events loop above.
+        if (System.getProperty("mpvdemo.script") == "smoke") {
+            LaunchedEffect(player) {
+                player.state.first { it.mediaStatus == org.openani.mediamp.MediaStatus.Ready }
+                kotlinx.coroutines.delay(5_000)
+                println("[demo][script] pause()")
+                player.pause()
+                kotlinx.coroutines.delay(2_000)
+                println("[demo][script] play()")
+                player.play()
+                kotlinx.coroutines.delay(2_000)
+                println("[demo][script] seekTo(current + 30s)")
+                player.skip(30_000)
+                kotlinx.coroutines.delay(3_000)
+                val duration = player.mediaProperties.value?.durationMillis
+                if (duration != null) {
+                    println("[demo][script] seekTo(duration - 2s) — expecting MediaEnded soon")
+                    player.seekTo(duration - 2_000)
+                } else {
+                    println("[demo][script] duration unknown (live source) — skipping EOF leg")
+                }
+            }
         }
 
         // Smoke-test hook: -Dmpvdemo.screenshot.dir=<dir> dumps a frame readback every
@@ -91,7 +154,7 @@ fun main(args: Array<String>) {
             }
         }
 
-        val playbackState by player.playbackState.collectAsState()
+        val playerState by player.state.collectAsState()
         val positionMillis by player.currentPositionMillis.collectAsState()
         val properties by player.mediaProperties.collectAsState()
 
@@ -101,14 +164,15 @@ fun main(args: Array<String>) {
                 DemoOverlay(
                     title = "mediamp-mpv production path (D3D11/Metal/GLX)",
                     statusLine = loadError
-                        ?: "state: $playbackState   uri: $videoUri",
-                    statusOk = loadError == null && playbackState == org.openani.mediamp.PlaybackState.PLAYING,
-                    paused = playbackState == org.openani.mediamp.PlaybackState.PAUSED,
+                        ?: "mediaStatus: ${playerState.mediaStatus}   state: $playerState   uri: $videoUri",
+                    statusOk = loadError == null && playerState.isPlaying,
+                    // Button icon derives from the intent axis, never from buffering.
+                    paused = !playerState.playWhenReady,
+                    isLoading = playerState.isLoadingOrBuffering,
                     positionSeconds = positionMillis / 1000.0,
-                    durationSeconds = (properties?.durationMillis ?: 0L).coerceAtLeast(0L) / 1000.0,
-                    onTogglePause = {
-                        if (playbackState == org.openani.mediamp.PlaybackState.PAUSED) player.resume() else player.pause()
-                    },
+                    durationSeconds = (properties?.durationMillis ?: 0L) / 1000.0,
+                    // Never dead in any loaded state; replays at Ended.
+                    onTogglePause = { player.togglePlayWhenReady() },
                     onSeek = { player.seekTo((it * 1000).toLong()) },
                     modifier = Modifier.fillMaxSize(),
                 )

@@ -96,7 +96,7 @@ internal class MpvPreviewDecoder(
 
     /**
      * Loads [data] into mpv with playback paused (mirrors the media-loading part of
-     * `JvmMpvMediampPlayer.setMediaDataImpl`). Never closes [data] — it is owned by the
+     * `JvmMpvMediampPlayer.openImpl`). Never closes [data] — it is owned by the
      * main player; only the input opened here for stream_cb media is owned by this
      * decoder. Idempotent: a retry after a failed first-frame wait re-issues loadfile.
      */

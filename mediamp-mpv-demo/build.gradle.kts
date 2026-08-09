@@ -17,8 +17,6 @@ description = "Prototype: mpv hardware decoding rendered into Compose Desktop vi
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
-    // Baseline for benchmarking: the current production VLC stack.
-    implementation(projects.mediampVlc)
     implementation(projects.mediampApi)
     // Production mpv path (runD3D11 smoke demo).
     implementation(projects.mediampMpv)
@@ -77,13 +75,10 @@ tasks.register<JavaExec>("runD3D11") {
     )
     (findProperty("video") as String?)?.let { args(it) }
     (findProperty("screenshotDir") as String?)?.let { systemProperty("mpvdemo.screenshot.dir", it) }
-}
-
-// VLC baseline player for benchmarks: ./gradlew :mediamp-mpv-demo:runVlc -Pvideo=/path/to.mp4
-tasks.register<JavaExec>("runVlc") {
-    group = "mediamp"
-    description = "Run the VLC baseline demo (same window and overlay as the mpv demo)"
-    mainClass = "org.openani.mediamp.mpvdemo.VlcMainKt"
-    classpath = sourceSets["main"].runtimeClasspath
-    (findProperty("video") as String?)?.let { args(it) }
+    // -PdemoScript=smoke runs the self-driving pause/play/seek/EOF verification scenario.
+    (findProperty("demoScript") as? String)?.let { systemProperty("mpvdemo.script", it) }
+    // -PruntimeDir=<dir> overrides the assembled-runtime location (e.g. the dev-native dir).
+    (findProperty("runtimeDir") as? String)?.let { systemProperty("mediamp.mpv.runtime.dir", it) }
+    // -PdebugProps=1 logs every mpv property notification to stderr.
+    (findProperty("debugProps") as? String)?.let { systemProperty("mediamp.mpv.debug.props", it) }
 }

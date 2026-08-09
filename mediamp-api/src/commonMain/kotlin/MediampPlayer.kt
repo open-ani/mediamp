@@ -1,19 +1,19 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(InternalMediampApi::class)
-
 package org.openani.mediamp
 
-import androidx.annotation.UiThread
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.openani.mediamp.features.MediaMetadata
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.metadata.MediaProperties
 import org.openani.mediamp.source.MediaData
@@ -21,306 +21,225 @@ import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
 
 /**
- * An extensible media player that plays [MediaData]s. Instances can be obtained from a [MediampPlayerFactory].
+ * An extensible media player that plays [MediaData]s. Instances can be obtained from a
+ * [MediampPlayerFactory].
  *
- * The [MediampPlayer] interface itself defines only the minimal API for controlling the player, including:
- * - Playback State: [playbackState], [mediaData], [mediaProperties], [currentPositionMillis], [playbackProgress]
- * - Playback Control: [pause], [resume], [stopPlayback], [seekTo], [skip]
+ * ## State model
  *
- * Depending on whether the underlying player implementation supports a feature, [features] can be used to access them.
+ * The player state is the atomic snapshot [PlayerState], observed via [state]:
+ * three orthogonal axes — [PlayerState.mediaStatus] (lifecycle), [PlayerState.playWhenReady]
+ * (intent), [PlayerState.isBuffering] (data availability). The normative specification lives
+ * in `docs/playback-state-v2.md`; the KDoc here is a summary.
  *
- * ## Lifecycle
- * 
- * MediampPlayer uses [PlaybackState] to represent the current state of the player.
- * 
- * MediampPlayer implementations (with VLC or MPV, or any others) are required to respect to the following state transition mechanism.
- * 
- * > Hint: You may toggle off doc rendering in IDE if diagram glitches
- * 
+ * Common consumer patterns:
+ * ```kotlin
+ * // Play/pause button:
+ * val icon = if (state.playWhenReady) PauseIcon else PlayIcon      // icon
+ * onClick = { player.togglePlayWhenReady() }                       // never dead
+ * // Loading spinner:
+ * val showSpinner = state.isLoadingOrBuffering
+ * // Ended screen (passive UI):
+ * val showEnded = state.mediaStatus == MediaStatus.Ended
+ * // Auto-play-next (advances the session — use events, not state):
+ * player.events.filterIsInstance<PlaybackEvent.MediaEnded>().collect { ... }
+ * // Error UI:
+ * val error = state.errorOrNull
  * ```
- * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
- * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
- * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
- *       |            |           |            |            |          |            |             |
- *       |            |-----------+------------+----------->*<---------+------------+-------------|  setMediaData
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |----------+----------->|             |  resume
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |----------+------------------------->|  resume
- *       |            |           |            |            |          |            |             |  (buffering)
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |          |            |------------>|  seekTo/skip
- *       |            |           |            |            |          |            |             |  (buffering)
- *       |            |           |            |            |          |            |             |  
- *       |            |           |            |            |          |            |<------------|  (buffer complete)
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |            |          |<-----------+-------------|  pause
- *       |            |           |            |            |          |            |             |
- *       |            |           |            |<-----------+----------+------------+-------------|  stopPlayback
- *       |            |           |            |            |          |            |             |  (or playback finished)
- *       |            |           |            |            |          |            |             |
- *       |            |<----------+------------+------------+----------+------------+-------------|  (error)
- *       |            |           |            |            |          |            |             |
- *       |<-----------+-----------+------------+------------+----------+------------+-------------|  close
- *       |            |           |            |            |          |            |             |
- * +-----+-----+  +---+---+  +----+----+  +----+-----+  +---+---+  +---+----+  +----+----+  +-----+-----+
- * | DESTROYED |  | ERROR |  | CREATED |  | FINISHED |  | READY |  | PAUSED |  | PLAYING |  | BUFFERING |
- * +-----------+  +-------+  +---------+  +----------+  +-------+  +--------+  +---------+  +-----------+
- * 
- * ```
- * Calling the method labelled to the right of the diagram, at any state included in the path, 
- * will transform the state to the destination state pointed by arrow.
- * 
- * For example, calling [stopPlayback] when `state >= READY`(incl [READY][PlaybackState.READY], [PAUSED][PlaybackState.PAUSED], 
- * [PLAYING][PlaybackState.PLAYING], [BUFFERING][PlaybackState.PAUSED_BUFFERING]) will always transform state to `FINISHED`.
- * 
- * ### Invalid calls are ignored
  *
- * Calls to any method while not at its state transformation path will be ignored.
- * 
- * For example, calling [stopPlayback] at state [FINISHED][PlaybackState.FINISHED], [CREATED][PlaybackState.CREATED], 
- * [ERROR][PlaybackState.ERROR] and [DESTROYED][PlaybackState.DESTROYED] will be ignored and take no effect.
+ * ## Threading
  *
- * ### State transform directly to target state
- * 
- * Although each method has its transformation path, calling will not produce intermediate state.
- * 
- * For example, call [close] at [PLAYING][PlaybackState.PLAYING] will directly transform state to [DESTROYED][PlaybackState.DESTROYED].
- * Any state of `state >= ERROR && state <= PAUSED` will be emitted.
- * 
- * ### [setMediaData] is special
- *
- * `setMediaData` has special transformation path. It will always transform state into [READY][PlaybackState.READY] and may have intermediate state transformation.
- * Because user can set new media data at any state or any time except [DESTROYED][PlaybackState.DESTROYED] state, including [READY][PlaybackState.READY] state itself.
- * 
- * See [setMediaData] for more details.
- *
- * ### Error can occurred at any time
- * 
- * When *fatal error* occurred, state will always be transformed to [ERROR][PlaybackState.ERROR] directly.
- *
- * Error state has high priority. If an error occurred at background while calling a method, final state should be [ERROR][PlaybackState.ERROR].
- * 
- * ## Additional Features
- *
- * - [org.openani.mediamp.features.AudioLevelController]: Controls the audio volume and mute state.
- * - [org.openani.mediamp.features.Buffering]: Monitors the buffering progress.
- * - [org.openani.mediamp.features.PlaybackSpeed]: Controls the playback speed.
- * - [org.openani.mediamp.features.Screenshots]: Captures screenshots of the video.
- *
- * To obtain a feature, use the [PlayerFeatures.get] on [features].
- *
- * ## Threading Model
- *
- * This interface is not thread-safe. Concurrent calls to [resume] will lead to undefined behavior.
- * However, flows might be collected from multiple threads simultaneously while performing another call like [resume] on a single thread.
- *
- * Playback control methods are expected to be called from the UI thread. Calls from illegal threads will cause an exception.
- * Asynchronous operations of actual player implementations should ensure that playback state must be transformed to target state.
- *
- * On other platforms, calls are not required to be on the UI thread but should still be called from a single thread.
- * The implementation is guaranteed to be non-blocking and fast so, it is a recommended approach of making all calls from the UI thread in common code.
+ * [play], [pause], [stopPlayback], [seekTo] and [skip] must be called on the thread of
+ * [mainDispatcher] (the platform UI thread by default); violations throw
+ * [IllegalStateException]. [setMediaData] and [close] may be called from any thread.
  *
  * ## Not safe for inheritance
  *
- * [MediampPlayer] interface is not safe for inheritance from third-party users, as new abstract methods might be added in the future.
+ * [MediampPlayer] is not safe for third-party inheritance: new members may be added.
+ * Extend [AbstractMediampPlayer] to implement a backend.
  */
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface MediampPlayer : AutoCloseable {
     /**
-     * The underlying player implementation.
-     * It can be cast to the actual player implementation to access additional features that are not yet ported by Mediamp.
-     * 
-     * *WARNING*: You should not access methods which may change playback state.
-     * Otherwise the state of [MediampPlayer] will be inconsistent with the actual state of the player, which will cause unexpected behaviours.
-     *
-     * Refer to platform-specific inheritor of [MediampPlayer] for the actual type of this property.
+     * The underlying player implementation. Cast to the backend type for features not yet
+     * ported by Mediamp. Do NOT call methods that change transport or lifecycle state —
+     * doing so desynchronizes the state machine.
      */
     public val impl: Any
 
     /**
-     * A hot flow of the current playback state. Collect on this flow to receive state updates.
-     *
-     * States might be changed either by user interaction ([resume]) or by the player itself (e.g. decoder errors).
-     *
-     * To retrieve the current state without suspension, use [getCurrentPlaybackState].
-     * 
-     * `Implementation notes`: New state must be emitted only when the call to the delegated player finishes an transition. 
-     * For example, emit `PlaybackState.PLAYING` only if `ExoPlayer.resume()` succeeds.
-     *
-     * @see getCurrentPlaybackState
+     * The canonical player state: serialized, in-order, atomic snapshots.
+     * @see PlayerState
      */
-    public val playbackState: StateFlow<PlaybackState>
+    public val state: StateFlow<PlayerState>
 
     /**
-     * The video data of the currently playing video.
+     * Edge-type playback facts, delivered losslessly to subscribed, keeping-up collectors.
+     * Use for reactions that advance the session (auto-play-next); use [state] for UI.
+     * Subscribe before issuing commands; there is no replay.
+     * @see PlaybackEvent
      */
-    public val mediaData: Flow<MediaData?>
+    public val events: SharedFlow<PlaybackEvent>
 
     /**
-     * Properties of the video being played.
-     *
-     * Note that it may not be available immediately after [setMediaData] returns,
-     * since the properties may be callback from the underlying player implementation.
-     *
-     * To get more metadata information, e.g. audio tracks, subtitles and chapters, use [features] to get [MediaMetadata].
-     * @see features
-     * @see MediaMetadata
-     * @see getCurrentMediaProperties
+     * The currently loaded media, or `null` when [PlayerState.mediaStatus] is
+     * [MediaStatus.Idle], [MediaStatus.Opening], [MediaStatus.Error] or [MediaStatus.Released].
+     * Retained at [MediaStatus.Ended].
+     */
+    public val mediaData: StateFlow<MediaData?>
+
+    /**
+     * Properties (title, duration) of the loaded media; `null` while unknown.
+     * [MediaProperties.durationMillis] is `null` for live/unknown-duration media.
      */
     public val mediaProperties: StateFlow<MediaProperties?>
 
     /**
-     * Gets the current media properties without suspension.
-     *
-     * To subscribe for updates, use [mediaProperties].
-     * @see mediaProperties
-     */
-    public fun getCurrentMediaProperties(): MediaProperties?
-
-    /**
-     * Current playback position of the video being played in millis seconds, ranged from `0` to [MediaProperties.durationMillis].
-     *
-     * `0` if no video is being played ([mediaData] is null).
-     *
-     * To obtain the current position without suspension, use [getCurrentPositionMillis].
-     *
-     * @see getCurrentPositionMillis
+     * Current playback position in milliseconds. `0` when no media is loaded.
+     * Updated optimistically on [seekTo].
      */
     public val currentPositionMillis: StateFlow<Long>
 
     /**
-     * A cold flow of the current playback progress, ranged from `0.0` to `1.0`.
-     *
-     * There is no guarantee on the frequency of updates, but it should normally be updated at once per second.
+     * Playback progress in `0f..1f`; `0f` when duration is unknown.
      */
     public val playbackProgress: Flow<Float>
 
     /**
-     * Additional features that are supported by the underlying player implementation.
+     * Additional features supported by the backend.
      */
     public val features: PlayerFeatures
 
     /**
-     * Sets the media data to play, updating [mediaData], and calling the underlying player implementation to start playing.
-     *
-     * This method is thread-safe and can be called from any thread, including the UI thread.
-     *
-     * Setting the same [MediaData] will be ignored.
-     *
-     * ### State transition
-     * 
-     * If [data] is not equal to the currently playing media data, the later will be closed before [data] is set. 
-     * That is equivalent to (atomically) calling [stopPlayback] before calling this method, in which case [playbackState] may emit a [FINISHED]. 
-     *
-     * **State transition may be asynchronous and cancellable.**
-     * Depending on whether the player implements synchronous opening or asynchronous opening, 
-     * this method returns normally, [playbackState] either has already emitted [READY][PlaybackState.READY] or will emit it in the near future. 
-     * In other words:
-     * 
-     * - If the player implements synchronous media opening (e.g. [TestMediampPlayer][org.openani.mediamp.test.TestMediampPlayer]), observers of [playbackState] will have already seen an [READY][PlaybackState.READY] state before this method returns. 
-     * Or, this method may throw an exception to indicate an error, and transit state to [ERROR][PlaybackState.ERROR].
-     * 
-     * - If the player implements asynchronous media opening (e.g. ExoPlayer), observers of [playbackState] MAY NOT have already seen an [READY][PlaybackState.READY] state before this method returns. 
-     * Instead, the observers may collect an [READY][PlaybackState.READY] in arbitrary time after this method returns.
-     * Decoding errors can only be seen by the observers, not the caller of [setMediaData]. 
-     * If before the [READY][PlaybackState.READY] is emit (i.e. before initial video decoding is completed), [setMediaData] is called again, a new asynchronous opening process will start, cancelling the old one. 
-     * So observers will not see an [READY][PlaybackState.READY] for the old media, but only the one for the new [data].
-     * 
-     * ### Error handling
-     * 
-     * This method will open media data by calling [MediaData.open], if and only if the [data] instance is different from the currently playing media data.
-     * 
-     * If an exception is occurred while opening, the playback state will transform to [ERROR][PlaybackState.ERROR], 
-     * while the exception will also be propagated to the caller.
-     * 
-     * Note that only exceptions during [opening][MediaData.open] are propagated. 
-     * Exceptions happened in the player implementation, for example, asynchronous video decoding, etc., will NOT be thrown from this method. 
-     * These errors can be seen by observing the [playbackState] flow.
-     *
-     * @see stopPlayback
+     * The dispatcher the player's state machine is confined to. Playback commands must be
+     * called on its thread.
      */
-    public suspend fun setMediaData(data: MediaData)
+    public val mainDispatcher: CoroutineDispatcher
 
     /**
-     * Gets the current playback state without suspension.
+     * Loads [data], replacing any current media.
      *
-     * To subscribe for updates, use [playbackState].
+     * Emits [MediaStatus.Opening], then suspends until the media is truly opened (metadata
+     * available) — a nonexistent/unreachable/unsupported source fails inside this call on
+     * every backend.
      *
-     * @see playbackState
+     * On normal return, [MediaStatus.Ready] has been committed with the requested
+     * [playWhenReady] intent and [startPositionMillis] applied (a start position at/beyond
+     * the media end advances to [MediaStatus.Ended] in the same turn).
+     *
+     * Autoplay is explicit: the default `playWhenReady = false` loads paused; pass `true` or
+     * call [play] after.
+     *
+     * @throws PlaybackException if opening fails (also emitted as [MediaStatus.Error]).
+     * @throws MediaLoadCancellationException if superseded by a newer call, or aborted by
+     *   [stopPlayback]/[close]. Callers catching it must `ensureActive()` before recovery.
      */
-    public fun getCurrentPlaybackState(): PlaybackState
+    public suspend fun setMediaData(
+        data: MediaData,
+        playWhenReady: Boolean = false,
+        startPositionMillis: Long = 0L,
+    )
 
     /**
-     * Obtains the exact current playback position of the video in milliseconds, without suspension.
-     *
-     * If no video is being played, this method will return `0`.
-     *
-     * To subscribe for updates, use [currentPositionMillis].
+     * Sets the play intent to `true`, synchronously ([state]`.value.playWhenReady` is `true`
+     * on return when media is loaded or opening). At [MediaStatus.Ended] this replays from
+     * the beginning. No-op at [MediaStatus.Idle], [MediaStatus.Error], [MediaStatus.Released].
      */
-    public fun getCurrentPositionMillis(): Long
+    public fun play()
 
     /**
-     * Resumes playback.
-     *
-     * If there is no video source set, this method will do nothing.
-     * @see togglePause
+     * Sets the play intent to `false`, synchronously. Never dropped — including during
+     * buffering and opening.
      */
-    @UiThread
-    public fun resume()
-
-    /**
-     * Pauses playback.
-     *
-     * If there is no video source set, this method will do nothing.
-     * @see togglePause
-     */
-    @UiThread
     public fun pause()
 
     /**
-     * Stops playback, releasing all resources and setting [mediaData] to `null`.
-     * Subsequent calls to [resume] will do nothing.
-     *
-     * [currentPositionMillis] will be reset to `0`.
-     *
-     * To play again, call [setMediaData].
+     * Unloads the current media (or aborts an in-flight [setMediaData]) and returns to
+     * [MediaStatus.Idle], releasing the [MediaData]. Never produces [MediaStatus.Ended].
      */
-    @UiThread
     public fun stopPlayback()
 
     /**
-     * Jumps playback to the specified position.
+     * Seeks to [positionMillis], clamped to the media duration when known.
      *
-     * // TODO argument errors?
+     * While [MediaStatus.Ready]: [currentPositionMillis] updates optimistically; a paused
+     * seek stays paused and the new frame is displayed. At [MediaStatus.Ended]: returns to
+     * [MediaStatus.Ready] paused at the position. During [MediaStatus.Opening]: adjusts the
+     * start position. Otherwise no-op.
      */
-    @UiThread
     public fun seekTo(positionMillis: Long)
 
     /**
-     * Skips the current playback position by [deltaMillis].
-     * Positive [deltaMillis] will skip forward, and negative [deltaMillis] will skip backward.
-     *
-     * If the player is paused, it will remain paused, but it is guaranteed that the new frame will be displayed.
-     * If there is no video source set, this method will do nothing.
-     *
-     * // TODO argument errors?
+     * Skips by [deltaMillis] (negative = backward). See [seekTo].
      */
-    @UiThread
     public fun skip(deltaMillis: Long) {
-        seekTo(getCurrentPositionMillis() + deltaMillis)
+        seekTo(currentPositionMillis.value + deltaMillis)
     }
 
     /**
-     * Closes the player, releasing all resources held by the player.
-     *
-     * This operation is permanent.
-     * After [close], calling any method from the player will either result in an exception or have no effect.
-     * Flows will emit no value.
-     *
-     * This method must be called on the UI thread as some backends may require it.
+     * Closes the player permanently: emits [MediaStatus.Released], after which no command
+     * acts and no flow emits. Callable from any thread; idempotent.
      */
     public override fun close()
+
+    // region deprecated v1 API
+
+    /**
+     * The v1 enum state, derived from [state].
+     *
+     * Mapping notes (see `docs/playback-state-v2.md` §2): [stopPlayback] now yields
+     * [PlaybackState.CREATED] (was FINISHED); [PlaybackState.READY] is derived while the
+     * media has never played since open; [PlaybackState.FINISHED] means natural end only.
+     */
+    @Deprecated("Use state (PlayerState) instead. See docs/playback-state-v2.md.")
+    @Suppress("DEPRECATION")
+    public val playbackState: StateFlow<PlaybackState>
+
+    @Deprecated("Renamed to play().", ReplaceWith("play()"))
+    public fun resume() {
+        play()
+    }
+
+    @Deprecated("Use state.value instead.", ReplaceWith("state.value"))
+    @Suppress("DEPRECATION")
+    public fun getCurrentPlaybackState(): PlaybackState = playbackState.value
+
+    @Deprecated("Use currentPositionMillis.value instead.", ReplaceWith("currentPositionMillis.value"))
+    public fun getCurrentPositionMillis(): Long = currentPositionMillis.value
+
+    @Deprecated("Use mediaProperties.value instead.", ReplaceWith("mediaProperties.value"))
+    public fun getCurrentMediaProperties(): MediaProperties? = mediaProperties.value
+    // endregion
+}
+
+/**
+ * Toggles the play/pause intent. Never dead in any loaded state: flips intent at
+ * [MediaStatus.Ready]/[MediaStatus.Opening], replays at [MediaStatus.Ended].
+ */
+public fun MediampPlayer.togglePlayWhenReady() {
+    val s = state.value
+    when (s.mediaStatus) {
+        MediaStatus.Ended -> play()
+        MediaStatus.Ready, MediaStatus.Opening -> if (s.playWhenReady) pause() else play()
+        else -> {}
+    }
+}
+
+/**
+ * v1-compatible toggle: acts only when the derived legacy state is PLAYING or PAUSED, so UIs
+ * that derive their icon from `isPlaying` keep v1 behavior during migration.
+ */
+@Suppress("DEPRECATION")
+@Deprecated(
+    "Use togglePlayWhenReady(), which is never dead during buffering, and drive the button " +
+            "icon from state.value.playWhenReady.",
+    ReplaceWith("togglePlayWhenReady()"),
+)
+public fun MediampPlayer.togglePause() {
+    when (playbackState.value) {
+        PlaybackState.PLAYING -> pause()
+        PlaybackState.PAUSED -> play()
+        else -> {}
+    }
 }
 
 @Suppress("DeprecatedCallableAddReplaceWith", "UnusedReceiverParameter")
@@ -333,19 +252,22 @@ public interface MediampPlayer : AutoCloseable {
 public fun MediampPlayer.stop(): Nothing = throw NotImplementedError("stop")
 
 /**
- * Plays the video at the specified [uri], e.g. a local file or a remote URL.
+ * Plays the media at [uri] (local file or remote URL).
  */
-public suspend fun MediampPlayer.playUri(uri: String): Unit =
-    setMediaData(UriMediaData(uri, emptyMap(), MediaExtraFiles()))
+public suspend fun MediampPlayer.playUri(
+    uri: String,
+    playWhenReady: Boolean = true,
+    startPositionMillis: Long = 0L,
+): Unit = setMediaData(UriMediaData(uri, emptyMap(), MediaExtraFiles()), playWhenReady, startPositionMillis)
 
 /**
- * Toggles between [MediampPlayer.pause] and [MediampPlayer.resume] based on the current playback state.
+ * A distinct flow of [PlayerState.isPlaying] (the clock actually advancing).
  */
-public fun MediampPlayer.togglePause() {
-    val currentState = getCurrentPlaybackState()
-    if (currentState == PlaybackState.PLAYING) {
-        pause()
-    } else if (currentState == PlaybackState.PAUSED) {
-        resume()
-    }
-}
+public fun MediampPlayer.isPlayingFlow(): Flow<Boolean> =
+    state.map { it.isPlaying }.distinctUntilChanged()
+
+/**
+ * A distinct flow of [PlayerState.isLoadingOrBuffering] — drive a loading spinner with this.
+ */
+public fun MediampPlayer.isLoadingOrBufferingFlow(): Flow<Boolean> =
+    state.map { it.isLoadingOrBuffering }.distinctUntilChanged()

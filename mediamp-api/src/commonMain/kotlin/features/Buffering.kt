@@ -15,12 +15,18 @@ import org.openani.mediamp.InternalForInheritanceMediampApi
 /**
  * An optional feature of the [org.openani.mediamp.MediampPlayer] that allows retrieving buffering information.
  */
-@ExperimentalMediampApi // TODO: Should we merge buffering state into playback state?
+@ExperimentalMediampApi
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
-public interface Buffering : Feature { // TODO: 2024/12/30 VLC does not correctly support this feature.
+public interface Buffering : Feature {
     /**
-     * A flow of the buffering state, where `true` means the player is buffering (video paused; player is performing I/O operations).
+     * A flow of the buffering state.
+     *
+     * The buffering axis moved into the core state model; this flow is a view of it.
      */
+    @Deprecated(
+        "Buffering is part of the core state now. Use player.state.map { it.isBuffering }.",
+        ReplaceWith("player.state.map { it.isBuffering }"),
+    )
     public val isBuffering: Flow<Boolean>
 
     /**

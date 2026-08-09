@@ -13,16 +13,17 @@ Supported targets and backends:
 |    Platform    | Architecture(s) | Implementation |
 |:--------------:|-----------------|----------------|
 |    Android     | Any             | ExoPlayer      |
-| JVM on Windows | x86_64          | VLC            |
-|  JVM on macOS  | x86_64, AArch64 | VLC            |
-|  JVM on Linux  | x86_64          | VLC            |
+| JVM on Windows | x86_64          | MPV            |
+|  JVM on macOS  | x86_64, AArch64 | MPV            |
+|  JVM on Linux  | x86_64          | MPV            |
 |      iOS       | AArch64         | AVKit          |
 | Browser (wasm) | Any             | HTMLVideoElement |
 
 Platforms that are not listed above are not supported yet. Feel free to file an issue if you need
 them.
 
-A unified MPV backend is in active development, and will be available soon.
+The VLC backend is deprecated and no longer maintained; MPV replaced it as the desktop backend
+in state spec v2.
 
 > [!WARNING]
 >
@@ -58,13 +59,9 @@ The `-all` bundle includes:
 - Mediamp common APIs and Compose UI APIs
 - ExoPlayer backend for Android
     - With `media3-exoplayer-hls` for streaming `.m3u8`
-- VLC backend for JVM
+- MPV backend for JVM (desktop)
 - AVKit backend for iOS
 - Browser player for Compose Web / `wasmJs`
-
-> [!NOTE]
-> The VLC backend requires VLC to be installed on the user's OS.
-> See [mediamp-vlc/README.md](mediamp-vlc/README.md) for shipping VLC binaries with your app.
 
 > [!WARNING]
 > **Compatibility Warning**
@@ -147,22 +144,35 @@ dependencies {
 }
 ```
 
-A mock player `TestMediampPlayer` is provided for unit testing.
-It implements all the features and follow the same specification (e.g. state transitions) as the
-real
-player.
+A scriptable player `TestMediampPlayer` is provided for unit testing.
+It runs the same state machine (and follows the same specification, `docs/playback-state-v2.md`)
+as the real players, backed by a fake native transport that you drive from the test: control how
+opens complete (`openBehavior`), and inject native facts (`injectStall`, `injectEnded`,
+`injectError`, `injectExternalPlayWhenReady`, `injectPosition`, `injectProperties`).
 
 ```kotlin
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 
 class MyTest {
-    private val player = TestMediampPlayer()
-
+    @Test
     fun test() = runTest {
-        player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4") // Will not actually make network requests
-        player.currentPositionMillis.value = 1000L // Move playback position to 1s
+        val player = TestMediampPlayer(StandardTestDispatcher(testScheduler))
 
-        assertEquals(PlaybackState.PLAYING, player.getCurrentPlaybackState())
+        // Will not actually make network requests. playUri defaults to playWhenReady = true.
+        player.playUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4")
+        assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+        assertTrue(player.state.value.isPlaying)
+
+        player.injectPosition(1000L) // The fake playback clock is driven by the test
+        advanceUntilIdle()           // Let the state machine process the injected fact
+        assertEquals(1000L, player.currentPositionMillis.value)
+
+        player.injectStall(true)     // Simulate a mid-playback buffering stall
+        advanceUntilIdle()
+        assertTrue(player.state.value.isBuffering)
+        assertTrue(player.state.value.playWhenReady) // Buffering does not change the play intent
     }
 }
 ```
@@ -213,7 +223,7 @@ dependencies {
 
 ### Obtaining the Platform Player
 
-Access the underlying Android `ExoPlayer`, [vlcj][vlcj] `EmbeddedMediaPlayer` and iOS `AVPlayer` for
+Access the underlying Android `ExoPlayer`, desktop `MPVHandle` and iOS `AVPlayer` for
 advanced use cases.
 
 ```kotlin
@@ -230,8 +240,8 @@ val platform: AVPlayer = player.impl
 
 ```kotlin
 // On Desktop
-val player = VlcMediampPlayer()
-val platform: EmbeddedMediaPlayer = player.impl
+val player = MpvMediampPlayer(...)
+val platform: MPVHandle = player.impl
 ```
 
 ```kotlin

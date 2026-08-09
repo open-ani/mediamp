@@ -46,6 +46,12 @@ kotlin {
         getByName("jvmMain").dependencies {
             implementation(projects.mediampNativeLoader)
         }
+        getByName("desktopMain").dependencies {
+            // The v2 state machine is confined to Dispatchers.Main; on desktop JVM the Main
+            // dispatcher is provided by coroutines-swing (Swing EDT). Ship it so consumers
+            // do not crash with "Module with the Main dispatcher is missing".
+            api(libs.kotlinx.coroutines.swing)
+        }
         getByName("desktopTest").dependencies {
             implementation(kotlin("test"))
         }

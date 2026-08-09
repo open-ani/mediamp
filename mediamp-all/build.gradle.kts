@@ -37,8 +37,7 @@ kotlin {
             api(projects.mediampApi)
         }
         desktopMain.dependencies {
-            api(projects.mediampVlc)
-            api(projects.mediampVlcLoader)
+            api(projects.mediampMpv)
         }
         iosMain.dependencies {
             api(projects.mediampAvkit)

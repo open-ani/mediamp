@@ -22,6 +22,11 @@ public object MediampPlayerFactoryLoader {
 
     /**
      * Register a [MediampPlayerFactory] implementation.
+     *
+     * The latest registration takes precedence: [ConcurrentRegistryManager] inserts at the
+     * head, so [first] (and [getByInstance] when multiple factories match) deterministically
+     * returns the most recent registration — matching the JVM and wasm loaders where explicit
+     * registrations win over discovered/built-in ones.
      */
     public fun register(factory: MediampPlayerFactory<*>) {
         factories.append(factory)

@@ -58,7 +58,8 @@ ffmpeg -f lavfi -i "testsrc2=size=1920x1080:rate=30,format=yuv420p" \
 
 ## 实测结果 (M2 Max, macOS 26 / Darwin 25.2, CMP 1.10.1 / Skiko 0.9.37.4)
 
-与现有 VLC 栈 (`:mediamp-mpv-demo:runVlc`, vlcj CallbackVideoSurface) 的对比。两边使用
+与当时的 VLC 栈 (vlcj CallbackVideoSurface) 的对比。当时的 VLC 基线 demo (`runVlc` /
+`VlcMain.kt`) 已随 mediamp-vlc 一起移出构建, 以下为历史实测数据。两边使用
 **完全相同的视频文件、窗口尺寸 (1280×800@2x) 和 Compose overlay** (无限动画强制 ~60fps 重绘)。
 CPU 为进程级 (top, 单核百分比, 10 次采样平均); GPU 为系统级 Device Utilization
 (ioreg, 空载基线 ~33–36%, 无法按进程归因, 仅供参考)。

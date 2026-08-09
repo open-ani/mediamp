@@ -8,15 +8,19 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.MediaStatus
+import org.openani.mediamp.PlaybackEvent
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.Screenshots
@@ -30,12 +34,18 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Integration smoke test against a real libmpv (Homebrew) using the dev-native JNI build.
  * Skipped when the native runtime or ffmpeg (for test video generation) is unavailable.
+ *
+ * State assertions target the v2 model (`docs/playback-state-v2.md`): the atomic
+ * [org.openani.mediamp.PlayerState] snapshots on `player.state`, plus edge facts on
+ * `player.events`.
  */
 class MpvMediampPlayerSmokeTest {
 
@@ -161,31 +171,30 @@ class MpvMediampPlayerSmokeTest {
         }
     }
 
-    private suspend fun StateFlow<PlaybackState>.await(state: PlaybackState, timeoutMillis: Long = 10_000) {
-        withTimeout(timeoutMillis) {
-            collectUntil { it == state }
+    /**
+     * Runs [block] with a player confined to a dedicated serial dispatcher (standing in for
+     * the UI thread — the block itself runs on it, so command-thread rules hold) and a
+     * headless render surface.
+     */
+    private fun runPlayerTest(block: suspend CoroutineScope.(MpvMediampPlayer) -> Unit) {
+        val mainDispatcher = Dispatchers.Default.limitedParallelism(1)
+        runBlocking(mainDispatcher) {
+            val player = MpvMediampPlayer(
+                Any(), coroutineContext,
+                mainDispatcher = mainDispatcher,
+            )
+            val renderer = startHeadlessRenderer(player)
+            try {
+                block(player)
+            } finally {
+                renderer.close()
+                player.close()
+            }
+            // close() is terminal (spec: -> Released) and idempotent.
+            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
+            player.close()
+            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
         }
-    }
-
-    private suspend fun <T> StateFlow<T>.collectUntil(predicate: (T) -> Boolean) {
-        if (predicate(value)) return
-        var done = false
-        collectWhile { value ->
-            if (predicate(value)) done = true
-            !done
-        }
-    }
-
-    private suspend fun <T> StateFlow<T>.collectWhile(predicate: (T) -> Boolean) {
-        try {
-            collect { if (!predicate(it)) throw StopCollecting }
-        } catch (e: StopCollecting) {
-            // done
-        }
-    }
-
-    private object StopCollecting : Exception() {
-        private fun readResolve(): Any = StopCollecting
     }
 
     @OptIn(InternalMediampApi::class, ExperimentalMediampApi::class)
@@ -194,52 +203,66 @@ class MpvMediampPlayerSmokeTest {
         if (!prepareOrSkip()) return
         val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
-        runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
-            val renderer = startHeadlessRenderer(player)
-            try {
-                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
-                assertEquals(PlaybackState.READY, player.playbackState.value)
-
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
-
-                // Position should advance.
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it > 200 }
-                }
-                val handle = player.impl as MPVHandle
-                assertNotNull(handle.getPropertyString("hwdec-current"), "hwdec-current should be queryable")
-
-                // Metadata: at least one audio-less video track list refresh happened without crash.
-                val metadata = player.features[MediaMetadata]
-                assertNotNull(metadata)
-
-                // Playback speed via feature.
-                val speed = assertNotNull(player.features[PlaybackSpeed.Key])
-                speed.set(1.5f)
-                assertEquals(1.5f, speed.value)
-
-                // Seek: optimistic position + eventual convergence.
-                player.seekTo(3_000)
-                assertEquals(3_000, player.getCurrentPositionMillis())
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it in 2_500..5_500 }
-                }
-
-                player.pause()
-                player.playbackState.await(PlaybackState.PAUSED)
-
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
-
-                player.stopPlayback()
-                player.playbackState.await(PlaybackState.FINISHED)
-            } finally {
-                renderer.close()
-                player.close()
+        runPlayerTest { player ->
+            // Subscribe before issuing commands (events has no replay).
+            val seekCompletions = mutableListOf<Long>()
+            val eventsJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                player.events.filterIsInstance<PlaybackEvent.SeekCompleted>()
+                    .collect { seekCompletions.add(it.positionMillis) }
             }
-            player.playbackState.await(PlaybackState.DESTROYED, 5_000)
+
+            player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+            // Open-in-setMediaData: Ready committed, default intent is paused.
+            assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+            assertFalse(player.state.value.playWhenReady)
+
+            player.play()
+            // Intent flips synchronously; the clock advancing follows.
+            assertTrue(player.state.value.playWhenReady)
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
+
+            // Position should advance.
+            withTimeout(10_000) { player.currentPositionMillis.first { it > 200 } }
+            val handle = player.impl as MPVHandle
+            assertNotNull(handle.getPropertyString("hwdec-current"), "hwdec-current should be queryable")
+
+            // Duration must be known after the Ready point (never a negative sentinel).
+            val duration = assertNotNull(player.mediaProperties.value?.durationMillis)
+            assertTrue(duration in 4_000..6_000, "expected ~5s duration, got $duration")
+
+            // Metadata: at least one audio-less video track list refresh happened without crash.
+            val metadata = player.features[MediaMetadata]
+            assertNotNull(metadata)
+
+            // Playback speed through the machine.
+            val speed = assertNotNull(player.features[PlaybackSpeed.Key])
+            speed.set(1.5f)
+            assertEquals(1.5f, speed.value)
+
+            // Seek: optimistic position, SeekCompleted event, eventual convergence.
+            player.seekTo(3_000)
+            assertEquals(3_000, player.currentPositionMillis.value)
+            withTimeout(10_000) { player.currentPositionMillis.first { it in 2_500..5_500 } }
+            withTimeout(10_000) {
+                while (seekCompletions.isEmpty()) delay(50)
+            }
+
+            // pause() flips the intent synchronously and applies it natively
+            // (read-after-command) before returning.
+            player.pause()
+            assertFalse(player.state.value.playWhenReady)
+            assertTrue(handle.getPropertyBoolean("pause"), "pauseImpl must have applied 'pause' natively")
+
+            player.play()
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
+
+            // stopPlayback unloads to Idle (v2: never Ended) and releases the media.
+            player.stopPlayback()
+            assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
+            assertNull(player.mediaData.value)
+            assertEquals(0L, player.currentPositionMillis.value)
+
+            eventsJob.cancel()
         }
     }
 
@@ -260,67 +283,61 @@ class MpvMediampPlayerSmokeTest {
         val video = generateDualSubtitleVideo()
             ?: run { skip("ffmpeg unavailable or dual-subtitle video generation failed"); return }
 
-        runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
-            val renderer = startHeadlessRenderer(player)
-            try {
-                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
+        runPlayerTest { player ->
+            // Autoplay through the open itself (spec §3: intent applied natively at open).
+            player.setMediaData(
+                UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY),
+                playWhenReady = true,
+            )
+            assertTrue(player.state.value.playWhenReady)
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
 
-                val metadata = assertNotNull(player.features[MediaMetadata])
-                val subtitles = assertNotNull(metadata.subtitleTracks)
-                val candidates = withTimeout(10_000) {
-                    subtitles.candidates.first { it.size == 2 }
-                }
-                val second = candidates.first { it.internalId == "2" }
-                val handle = player.impl as MPVHandle
-
-                assertTrue(subtitles.select(second))
-                // `selected` is confirmed asynchronously from mpv's track-list. It must
-                // converge to the requested track (decode success), not flash and revert.
-                withTimeout(10_000) {
-                    subtitles.selected.collectUntil { it?.internalId == "2" }
-                }
-                assertEquals("2", handle.getPropertyString("sid"))
-
-                suspend fun assertStillSelected(what: String) {
-                    delay(1_000) // time for mpv to emit any track-list rewrites
-                    assertEquals("2", subtitles.selected.value?.internalId, "selection lost $what")
-                    assertEquals("2", handle.getPropertyString("sid"), "native sid lost $what")
-                }
-
-                player.pause()
-                player.playbackState.await(PlaybackState.PAUSED)
-                assertStillSelected("after pause")
-
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
-                assertStillSelected("after resume")
-
-                player.seekTo(5_000)
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it in 4_500..8_000 }
-                }
-                assertStillSelected("after seek")
-
-                // Turning subtitles off must stick through playback controls too.
-                assertTrue(subtitles.select(null))
-                withTimeout(10_000) {
-                    subtitles.selected.collectUntil { it == null }
-                }
-                player.pause()
-                player.playbackState.await(PlaybackState.PAUSED)
-                delay(1_000)
-                assertEquals(null, subtitles.selected.value, "subtitles re-enabled after pause")
-                assertEquals("no", handle.getPropertyString("sid"))
-
-                player.stopPlayback()
-                player.playbackState.await(PlaybackState.FINISHED)
-            } finally {
-                renderer.close()
-                player.close()
+            val metadata = assertNotNull(player.features[MediaMetadata])
+            val subtitles = assertNotNull(metadata.subtitleTracks)
+            val candidates = withTimeout(10_000) {
+                subtitles.candidates.first { it.size == 2 }
             }
+            val second = candidates.first { it.internalId == "2" }
+            val handle = player.impl as MPVHandle
+
+            assertTrue(subtitles.select(second))
+            // `selected` is confirmed asynchronously from mpv's track-list. It must
+            // converge to the requested track (decode success), not flash and revert.
+            withTimeout(10_000) {
+                subtitles.selected.first { it?.internalId == "2" }
+            }
+            assertEquals("2", handle.getPropertyString("sid"))
+
+            suspend fun assertStillSelected(what: String) {
+                delay(1_000) // time for mpv to emit any track-list rewrites
+                assertEquals("2", subtitles.selected.value?.internalId, "selection lost $what")
+                assertEquals("2", handle.getPropertyString("sid"), "native sid lost $what")
+            }
+
+            player.pause()
+            assertFalse(player.state.value.playWhenReady)
+            assertStillSelected("after pause")
+
+            player.play()
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
+            assertStillSelected("after resume")
+
+            player.seekTo(5_000)
+            withTimeout(10_000) { player.currentPositionMillis.first { it in 4_500..8_000 } }
+            assertStillSelected("after seek")
+
+            // Turning subtitles off must stick through playback controls too.
+            assertTrue(subtitles.select(null))
+            withTimeout(10_000) {
+                subtitles.selected.first { it == null }
+            }
+            player.pause()
+            delay(1_000)
+            assertEquals(null, subtitles.selected.value, "subtitles re-enabled after pause")
+            assertEquals("no", handle.getPropertyString("sid"))
+
+            player.stopPlayback()
+            assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
         }
     }
 
@@ -358,7 +375,7 @@ class MpvMediampPlayerSmokeTest {
                 if (predicate(color)) return@withTimeout color
                 System.err.println("[SmokeTest] awaiting $what, sampled $color")
                 last = color
-                kotlinx.coroutines.delay(200)
+                delay(200)
             }
             @Suppress("UNREACHABLE_CODE")
             error("unreachable, last=$last")
@@ -375,37 +392,28 @@ class MpvMediampPlayerSmokeTest {
         if (!prepareOrSkip()) return
         val video = generateColorVideo() ?: run { skip("ffmpeg unavailable or color video generation failed"); return }
 
-        runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
-            val renderer = startHeadlessRenderer(player)
-            try {
-                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
-                // Stay well inside the red segment (0.0-2.5s).
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it in 300..1_800 }
-                }
-                val screenshots = assertNotNull(player.features[Screenshots.Key])
+        runPlayerTest { player ->
+            player.setMediaData(
+                UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY),
+                playWhenReady = true,
+            )
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
+            // Stay well inside the red segment (0.0-2.5s).
+            withTimeout(10_000) { player.currentPositionMillis.first { it in 300..1_800 } }
+            val screenshots = assertNotNull(player.features[Screenshots.Key])
 
-                // yuv420 + h264 round-trip is lossy; assert dominance, not exact values.
-                val red = awaitCenterColor(screenshots, "red") { (r, _, b) -> r > 180 && b < 80 }
-                assertTrue(red.first > 180 && red.third < 80, "expected red frame, got $red")
+            // yuv420 + mpeg4 round-trip is lossy; assert dominance, not exact values.
+            val red = awaitCenterColor(screenshots, "red") { (r, _, b) -> r > 180 && b < 80 }
+            assertTrue(red.first > 180 && red.third < 80, "expected red frame, got $red")
 
-                // Seek into the blue segment; the rendered frame must follow.
-                player.seekTo(4_000)
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it in 3_000..5_500 }
-                }
-                val blue = awaitCenterColor(screenshots, "blue") { (r, _, b) -> b > 180 && r < 80 }
-                assertTrue(blue.third > 180 && blue.first < 80, "expected blue frame after seek, got $blue")
+            // Seek into the blue segment; the rendered frame must follow.
+            player.seekTo(4_000)
+            withTimeout(10_000) { player.currentPositionMillis.first { it in 3_000..5_500 } }
+            val blue = awaitCenterColor(screenshots, "blue") { (r, _, b) -> b > 180 && r < 80 }
+            assertTrue(blue.third > 180 && blue.first < 80, "expected blue frame after seek, got $blue")
 
-                player.stopPlayback()
-                player.playbackState.await(PlaybackState.FINISHED)
-            } finally {
-                renderer.close()
-                player.close()
-            }
+            player.stopPlayback()
+            assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
         }
     }
 
@@ -415,31 +423,20 @@ class MpvMediampPlayerSmokeTest {
         if (!prepareOrSkip()) return
         val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
-        runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
-            val renderer = startHeadlessRenderer(player)
-            try {
-                player.setMediaData(FileSeekableInputMediaData(video))
-                assertEquals(PlaybackState.READY, player.playbackState.value)
+        runPlayerTest { player ->
+            player.setMediaData(FileSeekableInputMediaData(video))
+            assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
 
-                player.resume()
-                player.playbackState.await(PlaybackState.PLAYING)
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it > 200 }
-                }
+            player.play()
+            withTimeout(10_000) { player.state.first { it.isPlaying } }
+            withTimeout(10_000) { player.currentPositionMillis.first { it > 200 } }
 
-                // Seeking exercises stream_cb seek_fn.
-                player.seekTo(2_000)
-                withTimeout(10_000) {
-                    player.currentPositionMillis.collectUntil { it in 1_500..4_500 }
-                }
+            // Seeking exercises stream_cb seek_fn.
+            player.seekTo(2_000)
+            withTimeout(10_000) { player.currentPositionMillis.first { it in 1_500..4_500 } }
 
-                player.stopPlayback()
-                player.playbackState.await(PlaybackState.FINISHED)
-            } finally {
-                renderer.close()
-                player.close()
-            }
+            player.stopPlayback()
+            assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
         }
     }
 

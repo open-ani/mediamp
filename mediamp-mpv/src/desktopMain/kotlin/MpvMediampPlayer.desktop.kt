@@ -8,6 +8,8 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.DirectContext
@@ -26,7 +28,13 @@ import kotlin.coroutines.CoroutineContext
 actual class MpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
-) : JvmMpvMediampPlayer(context, parentCoroutineContext) {
+    /**
+     * The dispatcher the state machine is confined to (spec §4). Defaults to
+     * [Dispatchers.Main], which on desktop JVM is the Swing EDT. The machine captures the
+     * dispatcher's thread identity itself for the fail-fast command check.
+     */
+    mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
 
     // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
     private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()

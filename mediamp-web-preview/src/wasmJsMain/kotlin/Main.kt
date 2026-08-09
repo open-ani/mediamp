@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -40,18 +41,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import kotlinx.browser.document
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import org.openani.mediamp.MediaLoadCancellationException
+import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.MediampPlayer
-import org.openani.mediamp.PlaybackState
+import org.openani.mediamp.PlaybackException
 import org.openani.mediamp.WebMediampPlayer
 import org.openani.mediamp.compose.MediampPlayerSurface
+import org.openani.mediamp.errorOrNull
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.PlaybackSpeed
-import org.openani.mediamp.metadata.orEmpty
+import org.openani.mediamp.isLoadingOrBuffering
 import org.openani.mediamp.playUri
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.Subtitle
 import org.openani.mediamp.source.UriMediaData
+import org.openani.mediamp.togglePlayWhenReady
 import org.w3c.dom.HTMLElement
 
 private const val DefaultVideo =
@@ -79,15 +86,32 @@ private fun PreviewApp() {
     var uri by remember { mutableStateOf(DefaultVideo) }
     var subtitleUri by remember { mutableStateOf(DefaultSubtitle) }
     var statusText by remember { mutableStateOf("Ready") }
-    val playbackState by player.playbackState.collectAsState()
+    val state by player.state.collectAsState()
     val positionMillis by player.currentPositionMillis.collectAsState()
     val properties by player.mediaProperties.collectAsState()
     val audio = player.features[AudioLevelController]
     val volume by audio?.volume?.collectAsState() ?: remember { mutableStateOf(1f) }
     val speed = player.features[PlaybackSpeed]
 
+    suspend fun load() {
+        statusText = "Loading"
+        try {
+            player.setPreviewMedia(uri, subtitleUri)
+            statusText = "Loaded"
+        } catch (e: MediaLoadCancellationException) {
+            // Superseded by a newer load / stop / close. Per the contract, re-check our own
+            // cancellation before recovering.
+            currentCoroutineContext().ensureActive()
+            statusText = "Load cancelled"
+        } catch (e: PlaybackException) {
+            // Also emitted as MediaStatus.Error on player.state; the throw is for caller
+            // control flow.
+            statusText = "Load failed: ${e.code}: ${e.message}"
+        }
+    }
+
     LaunchedEffect(Unit) {
-        player.setPreviewMedia(uri, subtitleUri)
+        load()
     }
 
     MaterialTheme {
@@ -104,6 +128,10 @@ private fun PreviewApp() {
                         player,
                         Modifier.fillMaxSize(),
                     )
+                    // Spinner: media opening or playback stalled for data.
+                    if (state.isLoadingOrBuffering) {
+                        CircularProgressIndicator(color = Color.White)
+                    }
                 }
 
                 Column(
@@ -115,32 +143,30 @@ private fun PreviewApp() {
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
-                            onClick = {
-                                scope.launch {
-                                    if (playbackState == PlaybackState.PLAYING) {
-                                        player.pause()
-                                    } else {
-                                        player.resume()
-                                    }
-                                }
-                            },
+                            // Never dead in any loaded state; replays at Ended.
+                            onClick = { player.togglePlayWhenReady() },
                         ) {
-                            Text(if (playbackState == PlaybackState.PLAYING) "Pause" else "Play")
+                            // Icon derives from the intent axis, never from buffering.
+                            Text(if (state.playWhenReady) "Pause" else "Play")
                         }
-                        Button(onClick = { player.seekTo((player.getCurrentPositionMillis() - 10_000L).coerceAtLeast(0L)) }) {
+                        Button(onClick = { player.skip(-10_000L) }) {
                             Text("-10s")
                         }
-                        Button(onClick = { player.seekTo(player.getCurrentPositionMillis() + 10_000L) }) {
+                        Button(onClick = { player.skip(10_000L) }) {
                             Text("+10s")
                         }
                         Button(onClick = { audio?.setMute(audio.isMute.value.not()) }) {
                             Text(if (audio?.isMute?.value == true) "Unmute" else "Mute")
                         }
-                        Text("State: $playbackState", color = Color.White)
+                        Text("State: ${state.mediaStatus.displayName}", color = Color.White)
+                        val error = state.errorOrNull
+                        if (error != null) {
+                            Text("${error.code}: ${error.message}", color = Color(0xffff6b6b))
+                        }
                         Text(statusText, color = Color(0xffaeb6c2))
                     }
 
-                    val durationMillis = properties.orEmpty().durationMillis.takeIf { it > 0L } ?: 1L
+                    val durationMillis = (properties?.durationMillis ?: 0L).coerceAtLeast(1L)
                     Slider(
                         value = positionMillis.coerceIn(0L, durationMillis).toFloat(),
                         valueRange = 0f..durationMillis.toFloat(),
@@ -150,7 +176,7 @@ private fun PreviewApp() {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(formatMillis(positionMillis), color = Color.White)
                         Text("/", color = Color(0xffaeb6c2))
-                        Text(formatMillis(properties.orEmpty().durationMillis), color = Color.White)
+                        Text(formatMillis(properties?.durationMillis), color = Color.White)
                         Text("Volume", color = Color(0xffaeb6c2))
                         Slider(
                             value = volume,
@@ -182,10 +208,7 @@ private fun PreviewApp() {
                         Button(
                             onClick = {
                                 scope.launch {
-                                    statusText = "Loading"
-                                    runCatching { player.setPreviewMedia(uri, subtitleUri) }
-                                        .onSuccess { statusText = "Loaded" }
-                                        .onFailure { statusText = it.message ?: "Load failed" }
+                                    load()
                                 }
                             },
                         ) {
@@ -197,6 +220,16 @@ private fun PreviewApp() {
         }
     }
 }
+
+private val MediaStatus.displayName: String
+    get() = when (this) {
+        MediaStatus.Idle -> "Idle"
+        MediaStatus.Opening -> "Opening"
+        MediaStatus.Ready -> "Ready"
+        MediaStatus.Ended -> "Ended"
+        is MediaStatus.Error -> "Error"
+        MediaStatus.Released -> "Released"
+    }
 
 private suspend fun MediampPlayer.setPreviewMedia(uri: String, subtitleUri: String) {
     if (subtitleUri.isBlank()) {
@@ -216,12 +249,13 @@ private suspend fun MediampPlayer.setPreviewMedia(uri: String, subtitleUri: Stri
                     ),
                 ),
             ),
+            playWhenReady = true,
         )
     }
 }
 
-private fun formatMillis(value: Long): String {
-    if (value < 0L) return "--:--"
+private fun formatMillis(value: Long?): String {
+    if (value == null || value < 0L) return "--:--"
     val totalSeconds = value / 1000
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60

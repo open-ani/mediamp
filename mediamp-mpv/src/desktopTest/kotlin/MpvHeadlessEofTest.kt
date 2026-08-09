@@ -8,16 +8,22 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.openani.mediamp.InternalMediampApi
-import org.openani.mediamp.PlaybackState
-import org.openani.mediamp.source.MediaExtraFiles
-import org.openani.mediamp.source.UriMediaData
+import org.openani.mediamp.MediaStatus
+import org.openani.mediamp.PlaybackEvent
+import org.openani.mediamp.playUri
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -30,8 +36,9 @@ import kotlin.test.assertTrue
  *
  * In both modes [MpvMediampPlayer.currentPositionMillis] must advance (open-ani/animeko
  * headless probing regression: the position flow stayed at 0 while polling `time-pos`
- * worked) and natural EOF must transition the playback state to [PlaybackState.FINISHED]
- * (the existing smoke tests only reach FINISHED via `stopPlayback`).
+ * worked) and natural EOF must transition to [MediaStatus.Ended] with a
+ * [PlaybackEvent.MediaEnded] on the events flow (the smoke tests only exercise
+ * `stopPlayback`, which yields [MediaStatus.Idle]).
  */
 class MpvHeadlessEofTest {
 
@@ -103,8 +110,14 @@ class MpvHeadlessEofTest {
         val video = generateShortAvVideo()
             ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
-        runBlocking(Dispatchers.Default) {
-            val player = MpvMediampPlayer(Any(), coroutineContext)
+        // A dedicated serial dispatcher stands in for the UI thread: the machine is confined
+        // to it, and this test body runs on it too, so command-thread rules hold.
+        val mainDispatcher = Dispatchers.Default.limitedParallelism(1)
+        runBlocking(mainDispatcher) {
+            val player = MpvMediampPlayer(
+                Any(), coroutineContext,
+                mainDispatcher = mainDispatcher,
+            )
             val renderer = if (useSurfaceRing) {
                 check(player.createRenderContext()) { "createRenderContext failed" }
                 check(player.requestSurface(320, 180, 0L)) { "requestSurface failed" }
@@ -114,26 +127,39 @@ class MpvHeadlessEofTest {
                 }
             } else null
             try {
-                player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
-                player.resume()
+                // Route audio to the null output: this test is about the playback clock and
+                // EOF state transitions, not audio rendering, and a headless environment's
+                // audio device can accept the stream but never consume it (observed on dev
+                // Macs: coreaudio opens, samples never drain, playback wedges on frame 1).
+                (player.impl as MPVHandle).setPropertyString("ao", "null")
+
+                // Subscribe before issuing commands (events has no replay).
+                val endedEvent = async(start = CoroutineStart.UNDISPATCHED) {
+                    player.events.filterIsInstance<PlaybackEvent.MediaEnded>().first()
+                }
+
+                // playUri autoplays: playWhenReady = true by default.
+                player.playUri(video.absolutePath)
+                assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+                assertTrue(player.state.value.playWhenReady, "open must apply the requested intent")
 
                 // The position flow (not just the polled property) must advance.
                 withTimeout(15_000) {
-                    var done = false
-                    player.currentPositionMillis.collectWhile {
-                        if (it > 1_000) done = true
-                        !done
-                    }
+                    player.currentPositionMillis.first { it > 1_000 }
                 }
 
-                // Natural EOF must surface as FINISHED.
+                // Natural EOF must surface as Ended (status) and MediaEnded (event).
                 withTimeout(20_000) {
-                    var done = false
-                    player.playbackState.collectWhile {
-                        if (it == PlaybackState.FINISHED) done = true
-                        !done
-                    }
+                    player.state.first { it.mediaStatus == MediaStatus.Ended }
                 }
+                // I2: entering Ended resets the intent axis in the same emission.
+                assertFalse(player.state.value.playWhenReady, "Ended must normalize playWhenReady = false")
+
+                val ended = withTimeout(5_000) { endedEvent.await() }
+                assertTrue(
+                    (ended.durationMillis ?: 0L) > 3_000,
+                    "MediaEnded must carry the media duration, got ${ended.durationMillis}",
+                )
                 assertTrue(
                     player.currentPositionMillis.value > 1_000,
                     "position should stay at the played value after EOF, " +
@@ -147,24 +173,12 @@ class MpvHeadlessEofTest {
     }
 
     @Test
-    fun `position advances and EOF finishes - headless without surface`() {
+    fun `position advances and EOF ends - headless without surface`() {
         runPlayToEof(useSurfaceRing = false)
     }
 
     @Test
-    fun `position advances and EOF finishes - with surface ring`() {
+    fun `position advances and EOF ends - with surface ring`() {
         runPlayToEof(useSurfaceRing = true)
-    }
-
-    private suspend fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectWhile(predicate: (T) -> Boolean) {
-        try {
-            collect { if (!predicate(it)) throw StopCollecting }
-        } catch (e: StopCollecting) {
-            // done
-        }
-    }
-
-    private object StopCollecting : Exception() {
-        private fun readResolve(): Any = StopCollecting
     }
 }
