@@ -282,6 +282,22 @@ private val windowsD3d11vaFlags: List<String> = listOf(
     // FFmpeg has no mpeg4 D3D11VA hwaccel; mpeg4 stays software on Windows.
 )
 
+// DXVA2 hardware decoding: hwcontext_dxva2 for mpv's hwdec=dxva2. Only the OpenGL render
+// path needs it — mpv's d3d11va mapper requires a D3D11 renderer, so on a GL renderer
+// dxva2 + WGL_NV_DX_interop (hwdec_dxva2gldx) is the only zero-copy option. The D3D11
+// path is unaffected: d3d11va sorts before dxva2 in mpv's autoprobe order. Same codec
+// coverage as the D3D11VA list; FFmpeg has no mpeg4 DXVA2 hwaccel either.
+private val windowsDxva2Flags: List<String> = listOf(
+    "--enable-dxva2",
+    "--enable-hwaccel=h264_dxva2",
+    "--enable-hwaccel=hevc_dxva2",
+    "--enable-hwaccel=vp9_dxva2",
+    "--enable-hwaccel=av1_dxva2",
+    "--enable-hwaccel=mpeg2_dxva2",
+    "--enable-hwaccel=vc1_dxva2",
+    "--enable-hwaccel=wmv3_dxva2",
+)
+
 // VideoToolbox hardware decoding: hwcontext_videotoolbox for mpv's hwdec=videotoolbox
 // (--disable-everything/--disable-autodetect strip these otherwise; without them
 // av_hwdevice_ctx_create(AV_HWDEVICE_TYPE_VIDEOTOOLBOX) returns AVERROR(ENOMEM) —
@@ -342,7 +358,7 @@ private fun FfmpegBuildContext.windowsX64Target(): FfmpegBuildTarget {
             "--target-os=mingw32",
             "--cc=${msys2Dir.resolve("ucrt64/bin/gcc.exe").absolutePath.toMsysPath()}",
             "--cxx=${msys2Dir.resolve("ucrt64/bin/g++.exe").absolutePath.toMsysPath()}",
-        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + dav1dFlags,
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + windowsDxva2Flags + dav1dFlags,
         env = mapOf("MSYSTEM" to "UCRT64"),
         shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
         libExtension = "dll",
@@ -383,7 +399,7 @@ private fun FfmpegBuildContext.windowsArm64Target(): FfmpegBuildTarget {
             "--target-os=mingw32",
             "--cc=${msys2Dir.resolve("clangarm64/bin/clang.exe").absolutePath.toMsysPath()}",
             "--cxx=${msys2Dir.resolve("clangarm64/bin/clang++.exe").absolutePath.toMsysPath()}",
-        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + dav1dFlags,
+        ) + opensslHttpTlsFlags + windowsD3d11vaFlags + windowsDxva2Flags + dav1dFlags,
         env = mapOf("MSYSTEM" to "CLANGARM64"),
         shell = msys2Dir.resolve("usr/bin/bash.exe").absolutePath,
         libExtension = "dll",

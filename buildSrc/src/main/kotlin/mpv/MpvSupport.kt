@@ -43,7 +43,8 @@ internal data class AndroidToolchain(
  */
 internal class MpvBuildContext(
     val project: Project,
-    val mpvPatch: File,
+    /** Vendored mpv patches, applied in this order. See [MpvModule.kt]. */
+    val mpvPatches: List<File>,
 ) {
     val buildProperties: NativeBuildProperties = MPV_NATIVE_BUILD_PROPERTIES
     val ffmpegBuildProperties: NativeBuildProperties = FFMPEG_NATIVE_BUILD_PROPERTIES

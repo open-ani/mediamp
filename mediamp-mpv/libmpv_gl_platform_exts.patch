@@ -1,0 +1,32 @@
+diff --git a/video/out/opengl/libmpv_gl.c b/video/out/opengl/libmpv_gl.c
+index e9fffa7037..5f1e5dda18 100644
+--- a/video/out/opengl/libmpv_gl.c
++++ b/video/out/opengl/libmpv_gl.c
+@@ -23,9 +23,26 @@ static int init(struct libmpv_gpu_context *ctx, mpv_render_param *params)
+ 
+     p->gl = talloc_zero(p, GL);
+ 
++    // Platform (WGL/GLX) extension strings are not part of glGetString(GL_EXTENSIONS),
++    // and the render API has no parameter to pass them in, so probe the platform's own
++    // entry point through the caller's get_proc_address. Without this, every interop
++    // gated on a platform extension is invisible to embedders; in particular
++    // WGL_NV_DX_interop, which the dxva2-dxinterop hwdec requires. The GL context is
++    // documented to be current on this thread, so wglGetCurrentDC() is the right DC.
++    const char *ext2 = NULL;
++#if HAVE_GL_WIN32
++    typedef const char *(WINAPI *wgl_get_extensions_fn)(HDC);
++    wgl_get_extensions_fn wgl_get_extensions = (wgl_get_extensions_fn)
++        init_params->get_proc_address(init_params->get_proc_address_ctx,
++                                      "wglGetExtensionsStringARB");
++    HDC wgl_dc = wglGetCurrentDC();
++    if (wgl_get_extensions && wgl_dc)
++        ext2 = wgl_get_extensions(wgl_dc);
++#endif
++
+     mpgl_load_functions2(p->gl, init_params->get_proc_address,
+                          init_params->get_proc_address_ctx,
+-                         NULL, ctx->log);
++                         ext2, ctx->log);
+     if (!p->gl->version && !p->gl->es) {
+         MP_FATAL(ctx, "OpenGL not initialized.\n");
+         return MPV_ERROR_UNSUPPORTED;

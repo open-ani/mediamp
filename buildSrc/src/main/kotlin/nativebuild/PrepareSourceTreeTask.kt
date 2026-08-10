@@ -2,11 +2,12 @@ package nativebuild
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.file.RegularFile
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
-import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
@@ -21,16 +22,17 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
     abstract val sourceDir: DirectoryProperty
 
     /**
-     * Optional patch applied to the snapshot. The submodule working tree is only mutated
-     * for the duration of this task's action (apply -> copy -> revert in a finally
-     * block), so [sourceDir]'s input fingerprint — taken before execution — always
-     * describes the clean checkout, and the patch participates in up-to-date checks as
-     * its own content-hashed input.
+     * Patches applied to the snapshot, in order. One file per logically separate upstream
+     * change, so a patch can be dropped on its own once the change lands upstream. The
+     * submodule working tree is only mutated for the duration of this task's action
+     * (apply -> copy -> revert in a finally block), so [sourceDir]'s input fingerprint —
+     * taken before execution — always describes the clean checkout, and the patches
+     * participate in up-to-date checks as their own content-hashed inputs.
      */
-    @get:InputFile
+    @get:InputFiles
     @get:PathSensitive(PathSensitivity.NONE)
     @get:Optional
-    abstract val patchFile: RegularFileProperty
+    abstract val patchFiles: ListProperty<RegularFile>
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -70,16 +72,19 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
         val src = sourceDir.get().asFile
         val dst = outputDir.get().asFile
         val marker = markerFileRelativePath.get()
-        val patch = patchFile.orNull?.asFile
+        val patches = patchFiles.getOrElse(emptyList()).map { it.asFile }
 
         require(src.resolve(marker).isFile) {
             missingSourceMessage.orNull
                 ?: "${sourceDisplayName.get()} source tree is missing $marker at ${src.absolutePath}"
         }
 
-        if (patch != null) {
+        if (patches.isNotEmpty()) {
+            // One invocation so the whole set is applied atomically: a patch that no
+            // longer matches the checkout leaves the submodule untouched instead of
+            // half-patched.
             execOperations.exec {
-                commandLine("git", "apply", patch.absolutePath)
+                commandLine(listOf("git", "apply") + patches.map { it.absolutePath })
                 workingDir = src
             }
         }
@@ -94,9 +99,14 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
                 restoreExecutablePermissions(src, dst)
             }
         } finally {
-            if (patch != null) {
+            if (patches.isNotEmpty()) {
                 execOperations.exec {
-                    commandLine("git", "apply", "--reverse", patch.absolutePath)
+                    // Reverse order, so a later patch that builds on an earlier one still
+                    // matches the tree when it is undone.
+                    commandLine(
+                        listOf("git", "apply", "--reverse") +
+                            patches.reversed().map { it.absolutePath },
+                    )
                     workingDir = src
                 }
             }

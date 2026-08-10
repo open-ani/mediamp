@@ -232,6 +232,15 @@ private fun MpvBuildContext.windowsTarget(
             "-Dd3d-hwaccel=enabled",
             "-Dd3d11=enabled",
             "-Ddirect3d=enabled",
+            // DXVA2, and with it the only zero-copy hwdec the WGL render path can use:
+            // gl-dxinterop-d3d9 builds hwdec_dxva2gldx (WGL_NV_DX_interop), which maps a
+            // DXVA2 surface straight into the producer GL context. mpv's d3d11va mapper
+            // needs a D3D11 renderer, so without this the OpenGL path is copy-back only.
+            // Requested explicitly rather than left at `auto` so a missing prerequisite
+            // fails the configure step instead of silently degrading.
+            "-Dd3d9-hwaccel=enabled",
+            "-Dgl-dxinterop=enabled",
+            "-Dgl-dxinterop-d3d9=enabled",
             "-Dwasapi=enabled",
             "-Dwin32-smtc=disabled",
             "-Dx11=disabled",

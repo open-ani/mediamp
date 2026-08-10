@@ -9,10 +9,10 @@ import org.gradle.kotlin.dsl.register
 import java.io.File
 
 /**
- * Turns a git submodule plus an optional vendored patch into a stable source template for
- * the rest of the build. The patch application happens inside [PrepareSourceTreeTask]
- * itself (apply -> snapshot -> revert around the copy), keeping the submodule clean and
- * the task's inputs deterministic.
+ * Turns a git submodule plus its vendored patches into a stable source template for the
+ * rest of the build. Patch application happens inside [PrepareSourceTreeTask] itself
+ * (apply -> snapshot -> revert around the copy), keeping the submodule clean and the
+ * task's inputs deterministic.
  */
 internal class PatchedSourceTemplateSpec(
     /** Capitalized module tag used in task names, e.g. "Ffmpeg" -> `applyFfmpegPatches`. */
@@ -20,13 +20,17 @@ internal class PatchedSourceTemplateSpec(
     /** Task group and display name, e.g. "ffmpeg". */
     val taskGroup: String,
     val sourceDisplayName: String,
-    val patchFile: File,
+    /** Applied in order; missing files are skipped, so an empty list means "no patches". */
+    val patchFiles: List<File>,
     val sourceDir: File,
     val outputDir: Provider<Directory>,
     /** File that must exist in the tree for it to be considered a valid checkout. */
     val markerFileRelativePath: String,
-    /** How to undo the patch; differs per module for historical reasons. */
-    val revertCommand: List<String>,
+    /**
+     * How to undo the applied patches; differs per module for historical reasons.
+     * Receives the patches that actually exist, in application order.
+     */
+    val revertCommand: (List<File>) -> List<String>,
     val missingSourceMessage: String? = null,
     val preserveSymbolicLinks: Boolean = false,
     val preserveExecutablePermissions: Boolean = false,
@@ -35,32 +39,32 @@ internal class PatchedSourceTemplateSpec(
 internal fun Project.registerPatchedSourceTemplate(
     spec: PatchedSourceTemplateSpec,
 ): TaskProvider<PrepareSourceTreeTask> {
-    // Standalone developer conveniences for working on the patch itself; the template
-    // task no longer depends on them.
+    val patches = spec.patchFiles.filter(File::exists)
+
+    // Standalone developer conveniences for working on the patches themselves; the
+    // template task no longer depends on them.
     tasks.register<Exec>("apply${spec.taskNameInfix}Patches") {
         group = spec.taskGroup
         description = "Apply patches to the ${spec.sourceDisplayName} submodule source tree"
-        enabled = spec.patchFile.exists()
+        enabled = patches.isNotEmpty()
 
-        commandLine("git", "apply", spec.patchFile.absolutePath)
+        commandLine(listOf("git", "apply") + patches.map(File::getAbsolutePath))
         workingDir = spec.sourceDir
     }
 
     tasks.register<Exec>("revert${spec.taskNameInfix}Patches") {
         group = spec.taskGroup
         description = "Revert patches from the ${spec.sourceDisplayName} submodule source tree"
-        enabled = spec.patchFile.exists()
+        enabled = patches.isNotEmpty()
 
-        commandLine(spec.revertCommand)
+        commandLine(spec.revertCommand(patches))
         workingDir = spec.sourceDir
     }
 
     return tasks.register<PrepareSourceTreeTask>("prepare${spec.taskNameInfix}SourceTemplate") {
         group = spec.taskGroup
         description = "Create a stable ${spec.sourceDisplayName} source snapshot for this build"
-        if (spec.patchFile.exists()) {
-            patchFile.set(spec.patchFile)
-        }
+        patchFiles.set(patches.map { layout.projectDirectory.file(it.absolutePath) })
         sourceDir.set(spec.sourceDir)
         outputDir.set(spec.outputDir)
         markerFileRelativePath.set(spec.markerFileRelativePath)

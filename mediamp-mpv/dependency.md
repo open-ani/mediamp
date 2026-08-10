@@ -244,6 +244,8 @@
   - `spirv-cross`
   - `d3d-hwaccel`
   - `d3d11`
+  - `d3d9-hwaccel`(DXVA2 解码)
+  - `gl-dxinterop` / `gl-dxinterop-d3d9`(`WGL_NV_DX_interop` 零拷贝 hwdec, 供 WGL 渲染路径)
   - `direct3d`
   - `wasapi`
 - 禁用：
@@ -325,6 +327,12 @@ Android 子项目额外选项：
 
 ## Windows 渲染与开发工作流
 
+> 本仓库对 mpv 源码打了两个补丁, 一个文件一件上游改动, 各自可独立移除
+> (`MpvModule.kt` 里按顺序应用):
+> - `render_d3d11.patch` —— 上游 PR #17764(libmpv D3D11 render API), 合入 0.42 后可删。
+> - `libmpv_gl_platform_exts.patch` —— 让 OpenGL render API 能看到 WGL/GLX 扩展字符串,
+>   否则被 WGL 扩展 gate 的 interop(`dxva2-dxinterop`)对嵌入方永远不可见。尚未上游。
+
 Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
 **D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
 以 `render_d3d11.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除)在我们自建的
@@ -373,9 +381,18 @@ D3D12 设备, 上面的共享纹理方案无从谈起。此时 mediamp 改走**�
   `wglGetProcAddress` 动态解析并以 glad/GLEW 式宏别名接回标准函数名。
 - 后端选择在播放器构造时依据 `SkikoProperties.renderApi` 决定(此时还没有窗口, 无法观察
   真实 redrawer), 可用 `-Dmediamp.mpv.windows.renderer=opengl|d3d11` 强制。
-- hwdec: 该路径没有零拷贝互操作(mpv 的 `d3d11va` mapper 要求 D3D11 renderer, 而
-  `dxva2-dxinterop` 需要 `d3d9-hwaccel`, 本仓库已禁用), 因此使用
-  `d3d11va-copy,auto-safe`。
+- hwdec: `dxva2,d3d11va-copy,auto-safe`。mpv 的 `d3d11va` mapper 要求 D3D11 renderer,
+  所以 GL renderer 上唯一的零拷贝路径是 `hwdec_dxva2gldx`(DXVA2 surface 经
+  `WGL_NV_DX_interop` 直接映射进生产者 GL 上下文)。它需要三件事同时成立, 现均已具备:
+  libmpv 的 `d3d9-hwaccel` + `gl-dxinterop-d3d9`、FFmpeg 的 DXVA2 hwaccel
+  (`--enable-dxva2`, 见 `FfmpegTargets.kt` 的 `windowsDxva2Flags`), 以及
+  `libmpv_gl_platform_exts.patch`——libmpv 的 render API 原本给
+  `mpgl_load_functions2` 传 `ext2 = NULL`, 而 `WGL_NV_DX_interop` 只出现在
+  `wglGetExtensionsStringARB` 里、不在 `glGetString(GL_EXTENSIONS)` 中, 因此
+  `MPGL_CAP_DXINTEROP` 永远不会被置位, `hwdec_dxva2gldx` 一定 bail。补丁通过调用方的
+  `get_proc_address` 取到 `wglGetExtensionsStringARB` 并把结果作为 `ext2` 传入。
+  驱动不支持该扩展时自动退到 `d3d11va-copy`。D3D11 路径不受影响: mpv 的 autoprobe
+  顺序里 `d3d11va` 排在 `dxva2` 之前。
 - 与 Linux 一样属于"环境绑定"生命周期: render context 只能在 Skiko 暴露出 live share
   context 之后创建, `loadfile` 会被 `openImpl` 挂起等待(spec §6 降级
   `surface-independent-open`)。

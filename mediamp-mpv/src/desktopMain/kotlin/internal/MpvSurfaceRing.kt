@@ -253,15 +253,21 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
         environment.attach(ptr)
 
     /**
-     * The decoder preference the producer context can actually import from. Neither host
-     * has a zero-copy interop for this path: mpv's `d3d11va` mapper needs a D3D11
-     * renderer, and this build has no `dxva2-dxinterop` (it requires `d3d9-hwaccel`), so
-     * Windows uses copy-back hwdec. Linux can stay on-GPU through CUDA/OpenGL for NVIDIA
-     * and uses stable VAAPI decode with a system-memory copy elsewhere.
+     * The decoder preference the producer context can actually import from.
+     *
+     * On Windows that is `dxva2`: mpv's `d3d11va` mapper requires a D3D11 renderer, so
+     * the only zero-copy option on a GL renderer is `hwdec_dxva2gldx`, which maps a DXVA2
+     * surface through `WGL_NV_DX_interop`. It needs `d3d9-hwaccel` + `gl-dxinterop-d3d9`
+     * in libmpv, FFmpeg DXVA2 hwaccels, and the `libmpv_gl_platform_exts` patch that lets
+     * the render API see WGL extension strings at all — all three are in place. Drivers
+     * without the interop extension fall through to `d3d11va-copy`.
+     *
+     * Linux can stay on-GPU through CUDA/OpenGL for NVIDIA and uses stable VAAPI decode
+     * with a system-memory copy elsewhere.
      */
     val hwdecPreference: String
         get() = when (hostOs) {
-            OS.Windows -> "d3d11va-copy,auto-safe"
+            OS.Windows -> "dxva2,d3d11va-copy,auto-safe"
             else -> "nvdec,vaapi-copy,auto-safe"
         }
 
