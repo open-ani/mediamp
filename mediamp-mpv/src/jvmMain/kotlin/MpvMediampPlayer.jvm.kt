@@ -655,8 +655,11 @@ abstract class JvmMpvMediampPlayer(
         mediaMetadata.clear()
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
-        // thread, which used to hang the UI thread (v1 defect M8).
-        thread(name = "mediamp-mpv-teardown") {
+        // thread, which used to hang the UI thread (v1 defect M8). Daemon so that a wedged
+        // native join can never keep a naturally-exiting JVM alive: while the app runs the
+        // thread completes normally, and once the JVM is exiting anyway the OS reclaims
+        // whatever a killed teardown would have released.
+        thread(name = "mediamp-mpv-teardown", isDaemon = true) {
             runCatching { handle.command("stop") }
             runCatching { handle.destroy() }
             runCatching { handle.close() }

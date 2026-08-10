@@ -247,11 +247,15 @@ void wgl_offscreen_context::window_thread_loop() {
     startup_cv_.notify_all();
     if (!window) return;
 
+    // This line doubles as a build marker: its presence in a log confirms the running
+    // mediampv.dll has the dedicated window pump thread.
+    LOGI("WGL fallback window pump thread running");
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
+    LOGI("WGL fallback window pump thread exited");
 }
 
 wgl_offscreen_context *wgl_offscreen_context::create(std::string *error) {
