@@ -13,7 +13,10 @@
 
 #include <windows.h>
 
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace mediampv {
 
@@ -29,16 +32,28 @@ namespace mediampv {
  * current. Rendering only ever targets FBOs; the window's framebuffer is never drawn
  * to and never presented.
  *
+ * The window lives on its own message-pump thread, blocked in GetMessageW — NOT on the
+ * render thread. A top-level window whose thread does not retrieve messages deadlocks
+ * the process: window activation/focus bookkeeping (e.g. when the application's main
+ * window closes) makes other in-process threads SendMessage to every top-level window,
+ * and a cross-thread sent message is only delivered while the owning thread is inside
+ * message retrieval. The render thread spends its life in condition waits, mpv
+ * rendering and JNI upcalls, so it must not own a window; the pump thread services it
+ * at all times. Window and GDI operations (creation, pixel format, destruction) all
+ * happen on the pump thread; the render thread only creates, uses and deletes the WGL
+ * context (HDCs and HGLRCs are not thread-affine — a context is simply current on one
+ * thread at a time).
+ *
  * Thread affinity: create() must run on the thread that will use the context (the
  * render thread). It leaves the context current on success. destroy() must run on that
- * same thread — DestroyWindow only works on the creating thread, and wglDeleteContext
- * requires the context to be current nowhere.
+ * same thread.
  */
 class wgl_offscreen_context final {
 public:
     /**
-     * Creates the hidden window, picks a hardware-accelerated (ICD) pixel format,
-     * and creates the context — preferring a 3.3 core profile through
+     * Starts the window thread (which creates the hidden window and picks a
+     * hardware-accelerated (ICD) pixel format), then creates the context on the
+     * calling thread — preferring a 3.3 core profile through
      * wglCreateContextAttribsARB with a legacy wglCreateContext fallback. On success
      * the context is current on the calling thread. Returns null with *error set on
      * failure.
@@ -54,7 +69,10 @@ public:
 
     ~wgl_offscreen_context();
 
-    /** Releases the context from the calling thread and destroys it with its window. */
+    /**
+     * Releases and deletes the context from the calling thread, then closes the
+     * window (on its pump thread, via WM_CLOSE) and joins the window thread.
+     */
     void destroy();
 
     /**
@@ -64,23 +82,28 @@ public:
      */
     void *get_proc_address(const char *name) const;
 
-    /**
-     * Discards queued window messages. The hidden window is top-level, so it receives
-     * posted system broadcasts, and its thread never runs a message pump — the render
-     * loop calls this on every wake-up so the queue cannot grow without bound.
-     */
-    void drain_window_messages();
-
     wgl_offscreen_context(const wgl_offscreen_context &) = delete;
     wgl_offscreen_context &operator=(const wgl_offscreen_context &) = delete;
 
 private:
-    wgl_offscreen_context(HWND window, HDC device_context, HGLRC context)
-        : window_(window), device_context_(device_context), context_(context) {}
+    wgl_offscreen_context() = default;
+    void window_thread_loop();
+    void shutdown_window_thread();
 
+    // Written by the window thread during startup (before the ready handshake),
+    // read-only afterwards.
     HWND window_ = nullptr;
     HDC device_context_ = nullptr;
-    HGLRC context_ = nullptr;
+    std::string window_error_;
+
+    HGLRC context_ = nullptr; // owned by the render thread
+    std::thread window_thread_;
+
+    // Startup handshake: create() waits until the window thread has either published
+    // window_/device_context_ (with the pixel format set) or failed.
+    std::mutex startup_mutex_;
+    std::condition_variable startup_cv_;
+    bool startup_done_ = false;
 };
 
 } // namespace mediampv

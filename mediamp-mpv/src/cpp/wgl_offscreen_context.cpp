@@ -13,7 +13,6 @@
 #include <GL/gl.h> // glGetString, for logging what the driver actually gave us
 
 #include <cstdint>
-#include <mutex>
 
 #include "log.h"
 
@@ -48,6 +47,16 @@ constexpr int kContextAttributes[] = {
     0,
 };
 
+LRESULT CALLBACK producer_window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
+    // WM_CLOSE -> DefWindowProc -> DestroyWindow; ending the message loop on
+    // WM_DESTROY lets destroy() shut the window thread down with one PostMessage.
+    if (message == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, w_param, l_param);
+}
+
 bool ensure_window_class(std::string *error) {
     static bool registered = false;
     static std::once_flag once;
@@ -58,7 +67,7 @@ bool ensure_window_class(std::string *error) {
         // which is what a long-lived GL drawable needs (a cached DC could be recycled
         // by GDI between wglMakeCurrent calls).
         window_class.style = CS_OWNDC;
-        window_class.lpfnWndProc = DefWindowProcW;
+        window_class.lpfnWndProc = producer_window_proc;
         window_class.hInstance = GetModuleHandleW(nullptr);
         window_class.lpszClassName = kWindowClassName;
         registered = RegisterClassExW(&window_class) != 0 ||
@@ -196,32 +205,75 @@ HGLRC create_and_bind_context(HDC device_context, std::string *error) {
 
 namespace mediampv {
 
+// Runs on the dedicated window thread: creates the hidden window, sets its pixel
+// format, publishes the handles, then pumps messages until WM_DESTROY. GetMessageW
+// keeps the thread inside message retrieval at all times, so cross-thread sent
+// messages (activation/focus bookkeeping when other process windows close) are always
+// delivered promptly instead of deadlocking their sender.
+void wgl_offscreen_context::window_thread_loop() {
+    std::string error;
+    HWND window = nullptr;
+    HDC device_context = nullptr;
+    if (ensure_window_class(&error)) {
+        window = CreateWindowExW(
+            0, kWindowClassName, L"", WS_POPUP, 0, 0, 1, 1,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!window) {
+            error = "CreateWindowExW for the GL fallback drawable failed";
+            LOGE("CreateWindowExW failed: GetLastError=%lu", GetLastError());
+        }
+    }
+    if (window) {
+        // CS_OWNDC hands out the window's private DC; it stays valid until the window
+        // is destroyed and must not be released separately.
+        device_context = GetDC(window);
+        if (!device_context) {
+            error = "GetDC for the GL fallback drawable failed";
+        } else if (!set_producer_pixel_format(device_context, &error)) {
+            device_context = nullptr;
+        }
+        if (!device_context) {
+            DestroyWindow(window);
+            window = nullptr;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(startup_mutex_);
+        window_ = window;
+        device_context_ = device_context;
+        window_error_ = error;
+        startup_done_ = true;
+    }
+    startup_cv_.notify_all();
+    if (!window) return;
+
+    MSG message;
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
 wgl_offscreen_context *wgl_offscreen_context::create(std::string *error) {
-    if (!ensure_window_class(error)) return nullptr;
-
-    HWND window = CreateWindowExW(
-        0, kWindowClassName, L"", WS_POPUP, 0, 0, 1, 1,
-        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!window) {
-        if (error) *error = "CreateWindowExW for the GL fallback drawable failed";
-        LOGE("CreateWindowExW failed: GetLastError=%lu", GetLastError());
-        return nullptr;
+    auto *context = new wgl_offscreen_context();
+    context->window_thread_ = std::thread([context] { context->window_thread_loop(); });
+    {
+        std::unique_lock<std::mutex> lock(context->startup_mutex_);
+        context->startup_cv_.wait(lock, [context] { return context->startup_done_; });
     }
-    // CS_OWNDC hands out the window's private DC; it stays valid until the window is
-    // destroyed and must not be released separately.
-    HDC device_context = GetDC(window);
-    if (!device_context) {
-        DestroyWindow(window);
-        if (error) *error = "GetDC for the GL fallback drawable failed";
+    if (!context->window_) {
+        if (error) *error = context->window_error_;
+        if (context->window_thread_.joinable()) context->window_thread_.join();
+        delete context;
         return nullptr;
     }
 
-    HGLRC context = nullptr;
-    if (set_producer_pixel_format(device_context, error)) {
-        context = create_and_bind_context(device_context, error);
-    }
-    if (!context) {
-        DestroyWindow(window);
+    // The GL context itself belongs to the calling (render) thread. HDCs are not
+    // thread-affine, so using the window's DC from here is fine.
+    context->context_ = create_and_bind_context(context->device_context_, error);
+    if (!context->context_) {
+        context->shutdown_window_thread();
+        delete context;
         return nullptr;
     }
 
@@ -229,32 +281,37 @@ wgl_offscreen_context *wgl_offscreen_context::create(std::string *error) {
          reinterpret_cast<const char *>(glGetString(GL_VENDOR)),
          reinterpret_cast<const char *>(glGetString(GL_RENDERER)),
          reinterpret_cast<const char *>(glGetString(GL_VERSION)));
-    return new wgl_offscreen_context(window, device_context, context);
+    return context;
 }
 
 wgl_offscreen_context::~wgl_offscreen_context() {
     destroy();
 }
 
-void wgl_offscreen_context::destroy() {
-    if (!context_ && !window_) return;
-    if (wglGetCurrentContext() == context_) {
-        wglMakeCurrent(nullptr, nullptr);
+void wgl_offscreen_context::shutdown_window_thread() {
+    if (window_) {
+        // WM_CLOSE -> DefWindowProc -> DestroyWindow (on the window thread, as
+        // required) -> WM_DESTROY -> PostQuitMessage ends the pump loop.
+        PostMessageW(window_, WM_CLOSE, 0, 0);
     }
-    if (context_) wglDeleteContext(context_);
-    if (window_) DestroyWindow(window_);
-    context_ = nullptr;
-    device_context_ = nullptr;
+    if (window_thread_.joinable()) window_thread_.join();
     window_ = nullptr;
+    device_context_ = nullptr;
 }
 
-void wgl_offscreen_context::drain_window_messages() {
-    if (!window_) return;
-    MSG message;
-    while (PeekMessageW(&message, window_, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+void wgl_offscreen_context::destroy() {
+    if (!context_ && !window_) {
+        if (window_thread_.joinable()) window_thread_.join();
+        return;
     }
+    if (context_) {
+        if (wglGetCurrentContext() == context_) {
+            wglMakeCurrent(nullptr, nullptr);
+        }
+        wglDeleteContext(context_);
+        context_ = nullptr;
+    }
+    shutdown_window_thread();
 }
 
 void *wgl_offscreen_context::get_proc_address(const char *name) const {
