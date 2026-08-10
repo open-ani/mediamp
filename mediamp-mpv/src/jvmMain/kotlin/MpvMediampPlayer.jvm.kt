@@ -32,6 +32,7 @@ import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.VideoAspectRatio
+import org.openani.mediamp.features.VideoEnhancement
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.Arch
 import org.openani.mediamp.internal.Platform
@@ -128,15 +129,19 @@ abstract class JvmMpvMediampPlayer(
     private val videoAspectRatio = MpvVideoAspectRatio(handle)
     private val mediaMetadata = MpvMediaMetadata(handle)
     private val framePreview: FramePreview? = createMpvFramePreview(this, context, parentCoroutineContext)
+    private var videoEnhancement: MpvVideoEnhancement? = null
 
-    override val features: PlayerFeatures = buildPlayerFeatures {
-        add(PlaybackSpeed.Key, machinePlaybackSpeed())
-        add(AudioLevelController.Key, audioLevelController)
-        add(Buffering.Key, buffering)
-        add(Screenshots.Key, screenshots)
-        add(VideoAspectRatio.Key, videoAspectRatio)
-        add(MediaMetadata, mediaMetadata)
-        framePreview?.let { add(FramePreview.Key, it) }
+    override val features: PlayerFeatures by lazy(LazyThreadSafetyMode.NONE) {
+        buildPlayerFeatures {
+            add(PlaybackSpeed.Key, machinePlaybackSpeed())
+            add(AudioLevelController.Key, audioLevelController)
+            add(Buffering.Key, buffering)
+            add(Screenshots.Key, screenshots)
+            add(VideoAspectRatio.Key, videoAspectRatio)
+            add(MediaMetadata, mediaMetadata)
+            framePreview?.let { add(FramePreview.Key, it) }
+            videoEnhancement?.let { add(VideoEnhancement.Key, it) }
+        }
     }
 
     private val eventListener = object : EventListener {
@@ -151,6 +156,7 @@ abstract class JvmMpvMediampPlayer(
             when (name) {
                 "track-list" -> mediaMetadata.refreshTracks()
                 "chapter-list" -> mediaMetadata.refreshChapters()
+                "video-params" -> refreshVideoEnhancementSourceSize()
             }
         }
 
@@ -224,6 +230,7 @@ abstract class JvmMpvMediampPlayer(
             val adapter = sessionAdapter ?: return
             when (event) {
                 MPVEvent.FILE_LOADED -> {
+                    refreshVideoEnhancementSourceSize()
                     adapter.onFileLoaded()
                     adapter.pendingOpen?.complete(Unit)
                 }
@@ -445,7 +452,12 @@ abstract class JvmMpvMediampPlayer(
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
+        handle.observeProperty("video-params", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("hwdec-current", MPVFormat.MPV_FORMAT_NONE)
+
+        if (currentPlatform().let { it is Platform.MacOS || it is Platform.Windows }) {
+            videoEnhancement = MpvVideoEnhancement(handle)
+        }
     }
 
     @InternalMediampApi
@@ -477,6 +489,11 @@ abstract class JvmMpvMediampPlayer(
         renderContextReadySignal.update { it + 1 }
     }
 
+    /** Receives the physical video surface size from the desktop render backend. */
+    protected fun updateVideoEnhancementViewport(width: Int, height: Int) {
+        videoEnhancement?.updateViewportSize(width, height)
+    }
+
     private suspend fun awaitRenderContextForLoad() {
         while (true) {
             // Capture the signal before probing so a callback firing between the probe and
@@ -503,6 +520,7 @@ abstract class JvmMpvMediampPlayer(
         awaitRenderContextForLoad()
 
         buffering.bufferedPercentage.value = 0
+        videoEnhancement?.updateSourceSize(0, 0)
 
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
@@ -641,11 +659,13 @@ abstract class JvmMpvMediampPlayer(
     override fun stopImpl() {
         sessionAdapter = null
         handle.command("stop")
+        videoEnhancement?.updateSourceSize(0, 0)
         mediaMetadata.clear()
         buffering.bufferedPercentage.value = 0
     }
 
     override fun closeImpl() {
+        videoEnhancement?.close()
         nativeTeardownStarted = true
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
@@ -685,6 +705,14 @@ abstract class JvmMpvMediampPlayer(
 
     private fun currentNativePositionMillis(): Long =
         (handle.getPropertyDouble("time-pos") * 1000).toLong().coerceAtLeast(0L)
+
+    private fun refreshVideoEnhancementSourceSize() {
+        val width = handle.getPropertyInt("dwidth").takeIf { it > 0 }
+            ?: handle.getPropertyInt("width").coerceAtLeast(0)
+        val height = handle.getPropertyInt("dheight").takeIf { it > 0 }
+            ?: handle.getPropertyInt("height").coerceAtLeast(0)
+        videoEnhancement?.updateSourceSize(width, height)
+    }
 
     /**
      * Returns the media currently loaded, or `null`.

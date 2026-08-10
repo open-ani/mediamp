@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -39,7 +40,9 @@ fun ExoPlayerMediampPlayerSurface(
                 configuration()
             }
         },
-        modifier,
+        modifier.onSizeChanged {
+            mediampPlayer.updateVideoEnhancementViewport(it.width, it.height)
+        },
         onRelease = {
         },
         update = { view ->

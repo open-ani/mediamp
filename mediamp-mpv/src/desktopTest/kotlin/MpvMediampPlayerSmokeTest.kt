@@ -24,6 +24,8 @@ import org.openani.mediamp.PlaybackEvent
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.Screenshots
+import org.openani.mediamp.features.VideoEnhancement
+import org.openani.mediamp.features.VideoEnhancementMode
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.SeekableInputMediaData
@@ -263,6 +265,36 @@ class MpvMediampPlayerSmokeTest {
             assertEquals(0L, player.currentPositionMillis.value)
 
             eventsJob.cancel()
+        }
+    }
+
+    @OptIn(InternalMediampApi::class)
+    @Test
+    fun `clear enhancement applies Anime4K Lite and restores original rendering chain`() {
+        if (!prepareOrSkip()) return
+        val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
+
+        runPlayerTest { player ->
+            player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+            assertTrue(player.requestSurface(1280, 720, 0L))
+
+            val handle = player.impl as MPVHandle
+            val originalScale = handle.getPropertyString("scale")
+            val originalShaders = handle.getPropertyString("glsl-shaders")
+            val enhancement = assertNotNull(player.features[VideoEnhancement])
+
+            enhancement.setMode(VideoEnhancementMode.CLEAR)
+            assertEquals("ewa_lanczossharp", handle.getPropertyString("scale"))
+            assertEquals("0.7", handle.getPropertyString("scale-antiring"))
+            assertEquals("yes", handle.getPropertyString("deband"))
+            assertTrue(
+                handle.getPropertyString("glsl-shaders").orEmpty().contains("mediamp-anime4k-lite-"),
+                "Anime4K Lite shader should be active",
+            )
+
+            enhancement.setMode(VideoEnhancementMode.OFF)
+            assertEquals(originalScale, handle.getPropertyString("scale"))
+            assertEquals(originalShaders, handle.getPropertyString("glsl-shaders"))
         }
     }
 
