@@ -28,13 +28,17 @@ namespace mediampv {
  *
  * WGL has no pbuffer equivalent that is guaranteed present on every driver, and a
  * context can only be made current against a device context. B therefore owns a private
- * invisible 1x1 window plus its `CS_OWNDC` device context, whose pixel format is copied
+ * invisible 1x1 window plus its `CS_OWNDC` device context, whose pixel format is taken
  * from Skiko's HDC so the two contexts are share-compatible. The window is never shown
  * and never pumped; it exists purely as the owner of a valid drawable.
  *
  * The window is created and destroyed by the same thread that runs [create] and
  * [destroy] — the native render thread — because `DestroyWindow` only works from the
  * creating thread.
+ *
+ * When no private drawable can host a context that shares with A, [create] falls back to
+ * borrowing Skiko's own HDC, whose format is compatible by construction. The provider
+ * then owns no window (`window_ == nullptr`) and must not release that device context.
  */
 class wgl_context_provider final : public gl_context_provider {
 public:

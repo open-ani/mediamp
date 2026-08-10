@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include <windows.h>
+#include <GL/gl.h> // glGetString(GL_RENDERER), for diagnosing a software fallback
 
 #include <cstdint>
 
@@ -97,41 +98,117 @@ PIXELFORMATDESCRIPTOR default_pixel_format_descriptor() {
 }
 
 /**
- * Gives [device_context] the pixel format Skiko's own drawable uses, so context B is
- * created against a format that is share-compatible with context A. Falls back to a
- * plain RGBA format when Skiko's HDC cannot be described (it belongs to another thread's
- * window and may be gone).
+ * Whether [format] on [device_context] belongs to the hardware ICD rather than the
+ * Microsoft software implementation. This is the property that decides whether a context
+ * created on it can share with Skiko's: contexts from different implementations cannot,
+ * and a generic-format DC additionally resolves no WGL extension entry points at all.
+ */
+bool is_accelerated_pixel_format(HDC device_context, int format) {
+    PIXELFORMATDESCRIPTOR descriptor{};
+    descriptor.nSize = sizeof(descriptor);
+    descriptor.nVersion = 1;
+    if (format <= 0 ||
+        DescribePixelFormat(device_context, format, sizeof(descriptor), &descriptor) == 0) {
+        return false;
+    }
+    // PFD_GENERIC_FORMAT alone is the software rasterizer; together with
+    // PFD_GENERIC_ACCELERATED it is a (long obsolete) MCD driver. Neither can share with
+    // an ICD context, so only formats with the flag clear qualify.
+    return (descriptor.dwFlags & PFD_GENERIC_FORMAT) == 0 &&
+        (descriptor.dwFlags & PFD_SUPPORT_OPENGL) != 0;
+}
+
+/** First hardware-accelerated RGBA window format offered for [device_context], or 0. */
+int scan_for_accelerated_pixel_format(HDC device_context) {
+    PIXELFORMATDESCRIPTOR descriptor{};
+    descriptor.nSize = sizeof(descriptor);
+    descriptor.nVersion = 1;
+    const int format_count = DescribePixelFormat(device_context, 1, sizeof(descriptor), &descriptor);
+    for (int format = 1; format <= format_count; ++format) {
+        if (DescribePixelFormat(device_context, format, sizeof(descriptor), &descriptor) == 0)
+            continue;
+        const DWORD required = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+        if ((descriptor.dwFlags & required) != required) continue;
+        if (descriptor.dwFlags & PFD_GENERIC_FORMAT) continue;
+        if (descriptor.iPixelType != PFD_TYPE_RGBA) continue;
+        if (descriptor.cColorBits < 24) continue;
+        return format;
+    }
+    return 0;
+}
+
+/**
+ * Gives [device_context] a pixel format that can share with context A.
+ *
+ * Preference order matters more than it looks. `ChoosePixelFormat` matches a
+ * PIXELFORMATDESCRIPTOR, which cannot express most of what distinguishes real formats,
+ * and it will happily return the Microsoft software format — on which `wglCreateContext`
+ * still succeeds but yields a GL 1.1 software context that resolves no WGL extensions and
+ * cannot share with the driver's ICD. So: reuse Skiko's own format index first (our
+ * window is on the same adapter, so the enumerations agree), then a described match, and
+ * only accept a format the driver actually accelerates.
  */
 bool set_producer_pixel_format(HDC device_context, HDC skiko_device_context, std::string *error) {
     PIXELFORMATDESCRIPTOR descriptor = default_pixel_format_descriptor();
+    int skiko_format = 0;
     if (skiko_device_context) {
-        const int skiko_format = GetPixelFormat(skiko_device_context);
+        skiko_format = GetPixelFormat(skiko_device_context);
         PIXELFORMATDESCRIPTOR skiko_descriptor{};
         skiko_descriptor.nSize = sizeof(skiko_descriptor);
         skiko_descriptor.nVersion = 1;
         if (skiko_format > 0 &&
             DescribePixelFormat(
                 skiko_device_context, skiko_format, sizeof(skiko_descriptor), &skiko_descriptor) != 0) {
-            // Keep Skiko's format as-is (same adapter, so it is offered for our window
-            // too); matching it maximizes the chance the driver accepts the share group.
             descriptor = skiko_descriptor;
             descriptor.dwFlags |= PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL;
+            // A generic flag here would mean Compose itself is on software OpenGL, in
+            // which case nothing can share with the driver's ICD.
+            LOGI("Skiko pixel format %d: flags=0x%lx colorBits=%u%s",
+                 skiko_format, skiko_descriptor.dwFlags,
+                 static_cast<unsigned>(skiko_descriptor.cColorBits),
+                 (skiko_descriptor.dwFlags & PFD_GENERIC_FORMAT) ? " (GENERIC/software!)" : "");
+        } else {
+            LOGW("cannot describe Skiko's pixel format (index=%d, GetLastError=%lu); "
+                 "falling back to a generic RGBA descriptor",
+                 skiko_format, GetLastError());
+            skiko_format = 0;
         }
     }
 
-    int format = ChoosePixelFormat(device_context, &descriptor);
-    if (format == 0) {
-        descriptor = default_pixel_format_descriptor();
-        format = ChoosePixelFormat(device_context, &descriptor);
+    int format = 0;
+    const char *source = "none";
+    if (skiko_format > 0 && is_accelerated_pixel_format(device_context, skiko_format)) {
+        format = skiko_format;
+        source = "skiko index";
     }
     if (format == 0) {
-        if (error) *error = "ChoosePixelFormat for the GL producer drawable failed";
+        const int chosen = ChoosePixelFormat(device_context, &descriptor);
+        if (is_accelerated_pixel_format(device_context, chosen)) {
+            format = chosen;
+            source = "ChoosePixelFormat";
+        } else if (chosen != 0) {
+            LOGW("ChoosePixelFormat returned the non-accelerated format %d; scanning instead",
+                 chosen);
+        }
+    }
+    if (format == 0) {
+        format = scan_for_accelerated_pixel_format(device_context);
+        source = "scan";
+    }
+    if (format == 0) {
+        if (error) {
+            *error = "no hardware-accelerated OpenGL pixel format is available for the "
+                     "producer drawable";
+        }
         return false;
     }
     if (!SetPixelFormat(device_context, format, &descriptor)) {
         if (error) *error = "SetPixelFormat for the GL producer drawable failed";
+        LOGE("SetPixelFormat(%d) failed: GetLastError=%lu", format, GetLastError());
         return false;
     }
+    LOGI("WGL producer drawable uses pixel format %d via %s (Skiko uses %d)",
+         format, source, skiko_format);
     return true;
 }
 
@@ -143,7 +220,10 @@ bool set_producer_pixel_format(HDC device_context, HDC skiko_device_context, std
  */
 create_context_attribs_fn resolve_create_context_attribs(HDC device_context) {
     HGLRC bootstrap = wglCreateContext(device_context);
-    if (!bootstrap) return nullptr;
+    if (!bootstrap) {
+        LOGE("bootstrap wglCreateContext failed: GetLastError=%lu", GetLastError());
+        return nullptr;
+    }
 
     create_context_attribs_fn create_context_attribs = nullptr;
     {
@@ -151,12 +231,56 @@ create_context_attribs_fn resolve_create_context_attribs(HDC device_context) {
         if (wglMakeCurrent(device_context, bootstrap)) {
             create_context_attribs = reinterpret_cast<create_context_attribs_fn>(
                 wglGetProcAddress("wglCreateContextAttribsARB"));
+            if (!create_context_attribs) {
+                LOGW("wglCreateContextAttribsARB is unavailable on this drawable "
+                     "(renderer: %s)",
+                     reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
+            }
+        } else {
+            LOGE("bootstrap wglMakeCurrent failed: GetLastError=%lu", GetLastError());
         }
         // previous is restored (normally to no context) before the bootstrap context is
         // deleted: wglDeleteContext fails while the context is still current.
     }
     wglDeleteContext(bootstrap);
     return create_context_attribs;
+}
+
+/**
+ * Creates context B on [device_context], sharing with [share_context].
+ *
+ * Three recipes, most specific first. A driver may refuse to share a core-profile context
+ * with Skiko's compatibility one, so the second recipe asks for a shared context of the
+ * driver's default (compatibility) version — mpv's GL renderer accepts either. The last
+ * is pre-ARB sharing, for drivers without WGL_ARB_create_context at all. Every failure is
+ * logged with its Win32 error, so a total failure names the recipe that got closest.
+ */
+HGLRC create_shared_context(HDC device_context, HGLRC share_context) {
+    if (auto create_context_attribs = resolve_create_context_attribs(device_context)) {
+        if (HGLRC context = create_context_attribs(device_context, share_context, kContextAttributes))
+            return context;
+        LOGW("wglCreateContextAttribsARB(3.3 core, shared) failed: GetLastError=%lu",
+             GetLastError());
+
+        // NULL attributes = every attribute at its default, i.e. the same kind of context
+        // wglCreateContext produces, but shared at creation time.
+        if (HGLRC context = create_context_attribs(device_context, share_context, nullptr))
+            return context;
+        LOGW("wglCreateContextAttribsARB(driver default, shared) failed: GetLastError=%lu",
+             GetLastError());
+    }
+
+    HGLRC context = wglCreateContext(device_context);
+    if (!context) {
+        LOGW("wglCreateContext failed: GetLastError=%lu", GetLastError());
+        return nullptr;
+    }
+    if (!wglShareLists(share_context, context)) {
+        LOGW("wglShareLists with the Skiko context failed: GetLastError=%lu", GetLastError());
+        wglDeleteContext(context);
+        return nullptr;
+    }
+    return context;
 }
 
 } // namespace
@@ -188,11 +312,14 @@ wgl_context_provider *wgl_context_provider::create(
     }
     if (!ensure_window_class(error)) return nullptr;
 
+    // The supplied context A is solely a share-list source; it stays current and owned by
+    // Skiko on its own thread.
     HWND window = CreateWindowExW(
         0, kWindowClassName, L"", WS_POPUP, 0, 0, 1, 1,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!window) {
         if (error) *error = "CreateWindowExW for the GL producer drawable failed";
+        LOGE("CreateWindowExW failed: GetLastError=%lu", GetLastError());
         return nullptr;
     }
     // CS_OWNDC hands out the window's private DC; it stays valid until the window is
@@ -203,39 +330,45 @@ wgl_context_provider *wgl_context_provider::create(
         if (error) *error = "GetDC for the GL producer drawable failed";
         return nullptr;
     }
-    if (!set_producer_pixel_format(device_context, skiko_device_context, error)) {
-        DestroyWindow(window);
-        return nullptr;
-    }
 
-    // The supplied context A is solely a share-list source; it stays current and owned by
-    // Skiko on its own thread. Sharing across profiles (A is a compatibility context) is
-    // explicitly allowed by WGL_ARB_create_context.
     HGLRC context = nullptr;
-    if (auto create_context_attribs = resolve_create_context_attribs(device_context)) {
-        context = create_context_attribs(device_context, share_context, kContextAttributes);
+    if (set_producer_pixel_format(device_context, skiko_device_context, error)) {
+        context = create_shared_context(device_context, share_context);
     }
-    if (!context) {
-        // WGL_ARB_create_context is unavailable or refused 3.3 core. A legacy context is
-        // whatever version the driver defaults to (a compatibility profile), which mpv's
-        // GL renderer also accepts; wglShareLists then joins it to A's share group.
-        context = wglCreateContext(device_context);
-        if (context && !wglShareLists(share_context, context)) {
-            wglDeleteContext(context);
-            context = nullptr;
-        }
+    if (context) {
+        auto *provider =
+            new wgl_context_provider(window, device_context, context, environment.identity);
+        LOGI("created shared WGL producer context=%p share=%p environment=%llu",
+             static_cast<void *>(context), static_cast<void *>(share_context),
+             static_cast<unsigned long long>(environment.identity));
+        return provider;
     }
-    if (!context) {
-        DestroyWindow(window);
+
+    // Last resort: borrow Skiko's own drawable. Its pixel format is share-compatible by
+    // construction, which is the one thing a private window cannot guarantee. Two threads
+    // then hold contexts on the same DC, which is only safe because the producer renders
+    // exclusively into FBOs and never touches the default framebuffer that DC describes.
+    DestroyWindow(window);
+    if (!skiko_device_context) {
         if (error) {
-            *error = "creating a shared WGL producer context failed; the Skiko OpenGL "
-                     "environment may already be stale";
+            *error = "creating a shared WGL producer context failed and Skiko exposed no "
+                     "device context to fall back to";
+        }
+        return nullptr;
+    }
+    LOGW("falling back to Skiko's device context for the WGL producer drawable");
+    context = create_shared_context(skiko_device_context, share_context);
+    if (!context) {
+        if (error) {
+            *error = "creating a shared WGL producer context failed on both a private and "
+                     "Skiko's own drawable; see the preceding log lines for each attempt";
         }
         return nullptr;
     }
 
-    auto *provider = new wgl_context_provider(window, device_context, context, environment.identity);
-    LOGI("created shared WGL producer context=%p share=%p environment=%llu",
+    auto *provider =
+        new wgl_context_provider(nullptr, skiko_device_context, context, environment.identity);
+    LOGI("created shared WGL producer context=%p on Skiko's drawable share=%p environment=%llu",
          static_cast<void *>(context), static_cast<void *>(share_context),
          static_cast<unsigned long long>(environment.identity));
     return provider;
@@ -287,6 +420,7 @@ bool wgl_context_provider::destroy() {
     // wglDeleteContext only succeeds once the context is current nowhere, and
     // DestroyWindow only works on the creating thread — which is the same render thread
     // that owned the context, because the provider is created and destroyed there.
+    // A null window_ means device_context_ is Skiko's and is not ours to release.
     if (context_) wglDeleteContext(context_);
     if (window_) DestroyWindow(window_);
     context_ = nullptr;
