@@ -30,14 +30,11 @@ struct ID3D12Device;
 struct ID3D12Resource;
 #endif
 #include "compatible_thread.h"
+#include "gl_context_provider.h"  // defines MEDIAMP_OPENGL_RENDER
 #include "global_lock.h"
 #include "log.h"
 
 namespace mediampv {
-
-#ifdef __linux__
-class glx_context_provider;
-#endif
 
 class mpv_handle_t final {
 public:
@@ -137,20 +134,31 @@ public:
     bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
-#ifdef __linux__
-    // Context A is Skiko-owned. These borrowed GLX inputs create producer context B
-    // in A's share group; a new identity rebuilds the complete native GL environment.
+#ifdef MEDIAMP_OPENGL_RENDER
+    // Render API (desktop OpenGL): a dedicated native render thread drives mpv through
+    // libmpv's OpenGL render API on producer context B, created inside the share group of
+    // Skiko's live GL context A — GLX on Linux, WGL on Windows. mpv renders into a ring of
+    // shared GL_TEXTURE_2D objects that the Compose consumer wraps in its own context.
+    // Implemented in render_opengl.cpp.
+    //
+    // These entry points carry an `opengl` marker because on Windows this path is
+    // compiled alongside the D3D11 one above; a player uses exactly one of them.
+    //
+    // Context A is Skiko-owned. These borrowed inputs create producer context B in A's
+    // share group; a new identity rebuilds the complete native GL environment.
+    // native_display is an X11 `Display *` on Linux and Skiko's `HDC` on Windows.
     bool attach_opengl_render_environment(
-        int64_t display_ptr, int64_t share_context_ptr, int screen, uint64_t identity);
-    bool create_render_context();
-    bool destroy_render_context();
-    bool set_surface_config(int width, int height, int64_t ignored_device_ptr = 0);
-    uint64_t get_frame_state();
-    int64_t get_buffer_texture(int index); // GLuint texture name, not an FBO.
-    bool ack_retired_buffers();
+        int64_t native_display, int64_t share_context, int screen, uint64_t identity);
+    bool create_opengl_render_context();
+    bool destroy_opengl_render_context();
+    bool set_opengl_surface_config(int width, int height);
+    uint64_t get_opengl_frame_state();
+    int64_t get_opengl_buffer_texture(int index); // GLuint texture name, not an FBO.
+    bool ack_opengl_retired_buffers();
     bool has_opengl_surface();
-    bool save_surface_png(const char *path);
-    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    bool save_opengl_surface_png(const char *path);
+    bool read_opengl_surface_pixels(
+        std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
     struct seekable_stream_entry;
@@ -297,67 +305,20 @@ private:
     void drain_one_frame();
 #endif
 
-#ifdef __linux__
-    mpv_render_context *render_context_ = nullptr;
-    glx_context_provider *glx_provider_ = nullptr;
+#ifdef MEDIAMP_OPENGL_RENDER
+    // Producer context, buffer ring, render thread and readback plumbing of the OpenGL
+    // path. It lives behind a pointer, defined in render_opengl.cpp, so that on Windows —
+    // where both render paths are compiled into the same binary — it does not have to
+    // fight the D3D11 members above for names. Created on first use, destroyed by
+    // destroy(); a null pointer means the path was never used on this handle.
+    struct opengl_render_state;
+    opengl_render_state *opengl_state_ = nullptr;
 
-    // Textures are share-group objects; these FBOs are context-B-local producer targets.
-    static constexpr int kOpenGLBufferCount = 3;
-    struct opengl_buffer {
-        uint32_t texture = 0; // GL_TEXTURE_2D / GL_RGBA8
-        uint32_t fbo = 0;
-    };
-    opengl_buffer buffers_[kOpenGLBufferCount];
-    opengl_buffer retired_buffers_[kOpenGLBufferCount];
-    bool has_retired_buffers_ = false;
-    bool buffers_allocated_ = false;
-    int buffer_width_ = 0, buffer_height_ = 0;
-    uint32_t buffer_generation_ = 0;
-    uint64_t frame_serial_ = 0;
-    int latest_index_ = -1;
-    std::atomic<uint64_t> frame_state_{0xFull << 44};
-
-    int64_t pending_display_ptr_ = 0;
-    int64_t pending_share_context_ptr_ = 0;
-    int pending_screen_ = 0;
-    uint64_t pending_environment_identity_ = 0;
-    bool environment_attached_ = false;
-    bool config_pending_ = false;
-    int pending_width_ = 0, pending_height_ = 0;
-    bool retire_ack_pending_ = false;
-    bool render_pending_ = false;
-    bool render_quit_ = false;
-    bool render_initialized_ = false;
-    bool render_initialize_ok_ = false;
-    std::string screenshot_path_;
-    bool screenshot_pending_ = false;
-    bool screenshot_finished_ = false;
-    bool screenshot_ok_ = false;
-    bool readback_pending_ = false;
-    bool readback_finished_ = false;
-    bool readback_ok_ = false;
-    std::vector<uint32_t> readback_pixels_;
-    int readback_width_ = 0;
-    int readback_height_ = 0;
-    std::mutex render_mutex_;
-    std::condition_variable render_cv_;
-    void *render_thread_ = nullptr; // std::thread*, owned by render_glx.cpp
-
-    void signal_render_update();
-    void start_render_thread();
-    void stop_render_thread();
-    void render_thread_loop();
-    bool create_mpv_render_context_on_render_thread();
-    void destroy_mpv_render_context_on_render_thread();
-    bool apply_config_locked();
-    bool allocate_buffer(opengl_buffer &buffer, int width, int height);
-    void destroy_buffer_ring(opengl_buffer *ring);
-    void publish_state_locked();
-    bool render_into(const opengl_buffer &buffer);
-    void drain_one_frame();
-    bool write_surface_png_on_render_thread(const char *path);
-    bool read_surface_pixels_on_render_thread(
-        std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    opengl_render_state *ensure_opengl_state();
+    /** Stops the render thread and releases the GL resources; keeps the attachment. */
+    void cleanup_opengl_render_resources();
+    /** [cleanup_opengl_render_resources] plus dropping the state itself. */
+    void destroy_opengl_render_state();
 #endif
 
     std::shared_ptr<mediampv::compatible_thread> event_thread_;
@@ -378,13 +339,7 @@ private:
 #ifdef __ANDROID__
     void clear_android_surface(JNIEnv *env);
 #endif
-#ifdef _WIN32
-    void cleanup_render_resources();
-#endif
-#ifdef __APPLE__
-    void cleanup_render_resources();
-#endif
-#ifdef __linux__
+#if defined(_WIN32) || defined(__APPLE__)
     void cleanup_render_resources();
 #endif
 };

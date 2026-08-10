@@ -103,13 +103,11 @@ external fun nHasD3D11Surface(ptr: Long): Boolean
 @InternalMediampApi
 external fun nSaveSurfacePngD3D11(ptr: Long, path: String): Boolean
 
-// OpenGL render path (Linux/GLX): a native render thread
-// render into shared GL_TEXTURE_2D objects. The `consumerEnvironmentPtr` is an opaque
-// native description of Skiko's live GLX environment, not a producer FBO or a texture
-// ID. It is supplied only after the Compose consumer has attached a live OpenGL context.
-//
-// These declarations are the Kotlin/native contract for the later native renderer. The
-// native code resolves the matching Display through JAWT without retaining the component.
+// OpenGL render path (render_opengl.cpp; GLX on Linux, WGL on Windows): a native render
+// thread renders into shared GL_TEXTURE_2D objects owned by a producer context created
+// inside Skiko's share group. Everything below the attachment is platform-independent.
+// The `consumerEnvironmentPtr` of [nSetSurfaceConfigOpenGL] is ignored — the producer
+// joins a share group instead of allocating on a consumer device.
 
 /**
  * Attaches the live Skiko GLX share context before creating libmpv's OpenGL render
@@ -126,6 +124,27 @@ external fun nAttachRenderEnvironmentOpenGL(
     drawable: Long,
     window: Long,
 ): Boolean
+
+/**
+ * Windows counterpart of [nAttachRenderEnvironmentOpenGL]. [deviceContext] (`HDC`) and
+ * [shareContext] (`HGLRC`) are the pair Skiko has current on the Compose render thread;
+ * read them with [nCurrentRenderEnvironmentOpenGLWindows]. A changed [identity] requires
+ * a fresh attachment and rebuilds the whole native GL environment.
+ */
+@InternalMediampApi
+external fun nAttachRenderEnvironmentOpenGLWindows(
+    ptr: Long,
+    deviceContext: Long,
+    shareContext: Long,
+    identity: Long,
+): Boolean
+
+/**
+ * `[HDC, HGLRC]` of the OpenGL context current on the calling thread, or `null` when
+ * there is none — which on Windows means the caller is not inside a Compose draw pass.
+ */
+@InternalMediampApi
+external fun nCurrentRenderEnvironmentOpenGLWindows(): LongArray?
 
 @InternalMediampApi
 external fun nCreateRenderContextOpenGL(ptr: Long): Boolean
@@ -162,7 +181,7 @@ external fun nSaveSurfacePngOpenGL(ptr: Long, path: String): Boolean
 
 /**
  * Creates a consumer-context FBO and attaches [textureName]. This must be called only
- * while Skiko's GLX context is current. The producer owns the texture; Kotlin owns and
+ * while Skiko's OpenGL context is current. The producer owns the texture; Kotlin owns and
  * later deletes the returned FBO in the same consumer context.
  */
 @InternalMediampApi

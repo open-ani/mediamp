@@ -18,8 +18,10 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
+import org.jetbrains.skiko.GraphicsApi
 import org.jetbrains.skiko.OS
 import org.jetbrains.skiko.SkiaLayer
+import org.jetbrains.skiko.SkikoProperties
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
@@ -52,12 +54,11 @@ import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
-import org.openani.mediamp.mpv.nAttachRenderEnvironmentOpenGL
 import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
 import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
 import org.openani.mediamp.mpv.utils.SkiaMetalInterop
-import org.openani.mediamp.mpv.utils.SkiaOpenGLInterop
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
+import org.openani.mediamp.mpv.utils.createSkiaOpenGLInterop
 
 internal const val SURFACE_RING_BUFFER_COUNT = 3
 
@@ -82,14 +83,35 @@ internal class MpvConsumerRenderTarget(
 
 /**
  * The native surface-ring backend for the current host: macOS renders through
- * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures,
- * and Linux through shared OpenGL textures (render_glx.cpp).
+ * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures
+ * (render_d3d11.cpp) or — when Compose renders with OpenGL — through shared OpenGL
+ * textures, and Linux always through shared OpenGL textures (render_opengl.cpp).
  */
 internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs) {
     OS.MacOS -> MacosSurfaceRingBackend
-    OS.Windows -> D3D11SurfaceRingBackend
+    OS.Windows -> if (windowsRendersWithOpenGL()) OpenGLSurfaceRingBackend else D3D11SurfaceRingBackend
     OS.Linux -> OpenGLSurfaceRingBackend
     else -> null
+}
+
+/**
+ * Whether Compose renders this Windows process through Skiko's `WindowsOpenGLRedrawer`
+ * instead of the Direct3D 12 default. The two share nothing: the mpv producer either
+ * hands Skia D3D12 resources or share-group GL textures, and the choice is made when a
+ * player is constructed — before any window exists, so the live redrawer cannot be
+ * consulted. The requested render API is what Skiko will attempt first, and going
+ * through its fallback queue would already have replaced Compose's whole renderer.
+ *
+ * `-Dmediamp.mpv.windows.renderer=opengl|d3d11` overrides the decision (useful when the
+ * host sets the render API through `SkiaLayerProperties` rather than the global one).
+ */
+private fun windowsRendersWithOpenGL(): Boolean {
+    when (System.getProperty("mediamp.mpv.windows.renderer")?.lowercase()) {
+        "opengl", "gl" -> return true
+        "d3d11", "d3d12", "direct3d" -> return false
+    }
+    // Throws for OPENGL on Windows ARM64, where Skiko refuses the API outright.
+    return runCatching { SkikoProperties.renderApi }.getOrNull() == GraphicsApi.OPENGL
 }
 
 /**
@@ -98,7 +120,7 @@ internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs)
  * the consumer device, and which [MpvRenderContextLifecycle] governs the producer
  * context. The consumer state machine on top ([MpvSurfaceRing]) is capability-based:
  * Metal/IOSurface on macOS, D3D11/D3D12 shared textures on Windows, and shared OpenGL
- * textures on Linux/GLX.
+ * textures on Linux/GLX and Windows/WGL.
  */
 internal interface MpvSurfaceRingBackend {
     fun createRenderContext(ptr: Long): Boolean
@@ -120,9 +142,9 @@ internal interface MpvSurfaceRingBackend {
 
     /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
-     * pointer to Skiko's native DirectXDevice struct on Windows. OpenGL attaches its GLX
-     * environment separately and ignores this value. 0 requests a consumer-less ring
-     * where that platform supports one.
+     * pointer to Skiko's native DirectXDevice struct on Windows D3D11. OpenGL attaches its
+     * share-group environment separately and ignores this value. 0 requests a
+     * consumer-less ring where that platform supports one.
      */
     fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long): Boolean
     fun getFrameState(ptr: Long): Long
@@ -205,12 +227,13 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
 }
 
 /**
- * Contract half of the shared-texture OpenGL backend. The producer FBO is context-local
- * to the native GLX context, so [nGetBufferTextureOpenGL] returns a shared texture name,
- * not an FBO. Consumer FBOs are created while Skiko's context is current before calling
- * `BackendRenderTarget.makeGL`. They are not share-group objects: they
- * are created and deleted by JNI while Skiko context A is current, while the producer
- * remains the sole owner of the shared texture names.
+ * Contract half of the shared-texture OpenGL backend (Linux/GLX and Windows/WGL). The
+ * producer FBO is context-local to the native producer context, so
+ * [nGetBufferTextureOpenGL] returns a shared texture name, not an FBO. Consumer FBOs are
+ * created while Skiko's context is current before calling `BackendRenderTarget.makeGL`.
+ * They are not share-group objects: they are created and deleted by JNI while Skiko
+ * context A is current, while the producer remains the sole owner of the shared texture
+ * names.
  */
 @OptIn(InternalMediampApi::class)
 internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
@@ -227,13 +250,20 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsOpenGL(ptr, dims)
 
     fun attachRenderEnvironment(ptr: Long, environment: OpenGLRenderEnvironment): Boolean =
-        nAttachRenderEnvironmentOpenGL(
-            ptr,
-            environment.component,
-            environment.shareContext,
-            environment.drawable,
-            environment.window,
-        )
+        environment.attach(ptr)
+
+    /**
+     * The decoder preference the producer context can actually import from. Neither host
+     * has a zero-copy interop for this path: mpv's `d3d11va` mapper needs a D3D11
+     * renderer, and this build has no `dxva2-dxinterop` (it requires `d3d9-hwaccel`), so
+     * Windows uses copy-back hwdec. Linux can stay on-GPU through CUDA/OpenGL for NVIDIA
+     * and uses stable VAAPI decode with a system-memory copy elsewhere.
+     */
+    val hwdecPreference: String
+        get() = when (hostOs) {
+            OS.Windows -> "d3d11va-copy,auto-safe"
+            else -> "nvdec,vaapi-copy,auto-safe"
+        }
 
     override fun makeConsumerRenderTarget(
         width: Int,
@@ -264,8 +294,9 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
 
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
     override val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.BOTTOM_LEFT
-    override val rendererName: String get() = "OpenGL/GLX"
-    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaOpenGLInterop(layer)
+    override val rendererName: String get() = if (hostOs == OS.Windows) "OpenGL/WGL" else "OpenGL/GLX"
+    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop =
+        createSkiaOpenGLInterop(layer)
 
     override fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
         OpenGLRenderContextLifecycle(this, host)
@@ -322,8 +353,8 @@ internal class MpvSurfaceRing(
     }
 
     /**
-     * Drops consumer-side Skia objects before the producer replaces its GLX share group.
-     * A replaced GLX context destroys its context-local FBOs itself; their shared texture
+     * Drops consumer-side Skia objects before the producer replaces its GL share group.
+     * A replaced GL context destroys its context-local FBOs itself; their shared texture
      * names must never be reused by the new context.
      */
     fun invalidateForRenderEnvironmentChange() {

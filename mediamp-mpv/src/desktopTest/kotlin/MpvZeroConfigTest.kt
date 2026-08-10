@@ -77,13 +77,13 @@ class MpvZeroConfigTest {
                 val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = main)
                 try {
                     val uri = "http://127.0.0.1:${server.address.port}/video.mp4"
-                    if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {
-                        // Linux public playback intentionally holds setMediaData in Opening
-                        // until a live Skiko GLX environment exists (degraded
+                    if (player.renderContextLifecycle?.deferredReadiness == true) {
+                        // The OpenGL backends intentionally hold setMediaData in Opening
+                        // until a live Skiko GL environment exists (degraded
                         // surface-independent-open, spec §6). This zero-config case only
                         // probes the bundled runtime's HTTP/header support against an
                         // intentional 404; the real public playback path is covered by the
-                        // GLX validation lane.
+                        // OpenGL validation lane.
                         assertTrue(player.handle.option("http-header-fields", "X-Mediamp-Test: present"))
                         assertTrue(player.handle.command("loadfile", uri, "replace"))
                     } else {

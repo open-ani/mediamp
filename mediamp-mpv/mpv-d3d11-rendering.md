@@ -17,6 +17,13 @@
 > - 附带修复:`mpvRuntimeAllElements` 聚合 variant 缺 capability, 导致项目内
 >   `implementation(projects.mediampMpv)` 被解析到该 variant(buildSrc 已修)。
 > 当前工作流见 [dependency.md](dependency.md) "Windows 渲染与开发工作流"。
+>
+> **后续(2026-08):** §5 删掉的旧同步 GL 路径没有回归, 但 Windows 又多了一条**独立的**
+> OpenGL 路径: 当宿主把 Compose 切到 Skiko 的 OpenGL 后端时(Skia 没有 D3D12 设备, 本文的
+> 共享纹理方案不成立), mediamp 走与 Linux 同构的 WGL 共享纹理方案
+> (`src/cpp/render_opengl.cpp` + `wgl_context_provider.cpp`, 独立渲染线程 + 三缓冲环,
+> 不是被删掉的 `glFinish` 阻塞 UI 线程的老实现)。D3D11 仍是 Windows 默认路径。
+> 详见 [dependency.md](dependency.md) "Windows OpenGL (WGL) 渲染路径"。
 
 ---
 

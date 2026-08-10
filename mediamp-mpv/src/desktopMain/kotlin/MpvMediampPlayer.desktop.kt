@@ -42,9 +42,10 @@ actual class MpvMediampPlayer(
 
     /**
      * Producer-context lifecycle chosen by the backend: eager where the backend owns its
-     * producer device (macOS/Windows), environment-bound on Linux. Platform-specific
-     * operations (such as the Linux GLX attach) exist only on the platform
-     * implementation, so other platforms cannot call them by mistake.
+     * producer device (macOS Metal, Windows D3D11), environment-bound where it must join
+     * Skiko's live OpenGL share group (Linux, and Windows with an OpenGL Compose
+     * renderer). Backend-specific operations (such as the GL environment attach) exist
+     * only on the backend implementation, so other backends cannot call them by mistake.
      */
     internal val renderContextLifecycle: MpvRenderContextLifecycle? =
         ringBackend?.createRenderContextLifecycle(

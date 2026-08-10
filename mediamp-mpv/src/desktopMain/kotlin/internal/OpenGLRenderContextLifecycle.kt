@@ -14,9 +14,9 @@ import org.openani.mediamp.mpv.utils.SkiaOpenGLInterop
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 
 /**
- * Linux GLX lifecycle: the producer context must join Skiko's live GLX share group, so it
- * can only be created after [attachRenderEnvironment], and `loadfile` is gated on that
- * (`vo=libmpv` requires the render context to exist first).
+ * OpenGL lifecycle (Linux/GLX, Windows/WGL): the producer context must join Skiko's live
+ * GL share group, so it can only be created after [attachRenderEnvironment], and
+ * `loadfile` is gated on that (`vo=libmpv` requires the render context to exist first).
  */
 internal class OpenGLRenderContextLifecycle(
     private val backend: OpenGLSurfaceRingBackend,
@@ -26,11 +26,10 @@ internal class OpenGLRenderContextLifecycle(
     private var attachedEnvironment: OpenGLRenderEnvironment? = null
 
     override fun initialize() {
-        // Prefer the two Linux paths mediamp validates: NVIDIA can keep decoded
-        // frames on-GPU through CUDA/OpenGL, while Intel/AMD use stable VAAPI
-        // decode with a system-memory copy. Only then try mpv's safe auto list.
-        check(host.handle.setPropertyString("hwdec", "nvdec,vaapi-copy,auto-safe"))
-        // No producer context yet: the live Skiko GLX environment must be attached
+        // Restrict decoding to what this platform's producer context can import; see
+        // OpenGLSurfaceRingBackend.hwdecPreference.
+        check(host.handle.setPropertyString("hwdec", backend.hwdecPreference))
+        // No producer context yet: the live Skiko GL environment must be attached
         // first, otherwise `vo=libmpv` would be asked to load before its required
         // render context can exist.
     }
@@ -49,16 +48,16 @@ internal class OpenGLRenderContextLifecycle(
         val environment = attachedEnvironment ?: return null
         return MpvRenderContextProvisioning { handlePtr ->
             check(backend.attachRenderEnvironment(handlePtr, environment)) {
-                "Could not attach the main player's GLX environment to the preview decoder"
+                "Could not attach the main player's OpenGL environment to the preview decoder"
             }
         }
     }
 
-    /** The currently attached GLX environment, or null before the first attach. */
+    /** The currently attached GL environment, or null before the first attach. */
     fun currentRenderEnvironment(): OpenGLRenderEnvironment? = attachedEnvironment
 
     /**
-     * Attaches Skiko's current GLX share environment. A new identity is a device
+     * Attaches Skiko's current GL share environment. A new identity is a device
      * recreation: native code must discard its old producer context/share group before
      * the next `createRenderContext`, and the ring recreates its consumer wrappers on
      * the next published generation.
@@ -70,16 +69,16 @@ internal class OpenGLRenderContextLifecycle(
         }
         if (attachedEnvironment != null) {
             // mpv's render.h states that freeing mpv_render_context while video is active
-            // forcibly disables video. Replacing Skiko's GLX share group therefore cannot
+            // forcibly disables video. Replacing Skiko's GL share group therefore cannot
             // be handled by merely destroying and recreating context B: recovery would
             // require a separately verified video-output reload that preserves position,
             // pause state, selected track, and hwdec state.
             check(!host.hasActivePlaybackSession()) {
-                "Skiko replaced its GLX share context during active playback. " +
+                "Skiko replaced its OpenGL share context during active playback. " +
                     "Transparent mpv video-output recovery is not supported."
             }
-            // The native OpenGL renderer owns its GLX context and must release it before
-            // accepting a new Skiko share context. The old GLX context owns its stale
+            // The native OpenGL renderer owns its producer context and must release it
+            // before accepting a new Skiko share context. The old context owns its stale
             // FBOs; closing Skia wrappers below makes their texture references disappear.
             host.invalidateSurfaceRingForEnvironmentChange()
             backend.destroyRenderContext(host.handle.ptr)
@@ -94,9 +93,10 @@ internal class OpenGLRenderContextLifecycle(
 }
 
 /**
- * Linux GLX draw resolver: Skiko may replace its redrawer (and with it the GLX share
- * group) at runtime, so every draw re-reads the live snapshot and re-attaches when the
- * identity changed.
+ * OpenGL draw resolver: Skiko may replace its redrawer (and with it the GL share group)
+ * at runtime, so every draw re-reads the live snapshot and re-attaches when the identity
+ * changed. On Windows the snapshot additionally has to be taken here rather than earlier,
+ * because the WGL handles are only observable while Skiko's context is current.
  */
 internal class OpenGLSurfaceDrawResolver(
     private val interop: SkiaOpenGLInterop,
@@ -108,7 +108,7 @@ internal class OpenGLSurfaceDrawResolver(
     override fun resolveDrawPass(renderContextReady: Boolean): MpvSurfaceDrawPass? {
         val snapshot = runCatching { interop.renderSnapshot() }
             .onFailure {
-                MPVLog.error(host.handle.ptr, "Linux GLX render context unavailable; video stays black", it)
+                MPVLog.error(host.handle.ptr, "OpenGL render context unavailable; video stays black", it)
             }
             .getOrNull() ?: return null
         val environment = snapshot.environment
@@ -119,11 +119,11 @@ internal class OpenGLSurfaceDrawResolver(
         } else {
             runCatching { lifecycle.attachRenderEnvironment(environment) }
                 .onFailure {
-                    MPVLog.error(host.handle.ptr, "Linux GLX render context unavailable; video stays black", it)
+                    MPVLog.error(host.handle.ptr, "OpenGL render context unavailable; video stays black", it)
                 }
                 .getOrDefault(false)
         }
         if (!attached) return null
-        return MpvSurfaceDrawPass(snapshot.directContext) { environment.shareContext }
+        return MpvSurfaceDrawPass(snapshot.directContext) { environment.renderDeviceToken }
     }
 }

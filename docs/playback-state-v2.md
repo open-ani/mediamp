@@ -381,14 +381,15 @@ for a saved-position-at-end resume).
   permanently kills the video track (`vo_libmpv` preinit fails → `error_on_track` deselects
   video for the session; video-only files then END_FILE(error)), so the render context must
   exist before open. Where the platform supports context creation without a UI surface —
-  macOS (Metal/IOSurface, the existing eager lifecycle) and Windows (D3D11) — the backend
-  MUST create it eagerly at construction. On Linux/GLX the producer context must join Skiko's
-  live GLX share group, which does not exist before the surface attaches and cannot be
-  replaced mid-session (`mpv_render_context_free` while video is active force-disables
-  video), so the Linux backend declares `surface-independent-open` degraded: `setMediaData`
-  before first surface attach holds in Opening until the render context becomes available (or
-  stop/close); conformance gates the load-before-UI scenarios on this capability. (Upgrade
-  path: EGL/dmabuf interop.) Headless CI constructs in a declared video-disabled mode
+  macOS (Metal/IOSurface, the existing eager lifecycle) and Windows with the default
+  Direct3D Compose renderer (D3D11) — the backend MUST create it eagerly at construction.
+  Where the producer context must join Skiko's live OpenGL share group — Linux/GLX, and
+  Windows/WGL when the host runs Compose with `SKIKO_RENDER_API=OPENGL` — that group does
+  not exist before the surface attaches and cannot be replaced mid-session
+  (`mpv_render_context_free` while video is active force-disables video), so those backends
+  declare `surface-independent-open` degraded: `setMediaData` before first surface attach
+  holds in Opening until the render context becomes available (or stop/close); conformance
+  gates the load-before-UI scenarios on this capability. (Upgrade path: EGL/dmabuf interop.) Headless CI constructs in a declared video-disabled mode
   (`vo=null`). v1's defer-loadfile-to-resume (deferral to `play()`) is abolished everywhere —
   deferral, where unavoidable, lives inside Opening, never after Ready.
 - **Speed**: `setRateImpl` is part of the SPI. Feature `PlaybackSpeed.set` goes through the

@@ -61,18 +61,20 @@ glx_context_provider::glx_context_provider(
     GLXContext context,
     GLXPbuffer drawable,
     uint64_t environment_identity)
-    : display_(display),
+    : gl_context_provider(environment_identity),
+      display_(display),
       context_(context),
-      drawable_(drawable),
-      environment_identity_(environment_identity) {}
+      drawable_(drawable) {}
 
 glx_context_provider::~glx_context_provider() {
     destroy();
 }
 
 glx_context_provider *glx_context_provider::create(
-    const glx_render_environment &environment, std::string *error) {
-    if (!environment.display || !environment.share_context) {
+    const gl_render_environment &environment, std::string *error) {
+    auto *display = reinterpret_cast<Display *>(static_cast<uintptr_t>(environment.native_display));
+    auto share_context = reinterpret_cast<GLXContext>(static_cast<uintptr_t>(environment.share_context));
+    if (!display || !share_context) {
         if (error) *error = "GLX render environment requires a live Display and share context";
         return nullptr;
     }
@@ -84,43 +86,41 @@ glx_context_provider *glx_context_provider::create(
     // Skiko and mediamp use the same Xlib Display. Lock it for the complete setup so
     // another thread cannot interleave a GLX request on this connection. We do not call
     // XInitThreads here: it has to run before any Xlib use, which is Skiko's decision.
-    XLockDisplay(environment.display);
+    XLockDisplay(display);
     int config_count = 0;
     GLXFBConfig *configs = glXChooseFBConfig(
-        environment.display, environment.screen, kFramebufferAttributes, &config_count);
+        display, environment.screen, kFramebufferAttributes, &config_count);
     if (!configs || config_count == 0) {
         if (configs) XFree(configs);
-        XUnlockDisplay(environment.display);
+        XUnlockDisplay(display);
         if (error) *error = "no GLX RGBA pbuffer framebuffer configuration is available";
         return nullptr;
     }
 
     int shared_config_id = 0;
-    glXQueryContext(
-        environment.display, environment.share_context,
-        GLX_FBCONFIG_ID, &shared_config_id);
+    glXQueryContext(display, share_context, GLX_FBCONFIG_ID, &shared_config_id);
     GLXFBConfig selected_config = configs[0];
     for (int i = 0; i < config_count && shared_config_id != 0; ++i) {
         int candidate_id = 0;
-        glXGetFBConfigAttrib(environment.display, configs[i], GLX_FBCONFIG_ID, &candidate_id);
+        glXGetFBConfigAttrib(display, configs[i], GLX_FBCONFIG_ID, &candidate_id);
         if (candidate_id == shared_config_id) {
             selected_config = configs[i];
             break;
         }
     }
-    GLXPbuffer pbuffer = glXCreatePbuffer(environment.display, selected_config, kPbufferAttributes);
+    GLXPbuffer pbuffer = glXCreatePbuffer(display, selected_config, kPbufferAttributes);
     if (!pbuffer) {
         XFree(configs);
-        XUnlockDisplay(environment.display);
+        XUnlockDisplay(display);
         if (error) *error = "glXCreatePbuffer failed";
         return nullptr;
     }
 
     auto create_context_attribs = get_create_context_attribs();
     if (!create_context_attribs) {
-        glXDestroyPbuffer(environment.display, pbuffer);
+        glXDestroyPbuffer(display, pbuffer);
         XFree(configs);
-        XUnlockDisplay(environment.display);
+        XUnlockDisplay(display);
         if (error) *error = "GLX_ARB_create_context is unavailable; OpenGL 3.3 sharing is required";
         return nullptr;
     }
@@ -128,21 +128,20 @@ glx_context_provider *glx_context_provider::create(
     // The pbuffer is only a drawable for context B. The supplied context A is solely a
     // share-list source and remains current/owned by Skiko on its own render thread.
     GLXContext context = create_context_attribs(
-        environment.display, selected_config, environment.share_context, True, kContextAttributes);
+        display, selected_config, share_context, True, kContextAttributes);
     XFree(configs);
-    XUnlockDisplay(environment.display);
+    XUnlockDisplay(display);
     if (!context) {
         // GLX context creation failed. The environment might be stale or from another
         // screen/share group; callers must rediscover it instead of retrying blindly.
-        XLockDisplay(environment.display);
-        glXDestroyPbuffer(environment.display, pbuffer);
-        XUnlockDisplay(environment.display);
+        XLockDisplay(display);
+        glXDestroyPbuffer(display, pbuffer);
+        XUnlockDisplay(display);
         if (error) *error = "glXCreateContextAttribsARB(3.3 core, shared) failed";
         return nullptr;
     }
 
-    auto *provider = new glx_context_provider(
-        environment.display, context, pbuffer, environment.identity);
+    auto *provider = new glx_context_provider(display, context, pbuffer, environment.identity);
     LOGI("created shared GLX producer context=%p pbuffer=%lu environment=%llu",
          static_cast<void *>(context), static_cast<unsigned long>(pbuffer),
          static_cast<unsigned long long>(environment.identity));

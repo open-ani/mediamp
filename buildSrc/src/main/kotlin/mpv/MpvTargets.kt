@@ -242,8 +242,14 @@ private fun MpvBuildContext.windowsTarget(
         jni = MpvJniToolchain(
             compilerCommand = pathForShell(msys2Root.resolve("$msysSubsystem/bin/$compilerExecutable"), true),
             compilerArgs = listOf(CPP_STANDARD_FLAG, "-fPIC", "-shared", "-D_WIN32_WINNT=0x0A00"),
-            // D3D11 render path (render_d3d11.cpp); windowscodecs/ole32 are for the WIC PNG readback.
-            linkerArgs = listOf("-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid", "-lwindowscodecs", "-lole32"),
+            // D3D11 render path (render_d3d11.cpp); windowscodecs/ole32 are for the WIC PNG
+            // readback (png_writer.cpp); opengl32/gdi32 are for the WGL render path
+            // (wgl_context_provider.cpp, render_opengl.cpp), which drives mpv when Compose
+            // renders with Skiko's OpenGL backend instead of Direct3D.
+            linkerArgs = listOf(
+                "-ld3d11", "-ld3d12", "-ldxgi", "-ldxguid", "-lwindowscodecs", "-lole32",
+                "-lopengl32", "-lgdi32",
+            ),
             outputFileName = "mediampv.dll",
             sourceExtensions = setOf("cpp"),
             useJdkIncludes = true,

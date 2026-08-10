@@ -79,9 +79,10 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  *
  * Capability notes (spec §6): mpv cannot measure data starvation while user-paused
  * (`paused-for-cache` does not engage at pause) — the `paused-stall` capability is degraded;
- * `isStalled` is authoritative only while the native transport is playing. On Linux the
- * `surface-independent-open` capability is degraded: [openImpl] suspends until the GLX render
- * context exists (see [ensureRenderContextForLoad]).
+ * `isStalled` is authoritative only while the native transport is playing. Wherever the mpv
+ * producer context has to join Skiko's OpenGL share group (Linux, and Windows with an OpenGL
+ * Compose renderer) the `surface-independent-open` capability is degraded: [openImpl] suspends
+ * until that render context exists (see [ensureRenderContextForLoad]).
  */
 @kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
@@ -351,8 +352,10 @@ abstract class JvmMpvMediampPlayer(
             }
 
             is Platform.Windows -> {
-                // The desktop render path drives the libmpv D3D11 render API on its own
-                // ID3D11Device (render_d3d11.cpp); gpu-context is not used with vo=libmpv.
+                // The desktop render path drives either the libmpv D3D11 render API on its
+                // own ID3D11Device (render_d3d11.cpp) or, when Compose renders with OpenGL,
+                // the OpenGL render API on a WGL context inside Skiko's share group
+                // (render_opengl.cpp). gpu-context is not used with vo=libmpv either way.
                 handle.option("ao", "wasapi")
                 handle.option("vo", "libmpv")
             }
@@ -365,7 +368,7 @@ abstract class JvmMpvMediampPlayer(
             }
 
             is Platform.Linux -> {
-                // The desktop GLX bridge creates libmpv's OpenGL render context only after
+                // The desktop OpenGL bridge creates libmpv's render context only after
                 // Skiko exposes its live share context; ao is picked at playback time.
                 handle.option("ao", "pulse,alsa")
                 handle.option("vo", "libmpv")
@@ -461,8 +464,9 @@ abstract class JvmMpvMediampPlayer(
     /**
      * Whether the producer render context may exist for `loadfile` right now. Platform
      * subclasses whose render context is unavailable until an external render environment is
-     * attached (Linux/GLX) return `false`; [openImpl] then suspends (holding the machine in
-     * Opening — spec §6, degraded `surface-independent-open`) until [renderContextBecameReady].
+     * attached (the OpenGL backends) return `false`; [openImpl] then suspends (holding the
+     * machine in Opening — spec §6, degraded `surface-independent-open`) until
+     * [renderContextBecameReady].
      */
     protected open fun ensureRenderContextForLoad(): Boolean = true
 
@@ -495,10 +499,10 @@ abstract class JvmMpvMediampPlayer(
         playWhenReady: Boolean,
         startPositionMillis: Long,
     ): OpenResult {
-        // Linux/GLX (spec §6): with vo=libmpv, `loadfile` before the render context exists
-        // permanently disables the video track, and the producer context can only join
-        // Skiko's live GLX share group. Suspend here (machine stays in Opening) until the
-        // surface attach provides it. Eager platforms (macOS Metal, Windows D3D11) and
+        // OpenGL backends (spec §6): with vo=libmpv, `loadfile` before the render context
+        // exists permanently disables the video track, and the producer context can only
+        // join Skiko's live GL share group. Suspend here (machine stays in Opening) until
+        // the surface attach provides it. Eager backends (macOS Metal, Windows D3D11) and
         // headless modes proceed immediately.
         awaitRenderContextForLoad()
 

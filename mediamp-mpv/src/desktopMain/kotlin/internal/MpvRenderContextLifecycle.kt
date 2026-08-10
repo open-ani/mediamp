@@ -46,9 +46,9 @@ internal fun interface MpvRenderContextProvisioning {
  * producer context must join an externally owned render environment
  * (`OpenGLRenderContextLifecycle`) create it only once that environment has been attached
  * and gate `loadfile` on it. Chosen by [MpvSurfaceRingBackend], so the shared player and
- * composable contain no platform checks — and platform-specific operations (such as the
- * Linux GLX attach) exist only on the platform implementation, where other platforms
- * cannot call them by mistake.
+ * composable contain no platform checks — and backend-specific operations (such as the
+ * OpenGL share-group attach) exist only on the backend implementation, where other
+ * backends cannot call them by mistake.
  */
 internal interface MpvRenderContextLifecycle {
     /**
@@ -94,7 +94,8 @@ internal interface MpvRenderContextLifecycle {
 /**
  * Lifecycle for backends that own their producer device (macOS Metal, Windows D3D11):
  * the render context is created eagerly at player construction and needs nothing from
- * the live Skiko renderer.
+ * the live Skiko renderer. The OpenGL backends cannot: their producer context only exists
+ * inside Skiko's share group.
  */
 internal class EagerRenderContextLifecycle(
     private val backend: MpvSurfaceRingBackend,

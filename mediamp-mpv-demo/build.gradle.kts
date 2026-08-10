@@ -53,11 +53,9 @@ tasks.matching { it.name == "run" }.configureEach {
     dependsOn(compileNativeBridge)
 }
 
-// Production mediamp-mpv path (Windows D3D11 / macOS Metal / Linux GLX) against a locally
-// assembled runtime: ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
-tasks.register<JavaExec>("runD3D11") {
+// Production mediamp-mpv path against a locally assembled runtime.
+fun JavaExec.configureProductionDemo() {
     group = "mediamp"
-    description = "Run the production mediamp-mpv demo (D3D11 on Windows, Metal on macOS, GLX on Linux)"
     mainClass = "org.openani.mediamp.mpvdemo.MpvD3D11MainKt"
     classpath = sourceSets["main"].runtimeClasspath
     val runtimeTarget = when {
@@ -81,4 +79,20 @@ tasks.register<JavaExec>("runD3D11") {
     (findProperty("runtimeDir") as? String)?.let { systemProperty("mediamp.mpv.runtime.dir", it) }
     // -PdebugProps=1 logs every mpv property notification to stderr.
     (findProperty("debugProps") as? String)?.let { systemProperty("mediamp.mpv.debug.props", it) }
+}
+
+// ./gradlew :mediamp-mpv-demo:runD3D11 [-Pvideo=/path/to.mp4]
+tasks.register<JavaExec>("runD3D11") {
+    description = "Run the production mediamp-mpv demo (D3D11 on Windows, Metal on macOS, GLX on Linux)"
+    configureProductionDemo()
+}
+
+// Same demo with Compose forced onto Skiko's OpenGL backend, which is what selects the
+// mpv WGL producer path on Windows (render_opengl.cpp). On Linux this is already the
+// default; on macOS Skiko has no OpenGL redrawer, so the demo stays on Metal.
+// ./gradlew :mediamp-mpv-demo:runOpenGL [-Pvideo=/path/to.mp4]
+tasks.register<JavaExec>("runOpenGL") {
+    description = "Run the production mediamp-mpv demo with Compose rendering through OpenGL"
+    configureProductionDemo()
+    systemProperty("skiko.renderApi", "OPENGL")
 }

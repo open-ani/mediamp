@@ -352,6 +352,38 @@ Skia 侧的 `ID3D12Device` 从 Skiko `Direct3DRedrawer.device`(原生 `DirectXDe
 ./gradlew :mediamp-mpv:desktopTest             # 集成测试 (需要 PATH 上有可编码的 ffmpeg 生成测试视频)
 ```
 
+### Windows OpenGL (WGL) 渲染路径
+
+宿主如果把 Compose 切到 Skiko 的 OpenGL 后端 (`SKIKO_RENDER_API=OPENGL` /
+`-Dskiko.renderApi=OPENGL`, Skiko redrawer 为 `WindowsOpenGLRedrawer`), Skia 就不再有
+D3D12 设备, 上面的共享纹理方案无从谈起。此时 mediamp 改走**与 Linux 同构的共享 GL 纹理
+方案** (`src/cpp/render_opengl.cpp`, 两平台同一套环/渲染线程/读回代码):
+
+- 生产者上下文 B 由 `wgl_context_provider.cpp` 在 Skiko 上下文 A 的 share group 内创建:
+  自建一个**不可见 1x1 窗口 + `CS_OWNDC` 设备上下文**作为 B 的 drawable(WGL 没有普遍可用的
+  pbuffer 等价物, 且 context 必须对着某个 DC 才能 make current), 像素格式从 Skiko 的 HDC
+  `DescribePixelFormat` 复制过来; 先用一个临时 legacy context 解析
+  `wglCreateContextAttribsARB`, 再创建 3.3 core 的 B(失败则退回 `wglCreateContext` +
+  `wglShareLists`)。窗口在**渲染线程**创建与销毁(`DestroyWindow` 只能由创建线程调用),
+  因此 provider 的创建被移到了渲染线程内(Linux 同样受益: GL context 由持有它的线程销毁)。
+- A 的 `HDC`/`HGLRC` 不从 Skiko 私有字段推断, 而是在 Compose 绘制过程中由
+  `nCurrentRenderEnvironmentOpenGLWindows` 直接读 `wglGetCurrentDC`/`wglGetCurrentContext`
+  (Kotlin 侧 `utils/SkiaWglInterop.kt`), 只有"redrawer 是否被重建"这一身份令牌走反射。
+- `opengl32.dll` 只导出 OpenGL 1.1, FBO 系列入口点由 `gl_functions.cpp` 经
+  `wglGetProcAddress` 动态解析并以 glad/GLEW 式宏别名接回标准函数名。
+- 后端选择在播放器构造时依据 `SkikoProperties.renderApi` 决定(此时还没有窗口, 无法观察
+  真实 redrawer), 可用 `-Dmediamp.mpv.windows.renderer=opengl|d3d11` 强制。
+- hwdec: 该路径没有零拷贝互操作(mpv 的 `d3d11va` mapper 要求 D3D11 renderer, 而
+  `dxva2-dxinterop` 需要 `d3d9-hwaccel`, 本仓库已禁用), 因此使用
+  `d3d11va-copy,auto-safe`。
+- 与 Linux 一样属于"环境绑定"生命周期: render context 只能在 Skiko 暴露出 live share
+  context 之后创建, `loadfile` 会被 `openImpl` 挂起等待(spec §6 降级
+  `surface-independent-open`)。
+
+```powershell
+./gradlew :mediamp-mpv-demo:runOpenGL "-Pvideo=C:\path\to.mp4"   # 强制 Compose 走 OpenGL 后端
+```
+
 ## macOS 渲染与开发工作流
 
 macOS 桌面渲染路径 (`src/cpp/render_macos.mm`): 专用 native 渲染线程通过 mpv render API 在独立的

@@ -4,18 +4,17 @@
 #include <vector>
 #include <jni.h>
 #include <cstdio>
+#include "mpv_handle_t.h" // defines MEDIAMP_OPENGL_RENDER
+#include "method_cache.h"
+#ifdef MEDIAMP_OPENGL_RENDER
+#include "gl_functions.h"
+#endif
 #if defined(__linux__) && !defined(__ANDROID__)
-#define GL_GLEXT_PROTOTYPES 1
 #include <dlfcn.h>
-#include <GL/gl.h>
-#include <GL/glext.h>
-#include <GL/glx.h>
 #include <X11/Xlib.h>
 #include <jawt.h>
 #include <jawt_md.h>
 #endif
-#include "mpv_handle_t.h"
-#include "method_cache.h"
 
 #define FN(name) Java_org_openani_mediamp_mpv_MPVHandleKt_##name
 #define FN_ANDROID(name) Java_org_openani_mediamp_mpv_MPVHandleAndroid_##name
@@ -27,17 +26,19 @@ mediampv::mpv_handle_t *get_instance(jlong ptr) {
     return reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
 }
 
-#if defined(_WIN32) || defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#if defined(_WIN32) || defined(__APPLE__) || defined(MEDIAMP_OPENGL_RENDER)
 // Shared body of nReadSurfacePixels{D3D11,Macos,OpenGL}: returns the latest frame as an ARGB
 // jintArray and writes [width, height] into dims, or null when no frame is available.
-jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims) {
+// `read` selects the render path's reader — on Windows both are compiled in.
+template <typename Reader>
+jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims, Reader read) {
     auto *instance = get_instance(ptr);
     if (!instance || !dims || env->GetArrayLength(dims) < 2) {
         return nullptr;
     }
     std::vector<uint32_t> pixels;
     int width = 0, height = 0;
-    if (!instance->read_surface_pixels(pixels, width, height) || pixels.empty()) {
+    if (!read(instance, pixels, width, height) || pixels.empty()) {
         return nullptr;
     }
     jintArray result = env->NewIntArray(static_cast<jsize>(pixels.size()));
@@ -142,8 +143,13 @@ extern "C" {
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef MEDIAMP_OPENGL_RENDER
+#if defined(_WIN32)
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGLWindows)(JNIEnv *env, jclass clazz, jlong ptr, jlong device_context, jlong share_context, jlong identity);
+	JNIEXPORT jlongArray JNICALL FN_DESKTOP(nCurrentRenderEnvironmentOpenGLWindows)(JNIEnv *env, jclass clazz);
+#else
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jobject component, jlong share_context, jlong drawable, jlong window);
+#endif
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong consumer_environment_ptr);
@@ -482,7 +488,11 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv * env, jclass
 }
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
-    return read_surface_pixels_to_java(env, ptr, dims);
+    return read_surface_pixels_to_java(
+        env, ptr, dims,
+        [](mediampv::mpv_handle_t *instance, std::vector<uint32_t> &pixels, int &width, int &height) {
+            return instance->read_surface_pixels(pixels, width, height);
+        });
 }
 
 #endif
@@ -539,12 +549,47 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass claz
 }
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
-    return read_surface_pixels_to_java(env, ptr, dims);
+    return read_surface_pixels_to_java(
+        env, ptr, dims,
+        [](mediampv::mpv_handle_t *instance, std::vector<uint32_t> &pixels, int &width, int &height) {
+            return instance->read_surface_pixels(pixels, width, height);
+        });
 }
 
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef MEDIAMP_OPENGL_RENDER
+
+#if defined(_WIN32)
+
+// Skiko's WindowsOpenGLRedrawer keeps its HDC/HGLRC in private fields whose native
+// meaning is not part of any published ABI, so the Kotlin side reads the live pair from
+// this thread instead (see SkiaWglInterop). Valid only while Skiko's context is current,
+// i.e. inside a Compose draw pass.
+JNIEXPORT jlongArray JNICALL FN_DESKTOP(nCurrentRenderEnvironmentOpenGLWindows)(JNIEnv *env, jclass) {
+    HDC device_context = wglGetCurrentDC();
+    HGLRC share_context = wglGetCurrentContext();
+    if (!device_context || !share_context) return nullptr;
+    jlongArray result = env->NewLongArray(2);
+    if (!result) return nullptr; // OOM; exception pending
+    const jlong values[2] = {
+        static_cast<jlong>(reinterpret_cast<uintptr_t>(device_context)),
+        static_cast<jlong>(reinterpret_cast<uintptr_t>(share_context)),
+    };
+    env->SetLongArrayRegion(result, 0, 2, values);
+    return result;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGLWindows)(
+        JNIEnv *, jclass, jlong ptr, jlong device_context, jlong share_context, jlong identity) {
+    auto *instance = get_instance(ptr);
+    if (!instance || !device_context || !share_context || identity == 0) return JNI_FALSE;
+    // No screen index on Windows; the HDC identifies the device.
+    return instance->attach_opengl_render_environment(
+        device_context, share_context, 0, static_cast<uint64_t>(identity)) ? JNI_TRUE : JNI_FALSE;
+}
+
+#else
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
         JNIEnv *env, jclass, jlong ptr, jobject component,
@@ -601,36 +646,38 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
     return attached ? JNI_TRUE : JNI_FALSE;
 }
 
+#endif // _WIN32 / X11 attachment
+
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance && instance->create_render_context() ? JNI_TRUE : JNI_FALSE;
+    return instance && instance->create_opengl_render_context() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance && instance->destroy_render_context() ? JNI_TRUE : JNI_FALSE;
+    return instance && instance->destroy_opengl_render_context() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigOpenGL)(
         JNIEnv *, jclass, jlong ptr, jint width, jint height, jlong) {
     auto *instance = get_instance(ptr);
-    return instance && instance->set_surface_config(width, height) ? JNI_TRUE : JNI_FALSE;
+    return instance && instance->set_opengl_surface_config(width, height) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateOpenGL)(JNIEnv *, jclass, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance ? static_cast<jlong>(instance->get_frame_state())
+    return instance ? static_cast<jlong>(instance->get_opengl_frame_state())
                     : static_cast<jlong>(0xFULL << 44);
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *, jclass, jlong ptr, jint index) {
     auto *instance = get_instance(ptr);
-    return instance ? static_cast<jlong>(instance->get_buffer_texture(index)) : 0;
+    return instance ? static_cast<jlong>(instance->get_opengl_buffer_texture(index)) : 0;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *, jclass, jlong ptr) {
     auto *instance = get_instance(ptr);
-    return instance && instance->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
+    return instance && instance->ack_opengl_retired_buffers() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *, jclass, jlong ptr) {
@@ -642,15 +689,20 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass
     auto *instance = get_instance(ptr);
     if (!instance) return JNI_FALSE;
     scoped_utf_chars path_chars(env, path);
-    return path_chars.valid() && instance->save_surface_png(path_chars.get()) ? JNI_TRUE : JNI_FALSE;
+    return path_chars.valid() && instance->save_opengl_surface_png(path_chars.get())
+        ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsOpenGL)(JNIEnv *env, jclass, jlong ptr, jintArray dims) {
-    return read_surface_pixels_to_java(env, ptr, dims);
+    return read_surface_pixels_to_java(
+        env, ptr, dims,
+        [](mediampv::mpv_handle_t *instance, std::vector<uint32_t> &pixels, int &width, int &height) {
+            return instance->read_opengl_surface_pixels(pixels, width, height);
+        });
 }
 
 JNIEXPORT jint JNICALL FN_DESKTOP(nCreateOpenGLConsumerFbo)(JNIEnv *, jclass, jlong texture_name) {
-    if (!texture_name || !glXGetCurrentContext()) return 0;
+    if (!texture_name || !mediampv::has_current_gl_context()) return 0;
     GLint previous_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_fbo);
     GLuint fbo = 0;
@@ -669,13 +721,13 @@ JNIEXPORT jint JNICALL FN_DESKTOP(nCreateOpenGLConsumerFbo)(JNIEnv *, jclass, jl
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDeleteOpenGLConsumerFbo)(JNIEnv *, jclass, jint fbo) {
-    if (fbo <= 0 || !glXGetCurrentContext()) return JNI_FALSE;
+    if (fbo <= 0 || !mediampv::has_current_gl_context()) return JNI_FALSE;
     const GLuint name = static_cast<GLuint>(fbo);
     glDeleteFramebuffers(1, &name);
     return glGetError() == GL_NO_ERROR ? JNI_TRUE : JNI_FALSE;
 }
 
-#endif
+#endif // MEDIAMP_OPENGL_RENDER
 
 JNIEXPORT jboolean JNICALL FN(nDestroy)(JNIEnv *env, jclass clazz, jlong ptr) {
     auto *instance = get_instance(ptr);

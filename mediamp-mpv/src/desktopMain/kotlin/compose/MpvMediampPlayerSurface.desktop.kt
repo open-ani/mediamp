@@ -54,14 +54,16 @@ actual fun MpvMediampPlayerSurface(
 }
 
 /**
- * Shared surface-ring render path (macOS Metal, Windows D3D11, Linux OpenGL/GLX):
+ * Shared surface-ring render path (macOS Metal, Windows D3D11 or OpenGL/WGL, Linux
+ * OpenGL/GLX):
  *
  * A native render thread drives mpv into a triple-buffered ring of GPU textures that
  * are simultaneously visible to Skia's own render device — IOSurfaces wrapped as
  * MTLTextures on macOS (hwdec=videotoolbox, OpenGL over an offscreen CGL context), NT
  * shared handles opened as ID3D12Resources on Windows (hwdec=d3d11va, libmpv D3D11
- * render API). The video becomes a regular draw call in the Compose scene graph, zero
- * extra CPU copies end to end, and this thread never renders or blocks.
+ * render API), or share-group texture names where Compose itself renders with OpenGL.
+ * The video becomes a regular draw call in the Compose scene graph, zero extra CPU
+ * copies end to end, and this thread never renders or blocks.
  *
  * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
  * render-context lifecycle; this composable contains no host checks.
@@ -93,7 +95,7 @@ private fun MpvMediampPlayerSurfaceRing(
     val frameTick = remember { mutableLongStateOf(0L) }
     val canvasSize = remember { mutableStateOf(IntSize.Zero) }
     // Whether the player's producer render context exists. Eager backends decide this
-    // when the surface enters composition; deferred-readiness backends (Linux GLX)
+    // when the surface enters composition; deferred-readiness backends (the OpenGL ones)
     // intentionally wait for the live redrawer so `vo=libmpv` never sees loadfile
     // before its render environment has been attached — they become ready from the
     // first successful draw pass instead.
