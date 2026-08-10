@@ -351,8 +351,11 @@ abstract class JvmMpvMediampPlayer(
             }
 
             is Platform.Windows -> {
-                // The desktop render path drives the libmpv D3D11 render API on its own
-                // ID3D11Device (render_d3d11.cpp); gpu-context is not used with vo=libmpv.
+                // The desktop render path drives either the libmpv D3D11 render API on
+                // its own ID3D11Device (render_d3d11.cpp) or, when Compose renders with
+                // Skiko's OpenGL backend, the OpenGL render API on a private offscreen
+                // WGL context with CPU readback (render_opengl_win.cpp). gpu-context is
+                // not used with vo=libmpv either way.
                 handle.option("ao", "wasapi")
                 handle.option("vo", "libmpv")
             }

@@ -762,6 +762,12 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     // when we delete that global ref below.
     cleanup_render_resources();
 #endif
+#ifdef _WIN32
+    // Same reasoning for the OpenGL fallback render thread; at most one of the two
+    // Windows paths ever ran, the other call is a no-op.
+    cleanup_render_resources_win_gl();
+    free_win_gl_state();
+#endif
     clear_event_listener(cleanup_env);
     clear_render_update_listener(cleanup_env);
 #ifdef __ANDROID__

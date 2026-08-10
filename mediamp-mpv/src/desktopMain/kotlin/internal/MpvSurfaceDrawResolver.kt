@@ -23,7 +23,7 @@ internal class MpvSurfaceDrawPass(
 )
 
 /**
- * Platform half of the compose draw pass, mirroring [MpvSurfaceRingBackend]: how each
+ * Platform half of the compose draw pass, mirroring [MpvSurfaceBackend]: how each
  * draw resolves readiness and Skia's current target. Environment-bound backends may
  * (re)attach their render environment inside [resolveDrawPass]; eager backends only gate
  * on the readiness established when the surface entered composition.
@@ -43,7 +43,7 @@ internal interface MpvSurfaceDrawResolver {
 
 /** Draw resolver for eagerly-created contexts: readiness was decided at composition start. */
 internal class EagerSurfaceDrawResolver(
-    backend: MpvSurfaceRingBackend,
+    backend: MpvSurfaceBackend,
     private val interop: SkiaRenderDeviceInterop,
 ) : MpvSurfaceDrawResolver {
     override val rendererName: String = backend.rendererName

@@ -41,11 +41,11 @@ internal fun interface MpvRenderContextProvisioning {
 
 /**
  * Per-player lifecycle of the backend's producer render context: WHEN
- * [MpvSurfaceRingBackend.createRenderContext] may run. Backends that own their producer
+ * [MpvSurfaceBackend.createRenderContext] may run. Backends that own their producer
  * device ([EagerRenderContextLifecycle]) create it at player construction; backends whose
  * producer context must join an externally owned render environment
  * (`OpenGLRenderContextLifecycle`) create it only once that environment has been attached
- * and gate `loadfile` on it. Chosen by [MpvSurfaceRingBackend], so the shared player and
+ * and gate `loadfile` on it. Chosen by [MpvSurfaceBackend], so the shared player and
  * composable contain no platform checks — and platform-specific operations (such as the
  * Linux GLX attach) exist only on the platform implementation, where other platforms
  * cannot call them by mistake.
@@ -92,12 +92,12 @@ internal interface MpvRenderContextLifecycle {
 }
 
 /**
- * Lifecycle for backends that own their producer device (macOS Metal, Windows D3D11):
- * the render context is created eagerly at player construction and needs nothing from
- * the live Skiko renderer.
+ * Lifecycle for backends that own their producer device (macOS Metal, Windows D3D11,
+ * and the Windows OpenGL fallback): the render context is created eagerly at player
+ * construction and needs nothing from the live Skiko renderer.
  */
 internal class EagerRenderContextLifecycle(
-    private val backend: MpvSurfaceRingBackend,
+    private val backend: MpvSurfaceBackend,
     private val host: MpvRenderContextHost,
 ) : MpvRenderContextLifecycle {
     override fun initialize() {

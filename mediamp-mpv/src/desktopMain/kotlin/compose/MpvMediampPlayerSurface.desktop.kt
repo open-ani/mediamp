@@ -36,7 +36,7 @@ import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import org.openani.mediamp.mpv.internal.MpvSurfaceDrawResolver
-import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import org.openani.mediamp.mpv.utils.findSkiaLayer
 import kotlin.time.Duration.Companion.milliseconds
@@ -46,7 +46,7 @@ actual fun MpvMediampPlayerSurface(
     player: MpvMediampPlayer,
     modifier: Modifier,
 ) {
-    if (currentSurfaceRingBackend() != null) {
+    if (currentSurfaceBackend() != null) {
         MpvMediampPlayerSurfaceRing(player, modifier)
     } else {
         Box(modifier)
@@ -54,14 +54,17 @@ actual fun MpvMediampPlayerSurface(
 }
 
 /**
- * Shared surface-ring render path (macOS Metal, Windows D3D11, Linux OpenGL/GLX):
+ * Shared native render path (macOS Metal, Windows D3D11 or OpenGL fallback, Linux
+ * OpenGL/GLX):
  *
  * A native render thread drives mpv into a triple-buffered ring of GPU textures that
  * are simultaneously visible to Skia's own render device — IOSurfaces wrapped as
  * MTLTextures on macOS (hwdec=videotoolbox, OpenGL over an offscreen CGL context), NT
  * shared handles opened as ID3D12Resources on Windows (hwdec=d3d11va, libmpv D3D11
  * render API). The video becomes a regular draw call in the Compose scene graph, zero
- * extra CPU copies end to end, and this thread never renders or blocks.
+ * extra CPU copies end to end, and this thread never renders or blocks. The Windows
+ * OpenGL fallback (Compose on `SKIKO_RENDER_API=OPENGL`) publishes CPU frames instead,
+ * which the consumer uploads during draw — same protocol, one extra copy by design.
  *
  * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
  * render-context lifecycle; this composable contains no host checks.

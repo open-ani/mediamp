@@ -17,6 +17,16 @@
 > - 附带修复:`mpvRuntimeAllElements` 聚合 variant 缺 capability, 导致项目内
 >   `implementation(projects.mediampMpv)` 被解析到该 variant(buildSrc 已修)。
 > 当前工作流见 [dependency.md](dependency.md) "Windows 渲染与开发工作流"。
+>
+> **后续(2026-08):** §5 删掉的旧同步 GL 路径没有回归, 但 Windows 又多了一条**独立的**
+> OpenGL 兼容路径: 当宿主把 Compose 切到 Skiko 的 OpenGL 后端时(`SKIKO_RENDER_API=OPENGL`,
+> Skia 没有 D3D12 设备, 本文的共享纹理方案不成立), mediamp 改走 CPU 读回方案
+> (`src/cpp/render_opengl_win.cpp` + `wgl_offscreen_context.cpp`): 独立渲染线程在
+> 一个与 Skiko **零共享**的离屏 WGL 上下文里渲染到私有 FBO, 每帧 `glReadPixels` 读回,
+> 消费端在 Compose 绘制时上传进 Skia surface。每帧多一次 GPU→CPU→GPU 往返是有意为之——
+> 这是兼容 fallback, 以可用性换零拷贝(不依赖 `wglShareLists`/像素格式匹配, 曾在
+> 共享纹理方案的 Windows 移植中被驱动拒绝)。不是被删掉的那个 `glFinish` 阻塞 UI
+> 线程的老实现: 渲染线程模型、帧状态协议与其他平台一致。D3D11 仍是 Windows 默认路径。
 
 ---
 
