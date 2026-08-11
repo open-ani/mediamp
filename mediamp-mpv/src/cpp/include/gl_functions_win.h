@@ -35,6 +35,15 @@
 #ifndef GL_RGBA8
 #define GL_RGBA8 0x8058
 #endif
+#ifndef GL_PIXEL_PACK_BUFFER
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#endif
+#ifndef GL_STREAM_READ
+#define GL_STREAM_READ 0x88E1
+#endif
+#ifndef GL_READ_ONLY
+#define GL_READ_ONLY 0x88B8
+#endif
 
 namespace mediampv {
 namespace gl {
@@ -53,6 +62,19 @@ void bind_framebuffer(GLenum target, GLuint framebuffer);
 void framebuffer_texture_2d(
     GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
 GLenum check_framebuffer_status(GLenum target);
+
+/**
+ * Buffer-object entry points for the asynchronous PBO readback, resolved the same
+ * way. buffer_objects_available() reports whether the whole set resolved; when it is
+ * false the render path falls back to synchronous glReadPixels.
+ */
+bool buffer_objects_available();
+void gen_buffers(GLsizei n, GLuint *buffers);
+void delete_buffers(GLsizei n, const GLuint *buffers);
+void bind_buffer(GLenum target, GLuint buffer);
+void buffer_data(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+void *map_buffer(GLenum target, GLenum access);
+GLboolean unmap_buffer(GLenum target);
 
 } // namespace gl
 } // namespace mediampv

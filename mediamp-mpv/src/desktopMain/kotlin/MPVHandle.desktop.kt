@@ -118,11 +118,14 @@ external fun nCreateRenderContextWindowsOpenGL(ptr: Long): Boolean
 external fun nDestroyRenderContextWindowsOpenGL(ptr: Long): Boolean
 
 /**
- * Asks the render thread to (re)allocate its render target at [width] x [height].
- * Non-positive size deactivates the surface. Resizes are asynchronous — the swap
- * happens between frames; deactivation is synchronous (bounded by a 1s timeout): it
- * returns once the render thread has dropped its FBO and parked, so the consumer may
- * safely destroy Skia GPU objects without racing the producer's GL.
+ * Asks the render thread to (re)allocate its render target for a [width] x [height]
+ * consumer area. The native side clamps the actual target to the video's display size
+ * (aspect-fit): every readback byte scales with the target area, and Skia upscales
+ * during the draw anyway. Non-positive size deactivates the surface. Resizes are
+ * asynchronous — the swap happens between frames; deactivation is synchronous
+ * (bounded by a 1s timeout): it returns once the render thread has dropped its FBO
+ * and parked, so the consumer may safely destroy its objects without racing the
+ * producer.
  */
 @InternalMediampApi
 external fun nSetSurfaceConfigWindowsOpenGL(ptr: Long, width: Int, height: Int): Boolean

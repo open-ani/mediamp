@@ -290,8 +290,17 @@ private:
     // The helpers below run on the render thread; *_locked ones assume the state
     // mutex is held.
     bool apply_config_win_gl_locked();
+    bool allocate_target_win_gl_locked(int width, int height);
+    void destroy_target_win_gl_locked();
     void publish_state_win_gl_locked();
+    void publish_collected_frame_win_gl_locked(int width, int height);
+    // Renders mpv into the FBO and starts the readback: asynchronously into the next
+    // PBO when available, else synchronously into scratch.
     bool render_frame_win_gl(int width, int height);
+    // Moves the oldest completed readback into scratch; false when none is ready.
+    // include_pbos=false only collects a synchronous-path frame (used right after a
+    // render, where mapping the just-queued PBO would defeat the asynchrony).
+    bool collect_ready_frame_win_gl(int *out_width, int *out_height, bool include_pbos);
     void drain_one_frame_win_gl();
 #endif
 

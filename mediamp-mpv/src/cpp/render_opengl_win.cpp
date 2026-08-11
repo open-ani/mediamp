@@ -20,6 +20,13 @@
 // matching against Skiko's drawable, no cross-context object lifetime rules; exactly
 // the parts that make context sharing fragile across drivers.
 //
+// Two measures keep the round trip cheap: the render target is clamped to the video's
+// display size (rendering a 1080p video at 4K-window size would move 4x the bytes for
+// pixels Skia can scale up during the draw), and the readback streams through two
+// alternating pixel-pack buffers, so glReadPixels never synchronizes — a frame is
+// mapped out one iteration after it was queued (one frame of extra latency; an idle
+// grace period delivers the last frame after a pause or EOF).
+//
 // Threading model: the render thread exclusively owns the WGL context, the FBO and the
 // scratch buffer, and is the only thread that renders. Requests (resize, mpv's update
 // callback) are flags posted under the state mutex. Consumers read the packed frame
@@ -55,6 +62,50 @@ void *win_gl_get_proc_address(void *ctx, const char *name) {
     return context ? context->get_proc_address(name) : nullptr;
 }
 
+// mpv's display size of the current video track (dwidth/dheight: after aspect
+// correction and rotation), or 0x0 while no video is loaded. Must be called WITHOUT
+// the state mutex held: mpv may hold internal locks while invoking the update
+// callback, which takes that mutex.
+void query_video_display_size(mpv_handle *handle, int *out_width, int *out_height) {
+    int64_t width = 0, height = 0;
+    if (!handle || mpv_get_property(handle, "dwidth", MPV_FORMAT_INT64, &width) < 0) width = 0;
+    if (!handle || mpv_get_property(handle, "dheight", MPV_FORMAT_INT64, &height) < 0) height = 0;
+    // The packed frame state carries 14-bit dimensions.
+    *out_width = static_cast<int>(width < 0 ? 0 : (width > 0x3FFF ? 0x3FFF : width));
+    *out_height = static_cast<int>(height < 0 ? 0 : (height > 0x3FFF ? 0x3FFF : height));
+}
+
+// The largest aspect-correct size that fits the consumer's request without exceeding
+// the video's display size. Every readback byte scales with this area, so rendering a
+// 1080p video into a 4K-window-sized target would quadruple the GPU<->CPU traffic for
+// pixels Skia can scale up during the draw instead. Falls back to the request while
+// the video size is unknown (before the first reconfig). mpv letterboxes inside
+// whatever size it gets, and the aspect-exact target also keeps the bars out of the
+// readback entirely (the Compose draw letterboxes the image itself).
+void compute_target_size(
+    int requested_width, int requested_height, int video_width, int video_height,
+    int *out_width, int *out_height) {
+    if (requested_width <= 0 || requested_height <= 0) {
+        *out_width = 0;
+        *out_height = 0;
+        return;
+    }
+    if (video_width <= 0 || video_height <= 0) {
+        *out_width = requested_width;
+        *out_height = requested_height;
+        return;
+    }
+    double scale = 1.0;
+    const double fit_width = static_cast<double>(requested_width) / video_width;
+    const double fit_height = static_cast<double>(requested_height) / video_height;
+    if (fit_width < scale) scale = fit_width;
+    if (fit_height < scale) scale = fit_height;
+    const auto width = static_cast<int>(video_width * scale + 0.5);
+    const auto height = static_cast<int>(video_height * scale + 0.5);
+    *out_width = width > 0 ? width : 1;
+    *out_height = height > 0 ? height : 1;
+}
+
 // glGetError pops one error from a queue that anyone (including mpv's renderer) may
 // have left non-empty; drain it before a checked sequence so a stale error cannot
 // fail an unrelated operation.
@@ -73,11 +124,26 @@ struct mpv_handle_t::win_gl_state final {
     wgl_offscreen_context *gl = nullptr;
     GLuint fbo = 0, texture = 0;
 
+    // Double-buffered PBO streaming readback; render-thread-only. Frame N's
+    // glReadPixels lands asynchronously in pbos[pbo_write] while frame N-1 is mapped
+    // out of the other buffer — one frame of extra latency instead of a full GPU sync
+    // per frame. pbo_active falls back to synchronous readback into scratch when
+    // buffer objects are unavailable; sync_frame_* then marks the scratch content.
+    GLuint pbos[2] = {0, 0};
+    bool pbo_pending[2] = {false, false};
+    int pbo_width[2] = {0, 0}, pbo_height[2] = {0, 0};
+    int pbo_write = 0;
+    bool pbo_active = false;
+    bool sync_frame_ready = false;
+    int sync_frame_width = 0, sync_frame_height = 0;
+
     // Guarded by mutex, except scratch: only the render thread touches scratch, and
     // the scratch/latest swap happens under the mutex, so a consumer copying latest
     // never observes a buffer the render thread is writing into.
     std::vector<uint8_t> scratch, latest; // RGBA8, glReadPixels bottom-up row order
-    int width = 0, height = 0;            // active surface size (0 = deactivated)
+    int width = 0, height = 0;            // active render-target size (0 = none)
+    int requested_width = 0, requested_height = 0; // consumer request (composable size)
+    int video_width = 0, video_height = 0;         // cached mpv dwidth/dheight
     int latest_width = 0, latest_height = 0;
     bool has_frame = false;
     uint32_t generation = 0;
@@ -256,8 +322,42 @@ void mpv_handle_t::render_thread_loop_win_gl() {
 
     std::unique_lock<std::mutex> lock(s->mutex);
     while (!s->quit) {
-        s->cv.wait(lock, [s] { return s->quit || s->render_pending || s->config_pending; });
+        if (s->pbo_pending[0] || s->pbo_pending[1]) {
+            // A readback is still in flight. Give the DMA transfer the time until the
+            // next frame arrives; if none does (pause, EOF), deliver the frame anyway
+            // after a short grace so the last rendered frame never gets stuck in the
+            // PBO. Mapping then cannot stall anything: the thread is idle.
+            s->cv.wait_for(lock, std::chrono::milliseconds(50), [s] {
+                return s->quit || s->render_pending || s->config_pending;
+            });
+            if (!s->quit && !s->render_pending && !s->config_pending) {
+                lock.unlock();
+                int ready_width = 0, ready_height = 0;
+                const bool ready = collect_ready_frame_win_gl(&ready_width, &ready_height, true);
+                lock.lock();
+                if (ready) {
+                    publish_collected_frame_win_gl_locked(ready_width, ready_height);
+                    lock.unlock();
+                    notify_render_update();
+                    lock.lock();
+                }
+                continue;
+            }
+        } else {
+            s->cv.wait(lock, [s] { return s->quit || s->render_pending || s->config_pending; });
+        }
         if (s->quit) break;
+
+        // Refresh the cached video display size before acting on the wake-up: both
+        // the config target and the per-frame drift check depend on it, and mpv must
+        // not be queried while the state mutex is held (its update callback takes
+        // this mutex, possibly under mpv-internal locks).
+        lock.unlock();
+        int video_width = 0, video_height = 0;
+        query_video_display_size(handle_, &video_width, &video_height);
+        lock.lock();
+        s->video_width = video_width;
+        s->video_height = video_height;
 
         bool configured = false;
         if (s->config_pending) {
@@ -285,32 +385,45 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         // A fresh config renders even without a new mpv frame so a paused video is
         // re-rendered at the new size.
         if (!has_new_frame && !configured) continue;
+        // The video size can change under an unchanged surface request (track
+        // switch, rotation); keep the target clamped to it.
+        {
+            int target_width = 0, target_height = 0;
+            compute_target_size(
+                s->requested_width, s->requested_height,
+                s->video_width, s->video_height, &target_width, &target_height);
+            if (target_width > 0 && (target_width != s->width || target_height != s->height)) {
+                if (!allocate_target_win_gl_locked(target_width, target_height)) continue;
+                configured = true;
+            }
+        }
         const int width = s->width, height = s->height;
         lock.unlock();
+        int ready_width = 0, ready_height = 0;
+        // Collect BEFORE queuing the next readback: the pending PBO was filled during
+        // the previous iteration, so its DMA has had a full frame time — the map does
+        // not stall. Collecting after would map the buffer glReadPixels just wrote,
+        // which is the synchronous behavior the PBOs exist to avoid.
+        bool ready = collect_ready_frame_win_gl(&ready_width, &ready_height, true);
         const bool rendered = render_frame_win_gl(width, height);
+        if (!ready && rendered) {
+            // Zero-latency delivery for the synchronous fallback; a no-op in PBO mode
+            // (the frame just queued stays pending until the next iteration).
+            ready = collect_ready_frame_win_gl(&ready_width, &ready_height, false);
+        }
         lock.lock();
         // The surface cannot have been reconfigured meanwhile: only this thread
         // applies config changes.
-        if (rendered) {
-            std::swap(s->scratch, s->latest);
-            s->latest_width = width;
-            s->latest_height = height;
-            s->has_frame = true;
-            ++s->serial;
-            publish_state_win_gl_locked();
+        if (ready) {
+            publish_collected_frame_win_gl_locked(ready_width, ready_height);
             lock.unlock();
             notify_render_update(); // release-store has completed before this JNI callback
             lock.lock();
         }
     }
     // Teardown in the owner thread while the WGL context is current.
-    if (s->fbo) gl::delete_framebuffers(1, &s->fbo);
-    if (s->texture) glDeleteTextures(1, &s->texture);
-    s->fbo = 0;
-    s->texture = 0;
-    s->width = s->height = 0;
-    s->has_frame = false;
-    s->latest_width = s->latest_height = 0;
+    destroy_target_win_gl_locked();
+    s->requested_width = s->requested_height = 0;
     ++s->generation;
     publish_state_win_gl_locked();
     lock.unlock();
@@ -331,15 +444,11 @@ void mpv_handle_t::render_thread_loop_win_gl() {
 
 bool mpv_handle_t::apply_config_win_gl_locked() {
     auto *s = win_gl_;
-    const int width = s->pending_width, height = s->pending_height;
-    if (width <= 0 || height <= 0) {
-        if (s->fbo) gl::delete_framebuffers(1, &s->fbo);
-        if (s->texture) glDeleteTextures(1, &s->texture);
-        s->fbo = 0;
-        s->texture = 0;
-        s->width = s->height = 0;
-        s->has_frame = false;
-        s->latest_width = s->latest_height = 0;
+    s->requested_width = s->pending_width;
+    s->requested_height = s->pending_height;
+    if (s->requested_width <= 0 || s->requested_height <= 0) {
+        s->requested_width = s->requested_height = 0;
+        destroy_target_win_gl_locked();
         // An inactive surface holds no frame; actually return the buffer memory
         // (clear() would keep the capacity).
         std::vector<uint8_t>().swap(s->scratch);
@@ -348,11 +457,35 @@ bool mpv_handle_t::apply_config_win_gl_locked() {
         publish_state_win_gl_locked();
         return false;
     }
-    if (s->fbo && width == s->width && height == s->height) return false;
+    int target_width = 0, target_height = 0;
+    compute_target_size(
+        s->requested_width, s->requested_height,
+        s->video_width, s->video_height, &target_width, &target_height);
+    if (s->fbo && target_width == s->width && target_height == s->height) return false;
+    return allocate_target_win_gl_locked(target_width, target_height);
+}
+
+// Frees the FBO, its texture, and the readback PBOs; resets the published frame.
+void mpv_handle_t::destroy_target_win_gl_locked() {
+    auto *s = win_gl_;
     if (s->fbo) gl::delete_framebuffers(1, &s->fbo);
     if (s->texture) glDeleteTextures(1, &s->texture);
     s->fbo = 0;
     s->texture = 0;
+    if (s->pbos[0] || s->pbos[1]) gl::delete_buffers(2, s->pbos);
+    s->pbos[0] = s->pbos[1] = 0;
+    s->pbo_pending[0] = s->pbo_pending[1] = false;
+    s->pbo_write = 0;
+    s->pbo_active = false;
+    s->sync_frame_ready = false;
+    s->width = s->height = 0;
+    s->has_frame = false;
+    s->latest_width = s->latest_height = 0;
+}
+
+bool mpv_handle_t::allocate_target_win_gl_locked(int width, int height) {
+    auto *s = win_gl_;
+    destroy_target_win_gl_locked();
 
     drain_gl_errors();
     glGenTextures(1, &s->texture);
@@ -370,16 +503,32 @@ bool mpv_handle_t::apply_config_win_gl_locked() {
     gl::bind_framebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE || glGetError() != GL_NO_ERROR) {
         LOGE("OpenGL fallback FBO incomplete (%dx%d): 0x%x", width, height, status);
-        if (s->fbo) gl::delete_framebuffers(1, &s->fbo);
-        if (s->texture) glDeleteTextures(1, &s->texture);
-        s->fbo = 0;
-        s->texture = 0;
-        s->width = s->height = 0;
-        s->has_frame = false;
-        s->latest_width = s->latest_height = 0;
+        destroy_target_win_gl_locked();
         ++s->generation;
         publish_state_win_gl_locked();
         return false;
+    }
+
+    // Streaming readback buffers. Optional: without them the render path falls back
+    // to a synchronous glReadPixels.
+    if (gl::buffer_objects_available()) {
+        const auto size = static_cast<GLsizeiptr>(static_cast<size_t>(width) * height * 4);
+        gl::gen_buffers(2, s->pbos);
+        bool ok = s->pbos[0] != 0 && s->pbos[1] != 0;
+        for (int i = 0; ok && i < 2; ++i) {
+            gl::bind_buffer(GL_PIXEL_PACK_BUFFER, s->pbos[i]);
+            gl::buffer_data(GL_PIXEL_PACK_BUFFER, size, nullptr, GL_STREAM_READ);
+        }
+        gl::bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+        ok = ok && glGetError() == GL_NO_ERROR;
+        if (!ok) {
+            LOGW("PBO allocation failed; falling back to synchronous readback");
+            if (s->pbos[0] || s->pbos[1]) gl::delete_buffers(2, s->pbos);
+            s->pbos[0] = s->pbos[1] = 0;
+        }
+        s->pbo_active = ok;
+    } else {
+        s->pbo_active = false;
     }
 
     s->width = width;
@@ -389,7 +538,10 @@ bool mpv_handle_t::apply_config_win_gl_locked() {
     s->has_frame = false;
     ++s->generation;
     publish_state_win_gl_locked();
-    LOGI("OpenGL fallback target allocated %dx%d generation=%u", width, height, s->generation);
+    LOGI("OpenGL fallback target allocated %dx%d (requested %dx%d, video %dx%d, %s) generation=%u",
+         width, height, s->requested_width, s->requested_height,
+         s->video_width, s->video_height,
+         s->pbo_active ? "async PBO readback" : "sync readback", s->generation);
     return true;
 }
 
@@ -402,6 +554,17 @@ void mpv_handle_t::publish_state_win_gl_locked() {
         (static_cast<uint64_t>(s->latest_width & 0x3FFF) << 30) |
         (static_cast<uint64_t>(s->latest_height & 0x3FFF) << 16) |
         (s->serial & 0xFFFFu), std::memory_order_release);
+}
+
+// scratch holds a collected frame of the given size; make it the published latest.
+void mpv_handle_t::publish_collected_frame_win_gl_locked(int width, int height) {
+    auto *s = win_gl_;
+    std::swap(s->scratch, s->latest);
+    s->latest_width = width;
+    s->latest_height = height;
+    s->has_frame = true;
+    ++s->serial;
+    publish_state_win_gl_locked();
 }
 
 bool mpv_handle_t::render_frame_win_gl(int width, int height) {
@@ -426,14 +589,64 @@ bool mpv_handle_t::render_frame_win_gl(int width, int height) {
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    // Only the render thread touches scratch; the swap into latest happens under the
-    // state mutex after this returns. glReadPixels is the synchronization point with
-    // the GPU (no glFinish needed).
-    s->scratch.resize(static_cast<size_t>(width) * height * 4);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, s->scratch.data());
+    if (s->pbo_active) {
+        // Asynchronous: the driver DMAs the pixels into the buffer while we return;
+        // the frame is mapped out one iteration later (collect_ready_frame).
+        gl::bind_buffer(GL_PIXEL_PACK_BUFFER, s->pbos[s->pbo_write]);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        gl::bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+        s->pbo_pending[s->pbo_write] = true;
+        s->pbo_width[s->pbo_write] = width;
+        s->pbo_height[s->pbo_write] = height;
+        s->pbo_write ^= 1;
+    } else {
+        // Only the render thread touches scratch; the swap into latest happens under
+        // the state mutex after this returns. glReadPixels is the synchronization
+        // point with the GPU.
+        s->scratch.resize(static_cast<size_t>(width) * height * 4);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, s->scratch.data());
+        s->sync_frame_ready = true;
+        s->sync_frame_width = width;
+        s->sync_frame_height = height;
+    }
     gl::bind_framebuffer(GL_FRAMEBUFFER, 0);
     return result >= 0 && glGetError() == GL_NO_ERROR;
+}
+
+bool mpv_handle_t::collect_ready_frame_win_gl(int *out_width, int *out_height, bool include_pbos) {
+    auto *s = win_gl_;
+    if (s->sync_frame_ready) {
+        s->sync_frame_ready = false;
+        *out_width = s->sync_frame_width;
+        *out_height = s->sync_frame_height;
+        return true;
+    }
+    if (!include_pbos) return false;
+    // Oldest pending first: after render_frame flipped pbo_write, the buffer it
+    // points at is the one queued a frame ago (or longer).
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const int index = (s->pbo_write + attempt) % 2;
+        if (!s->pbo_pending[index]) continue;
+        s->pbo_pending[index] = false;
+        const int width = s->pbo_width[index], height = s->pbo_height[index];
+        const size_t size = static_cast<size_t>(width) * height * 4;
+        gl::bind_buffer(GL_PIXEL_PACK_BUFFER, s->pbos[index]);
+        void *mapped = gl::map_buffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        if (!mapped) {
+            gl::bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+            drain_gl_errors();
+            continue;
+        }
+        s->scratch.resize(size);
+        std::memcpy(s->scratch.data(), mapped, size);
+        gl::unmap_buffer(GL_PIXEL_PACK_BUFFER);
+        gl::bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+        *out_width = width;
+        *out_height = height;
+        return true;
+    }
+    return false;
 }
 
 void mpv_handle_t::drain_one_frame_win_gl() {

@@ -105,6 +105,81 @@ GLenum check_framebuffer_status(GLenum target) {
     return api.check_status ? api.check_status(target) : 0;
 }
 
+namespace {
+
+struct buffer_functions final {
+    PFNGLGENBUFFERSPROC gen = nullptr;
+    PFNGLDELETEBUFFERSPROC destroy = nullptr;
+    PFNGLBINDBUFFERPROC bind = nullptr;
+    PFNGLBUFFERDATAPROC data = nullptr;
+    PFNGLMAPBUFFERPROC map = nullptr;
+    PFNGLUNMAPBUFFERPROC unmap = nullptr;
+    bool complete = false;
+};
+
+const buffer_functions &buffer_api() {
+    static buffer_functions functions;
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (functions.complete) return functions;
+
+    functions.gen = reinterpret_cast<PFNGLGENBUFFERSPROC>(
+        resolve_gl_symbol("glGenBuffers", "glGenBuffersARB"));
+    functions.destroy = reinterpret_cast<PFNGLDELETEBUFFERSPROC>(
+        resolve_gl_symbol("glDeleteBuffers", "glDeleteBuffersARB"));
+    functions.bind = reinterpret_cast<PFNGLBINDBUFFERPROC>(
+        resolve_gl_symbol("glBindBuffer", "glBindBufferARB"));
+    functions.data = reinterpret_cast<PFNGLBUFFERDATAPROC>(
+        resolve_gl_symbol("glBufferData", "glBufferDataARB"));
+    functions.map = reinterpret_cast<PFNGLMAPBUFFERPROC>(
+        resolve_gl_symbol("glMapBuffer", "glMapBufferARB"));
+    functions.unmap = reinterpret_cast<PFNGLUNMAPBUFFERPROC>(
+        resolve_gl_symbol("glUnmapBuffer", "glUnmapBufferARB"));
+    functions.complete = functions.gen && functions.destroy && functions.bind &&
+        functions.data && functions.map && functions.unmap;
+    return functions;
+}
+
+} // namespace
+
+bool buffer_objects_available() {
+    return buffer_api().complete;
+}
+
+void gen_buffers(GLsizei n, GLuint *buffers) {
+    const auto &api = buffer_api();
+    if (api.gen) {
+        api.gen(n, buffers);
+    } else if (buffers) {
+        for (GLsizei i = 0; i < n; ++i) buffers[i] = 0;
+    }
+}
+
+void delete_buffers(GLsizei n, const GLuint *buffers) {
+    const auto &api = buffer_api();
+    if (api.destroy) api.destroy(n, buffers);
+}
+
+void bind_buffer(GLenum target, GLuint buffer) {
+    const auto &api = buffer_api();
+    if (api.bind) api.bind(target, buffer);
+}
+
+void buffer_data(GLenum target, GLsizeiptr size, const void *data, GLenum usage) {
+    const auto &api = buffer_api();
+    if (api.data) api.data(target, size, data, usage);
+}
+
+void *map_buffer(GLenum target, GLenum access) {
+    const auto &api = buffer_api();
+    return api.map ? api.map(target, access) : nullptr;
+}
+
+GLboolean unmap_buffer(GLenum target) {
+    const auto &api = buffer_api();
+    return api.unmap ? api.unmap(target) : GL_FALSE;
+}
+
 } // namespace gl
 } // namespace mediampv
 
