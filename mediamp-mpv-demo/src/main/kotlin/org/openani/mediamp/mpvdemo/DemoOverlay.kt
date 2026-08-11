@@ -50,6 +50,8 @@ fun DemoOverlay(
     durationSeconds: Double,
     onTogglePause: () -> Unit,
     onSeek: (seconds: Double) -> Unit,
+    onRestart: () -> Unit,
+    onStop: () -> Unit,
     modifier: Modifier = Modifier,
     /** Shows a loading spinner (media opening or playback stalled for data). */
     isLoading: Boolean = false,
@@ -69,6 +71,14 @@ fun DemoOverlay(
                 color = if (statusOk) Color(0xFF7CFC00) else Color.Yellow,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Button(onClick = onRestart) {
+                    Text("Restart")
+                }
+                Button(onClick = onStop) {
+                    Text("Stop")
+                }
+            }
         }
 
         // Continuously animating Compose elements over the video.

@@ -199,7 +199,6 @@ void mpv_handle_t::free_win_gl_state() {
 void mpv_handle_t::cleanup_render_resources_win_gl() {
     auto *s = win_gl_;
     if (!s || !s->thread) return;
-    LOGI("OpenGL fallback teardown: stopping the render thread");
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         s->quit = true;
@@ -208,7 +207,6 @@ void mpv_handle_t::cleanup_render_resources_win_gl() {
     if (s->thread->joinable()) s->thread->join();
     delete s->thread;
     s->thread = nullptr;
-    LOGI("OpenGL fallback teardown: render thread joined");
     // The state struct itself stays alive for the handle's lifetime (freed in the
     // destructor): consumers may still be polling get_frame_state_win_gl or
     // copy_latest_frame_win_gl concurrently with this teardown, and they check
@@ -430,7 +428,6 @@ void mpv_handle_t::render_thread_loop_win_gl() {
     // Outside the lock: freeing the render context synchronizes with an in-flight
     // update callback, and that callback takes the state mutex.
     if (s->render_context) {
-        LOGI("OpenGL fallback teardown: freeing the mpv render context");
         mpv_render_context_set_update_callback(s->render_context, nullptr, nullptr);
         mpv_render_context_free(s->render_context);
         s->render_context = nullptr;
@@ -438,7 +435,6 @@ void mpv_handle_t::render_thread_loop_win_gl() {
     s->gl->destroy();
     delete s->gl;
     s->gl = nullptr;
-    LOGI("OpenGL fallback teardown: WGL context and window destroyed");
     if (attached) jvm_->DetachCurrentThread();
 }
 
