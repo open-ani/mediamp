@@ -138,6 +138,13 @@ internal class MpvReadbackSurface(
     private fun ensureBlitSurface(width: Int, height: Int, directContext: DirectContext): Surface? {
         blitSurface?.let {
             if (surfaceContext === directContext && it.width == width && it.height == height) return it
+            // The caller already handled a context change, so this surface lives on
+            // [directContext]; resolve its pending work before destruction (see
+            // dropConsumerResources).
+            runCatching {
+                directContext.flush()
+                directContext.submit(false)
+            }
             it.close()
             blitSurface = null
         }
@@ -160,6 +167,18 @@ internal class MpvReadbackSurface(
     }
 
     private fun dropConsumerResources() {
+        // Resolve any recorded-but-unsubmitted work targeting the blit surface (the
+        // last writePixels/snapshot may not have gone through a Skiko frame-end flush
+        // when disposal runs mid-frame) so the surface destructor below has nothing
+        // left to flush or wait on.
+        if (blitSurface != null || cachedFrame != null) {
+            surfaceContext?.let { context ->
+                runCatching {
+                    context.flush()
+                    context.submit(false)
+                }
+            }
+        }
         cachedFrame?.close()
         cachedFrame = null
         cachedState = 0L
@@ -180,9 +199,13 @@ internal class MpvReadbackSurface(
     }
 
     override fun release() {
-        dropConsumerResources()
-        // The render thread may drop its target and go back to draining frames.
+        // Quiesce the producer FIRST — deactivation is synchronous on this backend.
+        // Destroying the Skia GPU objects below while the producer's WGL context is
+        // still actively rendering can block the destructor in the GL driver's
+        // cross-context synchronization (observed as an EDT hang at window close,
+        // while the same closes succeed when the producer is idle).
         backend.setSurfaceConfig(handlePtr, 0, 0, 0L)
+        dropConsumerResources()
         requestedWidth = 0
         requestedHeight = 0
         configured = false

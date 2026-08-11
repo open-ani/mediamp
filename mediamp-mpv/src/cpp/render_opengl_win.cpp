@@ -35,6 +35,7 @@
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -83,9 +84,11 @@ struct mpv_handle_t::win_gl_state final {
     uint64_t serial = 0;
     std::atomic<uint64_t> frame_state{0xFull << 44}; // "no frame" sentinel
 
-    // Requests to the render thread; guarded by mutex.
+    // Requests to the render thread; guarded by mutex. The serial pair lets a
+    // deactivation request wait until the render thread has actually applied it.
     bool config_pending = false;
     int pending_width = 0, pending_height = 0;
+    uint64_t config_request_serial = 0, config_applied_serial = 0;
     bool render_pending = false;
     bool quit = false;
     bool initialized = false, initialize_ok = false;
@@ -149,13 +152,30 @@ void mpv_handle_t::cleanup_render_resources_win_gl() {
 bool mpv_handle_t::set_surface_config_win_gl(int width, int height) {
     auto *s = win_gl_;
     if (!s || !s->thread) return false;
+    uint64_t request;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         s->pending_width = width;
         s->pending_height = height;
         s->config_pending = true; // newest request replaces an unprocessed resize
+        request = ++s->config_request_serial;
     }
     s->cv.notify_all();
+    if (width > 0 && height > 0) return true;
+    // Deactivation is synchronous: the consumer releases its Skia GPU objects right
+    // after this call, and destroying them on Skiko's GL context while this path's
+    // producer context is still actively rendering can block in the driver's
+    // cross-context synchronization. Wait until the render thread has dropped the FBO
+    // and parked (it then only drains frames without touching GL). Bounded: the
+    // thread is at worst one frame render away, and the timeout means a wedged
+    // producer degrades to the old behavior instead of hanging the caller.
+    std::unique_lock<std::mutex> lock(s->mutex);
+    const bool applied = s->cv.wait_for(lock, std::chrono::seconds(1), [s, request] {
+        return s->quit || s->config_applied_serial >= request;
+    });
+    if (!applied) {
+        LOGW("OpenGL fallback surface deactivation was not acknowledged within 1s");
+    }
     return true;
 }
 
@@ -243,6 +263,10 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         if (s->config_pending) {
             s->config_pending = false;
             configured = apply_config_win_gl_locked();
+            // Acknowledges every request posted so far (requests coalesce; the apply
+            // above used the latest values). Deactivation waits on this.
+            s->config_applied_serial = s->config_request_serial;
+            s->cv.notify_all();
         }
         const bool want_render = s->render_pending;
         s->render_pending = false;

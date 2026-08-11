@@ -116,9 +116,12 @@ public:
     // which one is decided in Kotlin from Skiko's configured render API.
     bool create_render_context_win_gl();
     bool destroy_render_context_win_gl();
-    // Same request/reply protocol as the D3D11 set_surface_config, but there is no
+    // Same request protocol as the D3D11 set_surface_config, but there is no
     // consumer device: width/height <= 0 deactivates the surface (frames are then
-    // drained without rendering). Asynchronous.
+    // drained without rendering). Resizes are asynchronous; deactivation waits
+    // (bounded by a 1s timeout) until the render thread has dropped its FBO and
+    // parked, so the consumer can destroy its Skia GPU objects without racing this
+    // path's GL.
     bool set_surface_config_win_gl(int width, int height);
     // Packed frame state, same layout as the D3D11 path: generation(16) |
     // latest_index(4, 0xF = none; always 0 when a frame exists) | width(14) |
