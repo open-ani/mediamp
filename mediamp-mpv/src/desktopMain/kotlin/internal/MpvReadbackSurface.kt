@@ -15,31 +15,35 @@ import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Pixmap
-import org.jetbrains.skia.Surface
 import org.openani.mediamp.mpv.MPVLog
 
 /**
  * Consumer side of the Windows OpenGL fallback: the native render thread publishes CPU
- * frames (RGBA_8888, top-down on copy); this class copies the latest one straight into
- * a Skia bitmap's native pixel storage (no JNI arrays, no Java-heap staging), uploads
- * it into a GPU surface on Skia's current DirectContext, and caches the snapshot. The
- * expensive part (copy + upload) only runs when the native frame state advanced;
- * overlay-driven Compose redraws just re-draw the cached image. During a resize the
- * previous frame is returned until a frame at the new size exists, so resizes never
- * flash black. All methods are called from the Compose/Skiko UI thread only.
+ * frames; this class copies the latest one into a fresh immutable Skia bitmap's native
+ * pixel storage (no JNI arrays, no Java-heap staging) and wraps it zero-copy as a
+ * raster [Image]. Drawing that image on the Compose canvas uploads it into Skia's
+ * bitmap-texture cache once per unique frame; overlay-driven redraws without a new
+ * frame re-draw the cached image and hit the same cached texture.
+ *
+ * Deliberately owns NO GPU objects. Raster images and bitmaps have CPU-only
+ * destructors, so they can be closed regardless of which (if any) GL context is
+ * current — the dispose path at window close runs without a current context, where
+ * destroying a GPU surface blocks or crashes in the driver (observed: an EDT hang in
+ * the surface destructor while the producer rendered, and a null-dispatch
+ * ACCESS_VIOLATION from a DirectContext flush). The per-frame GPU upload cost is the
+ * same as an explicit blit-surface design; only the upload's bookkeeping moved into
+ * Skia's own cache, which handles context loss itself.
+ *
+ * All methods are called from the Compose/Skiko UI thread only.
  */
 internal class MpvReadbackSurface(
     private val handlePtr: Long,
     private val backend: WindowsOpenGLSurfaceBackend,
 ) : MpvSurfaceConsumer {
+    // The bitmap of the current frame stays referenced (and unclosed) while its image
+    // is cached: the image shares the immutable bitmap's pixels instead of copying.
     private var bitmap: Bitmap? = null
     private var bitmapPixels: Pixmap? = null
-    private var bitmapWidth = 0
-    private var bitmapHeight = 0
-
-    private var blitSurface: Surface? = null
-    private var surfaceContext: DirectContext? = null
-
     private var cachedFrame: Image? = null
     private var cachedState = 0L
 
@@ -57,8 +61,9 @@ internal class MpvReadbackSurface(
     }
 
     override fun refreshDeviceIfChanged(devicePtr: Long) {
-        // Frames arrive as CPU pixels; no consumer render device is involved. A
-        // replaced Skiko DirectContext is detected per draw in currentFrameImage.
+        // Frames arrive as CPU pixels and leave as raster images; no consumer render
+        // device is involved, and Skia's texture cache survives redrawer changes on
+        // its own.
     }
 
     override fun invalidateForRenderEnvironmentChange() {
@@ -67,7 +72,7 @@ internal class MpvReadbackSurface(
 
     override fun currentFrameImage(directContext: DirectContext): Image? {
         val state = backend.getFrameState(handlePtr)
-        if (state == cachedState && surfaceContext === directContext) {
+        if (state == cachedState) {
             cachedFrame?.let { return it }
         }
         val index = ((state ushr 44) and 0xF).toInt()
@@ -75,122 +80,54 @@ internal class MpvReadbackSurface(
         val height = ((state ushr 16) and 0x3FFF).toInt()
         if (index == 0xF || width <= 0 || height <= 0) return cachedFrame
 
-        if (surfaceContext !== directContext) {
-            // Skiko replaced its redrawer: GPU objects of the old DirectContext are
-            // dead and must not be drawn or closed into the new one late — drop them
-            // now, before anything is created on the new context.
-            cachedFrame?.close()
-            cachedFrame = null
-            cachedState = 0L
-            blitSurface?.close()
-            blitSurface = null
-            surfaceContext = null
-        }
-
-        val destAddr = ensureBitmap(width, height) ?: return cachedFrame
-        // Copy first: it can still fail benignly (the render thread swapped in a frame
-        // of another size between the state read above and now), and then the cached
-        // image must stay untouched.
-        val copiedState = backend.copyLatestFrame(handlePtr, destAddr, width, height)
-        if (copiedState == 0L) return cachedFrame
-        val blit = ensureBlitSurface(width, height, directContext) ?: return cachedFrame
-
-        // Closing the previous snapshot before writing lets Skia reuse the surface's
-        // texture instead of copy-on-writing it; the image was drawn in an already
-        // flushed Compose frame.
-        cachedFrame?.close()
-        cachedFrame = null
-        blit.writePixels(bitmap!!, 0, 0)
-        cachedFrame = blit.makeImageSnapshot()
-        cachedState = copiedState
-        return cachedFrame
-    }
-
-    /** The bitmap's native pixel address for [width] x [height], or null on failure. */
-    private fun ensureBitmap(width: Int, height: Int): Long? {
-        if (bitmap != null && bitmapWidth == width && bitmapHeight == height) {
-            return bitmapPixels?.addr
-        }
-        bitmapPixels?.close()
-        bitmapPixels = null
-        bitmap?.close()
-        bitmap = null
-        val allocated = Bitmap()
-        // The native copy forces sane alpha, but the video is opaque either way.
-        if (!allocated.allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.OPAQUE))) {
-            allocated.close()
+        // A fresh bitmap per frame: the previous one is pinned by the previous image
+        // (shared pixels) until both are replaced below.
+        val newBitmap = Bitmap()
+        if (!newBitmap.allocPixels(ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.OPAQUE))) {
+            newBitmap.close()
             logOnce("bitmap allocation failed (${width}x${height})", MPVLog.ERROR)
-            return null
+            return cachedFrame
         }
-        val pixels = allocated.peekPixels()
-        if (pixels == null) {
-            allocated.close()
+        val newPixels = newBitmap.peekPixels()
+        if (newPixels == null) {
+            newBitmap.close()
             logOnce("bitmap pixels are not peekable; frames stay native-only", MPVLog.ERROR)
-            return null
+            return cachedFrame
         }
-        bitmap = allocated
-        bitmapPixels = pixels
-        bitmapWidth = width
-        bitmapHeight = height
-        return pixels.addr
-    }
+        // The copy can fail benignly (the render thread swapped in a frame of another
+        // size between the state read above and now); the cached image stays untouched.
+        val copiedState = backend.copyLatestFrame(handlePtr, newPixels.addr, width, height)
+        if (copiedState == 0L) {
+            newPixels.close()
+            newBitmap.close()
+            return cachedFrame
+        }
+        // Immutable, so makeFromBitmap shares the pixels instead of copying, and Skia
+        // may cache the uploaded texture under the image's unique ID.
+        newBitmap.setImmutable()
+        val newFrame = Image.makeFromBitmap(newBitmap)
 
-    private fun ensureBlitSurface(width: Int, height: Int, directContext: DirectContext): Surface? {
-        blitSurface?.let {
-            if (surfaceContext === directContext && it.width == width && it.height == height) return it
-            // The caller already handled a context change, so this surface lives on
-            // [directContext]; resolve its pending work before destruction (see
-            // dropConsumerResources).
-            runCatching {
-                directContext.flush()
-                directContext.submit(false)
-            }
-            it.close()
-            blitSurface = null
-        }
-        // A GPU (render-target) surface: writePixels is the one CPU->GPU upload, and
-        // its snapshot is drawn zero-copy onto the Compose canvas. Same color type as
-        // the bitmap, so the upload is a straight copy — an N32 (BGRA) surface would
-        // make writePixels swizzle the whole frame on the CPU first.
-        blitSurface = runCatching {
-            Surface.makeRenderTarget(
-                directContext, false,
-                ImageInfo(width, height, ColorType.RGBA_8888, ColorAlphaType.PREMUL),
-            )
-        }.onFailure { logOnce("blit surface creation failed", MPVLog.ERROR, it) }.getOrNull()
-        if (blitSurface == null) {
-            logOnce("blit surface unavailable (${width}x${height})", MPVLog.ERROR)
-            return null
-        }
-        surfaceContext = directContext
-        return blitSurface
+        // CPU-only destructors — safe on any thread with any (or no) GL context
+        // current. Skia purges a cached texture of a closed image through its own
+        // message bus, never from this destructor.
+        cachedFrame?.close()
+        bitmapPixels?.close()
+        bitmap?.close()
+        cachedFrame = newFrame
+        bitmap = newBitmap
+        bitmapPixels = newPixels
+        cachedState = copiedState
+        return newFrame
     }
 
     private fun dropConsumerResources() {
-        // Resolve any recorded-but-unsubmitted work targeting the blit surface (the
-        // last writePixels/snapshot may not have gone through a Skiko frame-end flush
-        // when disposal runs mid-frame) so the surface destructor below has nothing
-        // left to flush or wait on.
-        if (blitSurface != null || cachedFrame != null) {
-            surfaceContext?.let { context ->
-                runCatching {
-                    context.flush()
-                    context.submit(false)
-                }
-            }
-        }
         cachedFrame?.close()
         cachedFrame = null
         cachedState = 0L
-        blitSurface?.close()
-        blitSurface = null
-        surfaceContext = null
         bitmapPixels?.close()
         bitmapPixels = null
         bitmap?.close()
         bitmap = null
-        bitmapWidth = 0
-        bitmapHeight = 0
     }
 
     private val loggedStates = mutableSetOf<String>()
@@ -199,11 +136,10 @@ internal class MpvReadbackSurface(
     }
 
     override fun release() {
-        // Quiesce the producer FIRST — deactivation is synchronous on this backend.
-        // Destroying the Skia GPU objects below while the producer's WGL context is
-        // still actively rendering can block the destructor in the GL driver's
-        // cross-context synchronization (observed as an EDT hang at window close,
-        // while the same closes succeed when the producer is idle).
+        // Deactivation is synchronous: after it returns, the render thread has dropped
+        // its FBO and parked, so the native side can no longer write into the bitmap
+        // being closed below (copies only ever run on this thread anyway; this also
+        // quiesces mpv's frame flow before the player is torn down).
         backend.setSurfaceConfig(handlePtr, 0, 0, 0L)
         dropConsumerResources()
         requestedWidth = 0

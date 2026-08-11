@@ -36,8 +36,9 @@ internal interface MpvSurfaceConsumer {
     fun invalidateForRenderEnvironmentChange()
 
     /**
-     * Returns the latest video frame as a Skia-owned texture image (safe to draw
-     * through Compose, including RenderNode recordings), or null when no frame exists
+     * Returns the latest video frame as a Skia image (safe to draw through Compose,
+     * including RenderNode recordings; a GPU texture for the ring backends, an
+     * immutable raster image for the readback fallback), or null when no frame exists
      * yet. Do NOT close the returned image — it is owned by this consumer.
      */
     fun currentFrameImage(directContext: DirectContext): Image?
