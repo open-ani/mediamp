@@ -34,7 +34,6 @@ kotlin {
     sourceSets {
         androidMain.dependencies {
             api(projects.mediampApi)
-            implementation(libs.androidx.media3.effect)
             implementation(libs.androidx.media3.exoplayer)
             implementation(libs.androidx.media3.ui)
         }

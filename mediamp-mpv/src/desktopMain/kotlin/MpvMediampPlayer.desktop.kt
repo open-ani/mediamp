@@ -83,7 +83,7 @@ actual class MpvMediampPlayer(
     /** See [MpvSurfaceRing.requestSurface]. */
     internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
         val configured = surfaceRing?.requestSurface(width, height, devicePtr) ?: false
-        if (configured) updateVideoEnhancementViewport(width, height)
+        if (configured) updateViewportSize(width, height)
         return configured
     }
 
@@ -98,7 +98,7 @@ actual class MpvMediampPlayer(
 
     /** See [MpvSurfaceRing.release]. */
     internal fun releaseSurface() {
-        updateVideoEnhancementViewport(0, 0)
+        updateViewportSize(0, 0)
         surfaceRing?.release()
     }
 

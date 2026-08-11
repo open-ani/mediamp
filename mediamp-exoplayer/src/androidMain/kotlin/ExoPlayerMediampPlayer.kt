@@ -68,7 +68,6 @@ import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.VideoAspectRatio
-import org.openani.mediamp.features.VideoEnhancement
 import org.openani.mediamp.features.buildPlayerFeatures
 import org.openani.mediamp.internal.MutableTrackGroup
 import org.openani.mediamp.io.SeekableInput
@@ -313,7 +312,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             val displayWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt()
-            videoEnhancement.updateSourceSize(displayWidth, videoSize.height)
+            updateVideoSize(displayWidth, videoSize.height)
             currentSession?.notifyProperties(readMediaProperties())
         }
     }
@@ -329,14 +328,12 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         .build()
         .apply {
             addListener(mediaListener)
-            setVideoEffects(emptyList())
         }
 
     override val impl: ExoPlayer get() = exoPlayer
 
     private val buffering = ExoPlayerBuffering(state)
     private val videoAspectRatio = ExoPlayerVideoAspectRatio()
-    private val videoEnhancement = ExoPlayerVideoEnhancement(exoPlayer)
     private val framePreview = ExoFramePreview { mediaData.value }
 
     override val features: PlayerFeatures = buildPlayerFeatures {
@@ -344,12 +341,11 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         add(Buffering, buffering)
         add(MediaMetadata, mediaMetadataFeature)
         add(VideoAspectRatio, videoAspectRatio)
-        add(VideoEnhancement, videoEnhancement)
         add(FramePreview.Key, framePreview)
     }
 
-    internal fun updateVideoEnhancementViewport(width: Int, height: Int) {
-        videoEnhancement.updateViewportSize(width, height)
+    internal fun updateViewport(width: Int, height: Int) {
+        updateViewportSize(width, height)
     }
 
     init {
@@ -392,7 +388,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     ): OpenResult {
         val epoch = ++openEpoch
         openingPhase = true
-        videoEnhancement.updateSourceSize(0, 0)
+        updateVideoSize(0, 0)
         var sessionInput: SeekableInput? = null
         try {
             val prepared = buildMediaSource(data)
