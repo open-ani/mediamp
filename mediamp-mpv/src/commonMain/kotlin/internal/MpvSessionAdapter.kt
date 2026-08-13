@@ -112,13 +112,20 @@ internal class MpvSessionAdapter(
     @Volatile
     var eofReached: Boolean = false
 
-    /** Last observed `media-title`, merged with [lastDurationMillis] into MediaProperties. */
+    /** Last observed `media-title`, merged with the other media properties. */
     @Volatile
     var lastTitle: String? = null
 
     /** Last observed duration in milliseconds; `null` = unknown (never a negative sentinel). */
     @Volatile
     var lastDurationMillis: Long? = null
+
+    /** Last observed video display dimensions after applying pixel aspect ratio. */
+    @Volatile
+    var lastVideoWidth: Int? = null
+
+    @Volatile
+    var lastVideoHeight: Int? = null
 
     /**
      * Records the new `eof-reached` level and returns `true` on the rising edge — the one

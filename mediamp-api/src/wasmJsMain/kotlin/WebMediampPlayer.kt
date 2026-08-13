@@ -387,6 +387,8 @@ public class WebMediampPlayer(
     private fun currentProperties(): MediaProperties = MediaProperties(
         title = currentUriTitle(),
         durationMillis = elementDurationMillis(),
+        videoWidth = videoElement.videoWidth.takeIf { it > 0 },
+        videoHeight = videoElement.videoHeight.takeIf { it > 0 },
     )
 
     private fun mediaErrorToException(error: MediaError?, uri: String): PlaybackException {

@@ -266,6 +266,22 @@ class MpvMediampPlayerSmokeTest {
         }
     }
 
+    @OptIn(InternalMediampApi::class)
+    @Test
+    fun `player exposes video dimensions in media properties`() {
+        if (!prepareOrSkip()) return
+        val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
+
+        runPlayerTest { player ->
+            player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+            val properties = withTimeout(10_000) {
+                player.mediaProperties.first { it?.videoWidth != null && it.videoHeight != null }
+            }
+            assertEquals(640, properties?.videoWidth)
+            assertEquals(360, properties?.videoHeight)
+        }
+    }
+
     /**
      * Selecting a non-default SRT subtitle track must survive pause, resume, and seek,
      * and turning subtitles off must stick as well.

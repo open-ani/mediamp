@@ -81,6 +81,7 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.CoroutineContext
+import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.PlaybackException as Media3PlaybackException
 import androidx.media3.common.Player as Media3Player
@@ -588,10 +589,15 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
      * sentinel maps to `null`, never a negative value (v1 defect E8).
      */
     @MainThread
-    private fun readMediaProperties(): MediaProperties = MediaProperties(
-        title = exoPlayer.mediaMetadata.title?.toString(),
-        durationMillis = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 },
-    )
+    private fun readMediaProperties(): MediaProperties {
+        val videoSize = exoPlayer.videoSize
+        return MediaProperties(
+            title = exoPlayer.mediaMetadata.title?.toString(),
+            durationMillis = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 },
+            videoWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt().takeIf { it > 0 },
+            videoHeight = videoSize.height.takeIf { it > 0 },
+        )
+    }
 
     private fun Tracks.Group.getSubtitleTracks() = sequence {
         repeat(length) { index ->

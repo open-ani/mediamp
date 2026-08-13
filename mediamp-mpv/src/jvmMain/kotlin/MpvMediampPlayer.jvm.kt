@@ -151,6 +151,7 @@ abstract class JvmMpvMediampPlayer(
             when (name) {
                 "track-list" -> mediaMetadata.refreshTracks()
                 "chapter-list" -> mediaMetadata.refreshChapters()
+                "video-params" -> refreshVideoSize()
             }
         }
 
@@ -201,7 +202,7 @@ abstract class JvmMpvMediampPlayer(
                 "duration" -> {
                     val adapter = sessionAdapter ?: return
                     adapter.lastDurationMillis = (value * 1000).toLong().takeIf { it > 0 } // unknown -> null
-                    adapter.session.notifyProperties(MediaProperties(adapter.lastTitle, adapter.lastDurationMillis))
+                    adapter.session.notifyProperties(adapter.mediaProperties())
                 }
 
                 "volume" -> audioLevelController.onVolumeChanged(value)
@@ -214,7 +215,7 @@ abstract class JvmMpvMediampPlayer(
                 "media-title" -> {
                     val adapter = sessionAdapter ?: return
                     adapter.lastTitle = value
-                    adapter.session.notifyProperties(MediaProperties(adapter.lastTitle, adapter.lastDurationMillis))
+                    adapter.session.notifyProperties(adapter.mediaProperties())
                 }
             }
         }
@@ -224,6 +225,7 @@ abstract class JvmMpvMediampPlayer(
             val adapter = sessionAdapter ?: return
             when (event) {
                 MPVEvent.FILE_LOADED -> {
+                    readVideoSize(adapter)
                     adapter.onFileLoaded()
                     adapter.pendingOpen?.complete(Unit)
                 }
@@ -445,7 +447,9 @@ abstract class JvmMpvMediampPlayer(
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
+        handle.observeProperty("video-params", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("hwdec-current", MPVFormat.MPV_FORMAT_NONE)
+
     }
 
     @InternalMediampApi
@@ -477,6 +481,7 @@ abstract class JvmMpvMediampPlayer(
         renderContextReadySignal.update { it + 1 }
     }
 
+    /** Receives the physical video surface size from the desktop render backend. */
     private suspend fun awaitRenderContextForLoad() {
         while (true) {
             // Capture the signal before probing so a callback firing between the probe and
@@ -503,7 +508,6 @@ abstract class JvmMpvMediampPlayer(
         awaitRenderContextForLoad()
 
         buffering.bufferedPercentage.value = 0
-
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
             is UriMediaData -> {
@@ -581,6 +585,7 @@ abstract class JvmMpvMediampPlayer(
             val title = handle.getPropertyString("media-title")
             adapter.lastDurationMillis = durationMillis
             adapter.lastTitle = title
+            readVideoSize(adapter)
             val atEnd = handle.getPropertyBoolean("eof-reached")
             if (atEnd) {
                 // Already at EOF (start position at/beyond the end): this IS the Ended fact;
@@ -591,7 +596,7 @@ abstract class JvmMpvMediampPlayer(
                 sessionResources = sessionResources,
                 initialSnapshot = liveTransportSnapshot(),
                 atEnd = atEnd,
-                initialProperties = MediaProperties(title = title, durationMillis = durationMillis),
+                initialProperties = adapter.mediaProperties(),
             )
         } catch (e: Throwable) {
             // Open failure or suspend-cancellation: unload whatever loadfile started and
@@ -686,12 +691,32 @@ abstract class JvmMpvMediampPlayer(
     private fun currentNativePositionMillis(): Long =
         (handle.getPropertyDouble("time-pos") * 1000).toLong().coerceAtLeast(0L)
 
+    private fun refreshVideoSize() {
+        val adapter = sessionAdapter ?: return
+        readVideoSize(adapter)
+        adapter.session.notifyProperties(adapter.mediaProperties())
+    }
+
+    private fun readVideoSize(adapter: MpvSessionAdapter) {
+        adapter.lastVideoWidth = handle.getPropertyInt("dwidth").takeIf { it > 0 }
+            ?: handle.getPropertyInt("width").takeIf { it > 0 }
+        adapter.lastVideoHeight = handle.getPropertyInt("dheight").takeIf { it > 0 }
+            ?: handle.getPropertyInt("height").takeIf { it > 0 }
+    }
+
     /**
      * Returns the media currently loaded, or `null`.
      * Used by the frame-preview decoder to mirror the main player's media.
      */
     internal fun currentMediaDataOrNull(): MediaData? = mediaData.value
 }
+
+private fun MpvSessionAdapter.mediaProperties(): MediaProperties = MediaProperties(
+    title = lastTitle,
+    durationMillis = lastDurationMillis,
+    videoWidth = lastVideoWidth,
+    videoHeight = lastVideoHeight,
+)
 
 /**
  * Creates the platform [FramePreview] implementation for this player, or `null` when the

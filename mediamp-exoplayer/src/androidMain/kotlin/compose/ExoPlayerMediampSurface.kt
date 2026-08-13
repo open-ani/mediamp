@@ -40,8 +40,6 @@ fun ExoPlayerMediampPlayerSurface(
             }
         },
         modifier,
-        onRelease = {
-        },
         update = { view ->
             view.player = mediampPlayer.impl
             // Apply aspect ratio mode to PlayerView
