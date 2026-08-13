@@ -13,7 +13,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -40,10 +39,7 @@ fun ExoPlayerMediampPlayerSurface(
                 configuration()
             }
         },
-        modifier.onSizeChanged {
-            mediampPlayer.updateViewport(it.width, it.height)
-        },
-        onRelease = { mediampPlayer.updateViewport(0, 0) },
+        modifier,
         update = { view ->
             view.player = mediampPlayer.impl
             // Apply aspect ratio mode to PlayerView

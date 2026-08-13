@@ -21,7 +21,6 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.PlaybackEvent
-import org.openani.mediamp.VideoDimensions
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.Screenshots
@@ -269,20 +268,17 @@ class MpvMediampPlayerSmokeTest {
 
     @OptIn(InternalMediampApi::class)
     @Test
-    fun `player exposes video and viewport dimensions`() {
+    fun `player exposes video dimensions in media properties`() {
         if (!prepareOrSkip()) return
         val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
 
         runPlayerTest { player ->
             player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
-            assertTrue(player.requestSurface(1280, 720, 0L))
-            assertEquals(VideoDimensions(1280, 720), player.viewportSize.value)
-            assertEquals(VideoDimensions(640, 360), withTimeout(10_000) {
-                player.videoSize.first { it != null }
-            })
-
-            player.releaseSurface()
-            assertNull(player.viewportSize.value)
+            val properties = withTimeout(10_000) {
+                player.mediaProperties.first { it?.videoWidth != null && it.videoHeight != null }
+            }
+            assertEquals(640, properties?.videoWidth)
+            assertEquals(360, properties?.videoHeight)
         }
     }
 

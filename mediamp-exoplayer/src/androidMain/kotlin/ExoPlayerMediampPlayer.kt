@@ -311,8 +311,6 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
-            val displayWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt()
-            updateVideoSize(displayWidth, videoSize.height)
             currentSession?.notifyProperties(readMediaProperties())
         }
     }
@@ -342,10 +340,6 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         add(MediaMetadata, mediaMetadataFeature)
         add(VideoAspectRatio, videoAspectRatio)
         add(FramePreview.Key, framePreview)
-    }
-
-    internal fun updateViewport(width: Int, height: Int) {
-        updateViewportSize(width, height)
     }
 
     init {
@@ -388,7 +382,6 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     ): OpenResult {
         val epoch = ++openEpoch
         openingPhase = true
-        updateVideoSize(0, 0)
         var sessionInput: SeekableInput? = null
         try {
             val prepared = buildMediaSource(data)
@@ -596,10 +589,15 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
      * sentinel maps to `null`, never a negative value (v1 defect E8).
      */
     @MainThread
-    private fun readMediaProperties(): MediaProperties = MediaProperties(
-        title = exoPlayer.mediaMetadata.title?.toString(),
-        durationMillis = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 },
-    )
+    private fun readMediaProperties(): MediaProperties {
+        val videoSize = exoPlayer.videoSize
+        return MediaProperties(
+            title = exoPlayer.mediaMetadata.title?.toString(),
+            durationMillis = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 },
+            videoWidth = (videoSize.width * videoSize.pixelWidthHeightRatio).roundToInt().takeIf { it > 0 },
+            videoHeight = videoSize.height.takeIf { it > 0 },
+        )
+    }
 
     private fun Tracks.Group.getSubtitleTracks() = sequence {
         repeat(length) { index ->

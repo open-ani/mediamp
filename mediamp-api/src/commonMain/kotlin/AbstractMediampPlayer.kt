@@ -94,22 +94,6 @@ public abstract class AbstractMediampPlayer(
     private val _currentPositionMillis = MutableStateFlow(0L)
     final override val currentPositionMillis: StateFlow<Long> = _currentPositionMillis.asStateFlow()
 
-    private val _videoSize = MutableStateFlow<VideoDimensions?>(null)
-    final override val videoSize: StateFlow<VideoDimensions?> = _videoSize.asStateFlow()
-
-    private val _viewportSize = MutableStateFlow<VideoDimensions?>(null)
-    final override val viewportSize: StateFlow<VideoDimensions?> = _viewportSize.asStateFlow()
-
-    /** Updates [MediampPlayer.videoSize]; non-positive dimensions clear the current value. */
-    protected fun updateVideoSize(width: Int, height: Int) {
-        _videoSize.value = dimensionsOrNull(width, height)
-    }
-
-    /** Updates [MediampPlayer.viewportSize]; non-positive dimensions clear the current value. */
-    protected fun updateViewportSize(width: Int, height: Int) {
-        _viewportSize.value = dimensionsOrNull(width, height)
-    }
-
     final override val playbackProgress: Flow<Float> =
         combine(mediaProperties.filterNotNull(), currentPositionMillis) { properties, position ->
             val duration = properties.durationMillis
@@ -1062,6 +1046,3 @@ public abstract class AbstractMediampPlayer(
     }
     // endregion
 }
-
-private fun dimensionsOrNull(width: Int, height: Int): VideoDimensions? =
-    if (width > 0 && height > 0) VideoDimensions(width, height) else null

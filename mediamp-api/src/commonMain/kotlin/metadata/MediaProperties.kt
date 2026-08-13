@@ -30,7 +30,15 @@ public class MediaProperties(
      * Never negative: sentinel values from backends (e.g. media3's `C.TIME_UNSET`) must be
      * translated to `null`, not passed through.
      */
-    public val durationMillis: Long? = null
+    public val durationMillis: Long? = null,
+    /**
+     * Display width of the video after applying its pixel aspect ratio, or `null` if unknown.
+     */
+    public val videoWidth: Int? = null,
+    /**
+     * Display height of the video, or `null` if unknown.
+     */
+    public val videoHeight: Int? = null,
 ) {
     public override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -38,6 +46,8 @@ public class MediaProperties(
 
         if (title != other.title) return false
         if (durationMillis != other.durationMillis) return false
+        if (videoWidth != other.videoWidth) return false
+        if (videoHeight != other.videoHeight) return false
 
         return true
     }
@@ -45,6 +55,8 @@ public class MediaProperties(
     public override fun hashCode(): Int {
         var result = title?.hashCode() ?: 0
         result = 31 * result + (durationMillis?.hashCode() ?: 0)
+        result = 31 * result + (videoWidth ?: 0)
+        result = 31 * result + (videoHeight ?: 0)
         return result
     }
 
@@ -54,9 +66,13 @@ public class MediaProperties(
     public fun copy(
         title: String? = this.title,
         durationMillis: Long? = this.durationMillis,
+        videoWidth: Int? = this.videoWidth,
+        videoHeight: Int? = this.videoHeight,
     ): MediaProperties = MediaProperties(
         title = title,
         durationMillis = durationMillis,
+        videoWidth = videoWidth,
+        videoHeight = videoHeight,
     )
 
     public companion object {

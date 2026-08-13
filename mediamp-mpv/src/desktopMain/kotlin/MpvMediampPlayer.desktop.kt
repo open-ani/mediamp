@@ -81,11 +81,8 @@ actual class MpvMediampPlayer(
         ringBackend?.createSkiaInterop(layer)
 
     /** See [MpvSurfaceRing.requestSurface]. */
-    internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
-        val configured = surfaceRing?.requestSurface(width, height, devicePtr) ?: false
-        if (configured) updateViewportSize(width, height)
-        return configured
-    }
+    internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =
+        surfaceRing?.requestSurface(width, height, devicePtr) ?: false
 
     /** See [MpvSurfaceRing.refreshDeviceIfChanged]. */
     internal fun refreshDeviceIfChanged(devicePtr: Long) {
@@ -98,7 +95,6 @@ actual class MpvMediampPlayer(
 
     /** See [MpvSurfaceRing.release]. */
     internal fun releaseSurface() {
-        updateViewportSize(0, 0)
         surfaceRing?.release()
     }
 

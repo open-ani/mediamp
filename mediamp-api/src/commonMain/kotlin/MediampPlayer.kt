@@ -100,18 +100,6 @@ public interface MediampPlayer : AutoCloseable {
     public val currentPositionMillis: StateFlow<Long>
 
     /**
-     * Display dimensions of the current video after applying its pixel aspect ratio, or
-     * `null` while no video dimensions are available.
-     */
-    public val videoSize: StateFlow<VideoDimensions?>
-
-    /**
-     * Physical pixel dimensions of the viewport used to render this player, or `null` while
-     * no viewport is attached.
-     */
-    public val viewportSize: StateFlow<VideoDimensions?>
-
-    /**
      * Playback progress in `0f..1f`; `0f` when duration is unknown.
      */
     public val playbackProgress: Flow<Float>
