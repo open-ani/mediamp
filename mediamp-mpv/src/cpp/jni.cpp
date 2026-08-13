@@ -28,16 +28,22 @@ mediampv::mpv_handle_t *get_instance(jlong ptr) {
 }
 
 #if defined(_WIN32) || defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
-// Shared body of nReadSurfacePixels{D3D11,Macos,OpenGL}: returns the latest frame as an ARGB
-// jintArray and writes [width, height] into dims, or null when no frame is available.
-jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims) {
+// Shared body of nReadSurfacePixels{D3D11,Macos,OpenGL,WindowsOpenGL}: returns the
+// latest frame of [reader] (the platform readback member) as an ARGB jintArray and
+// writes [width, height] into dims, or null when no frame is available.
+using read_surface_pixels_fn =
+    bool (mediampv::mpv_handle_t::*)(std::vector<uint32_t> &, int &, int &);
+
+jintArray read_surface_pixels_to_java(
+    JNIEnv *env, jlong ptr, jintArray dims,
+    read_surface_pixels_fn reader = &mediampv::mpv_handle_t::read_surface_pixels) {
     auto *instance = get_instance(ptr);
     if (!instance || !dims || env->GetArrayLength(dims) < 2) {
         return nullptr;
     }
     std::vector<uint32_t> pixels;
     int width = 0, height = 0;
-    if (!instance->read_surface_pixels(pixels, width, height) || pixels.empty()) {
+    if (!(instance->*reader)(pixels, width, height) || pixels.empty()) {
         return nullptr;
     }
     jintArray result = env->NewIntArray(static_cast<jsize>(pixels.size()));
@@ -128,6 +134,17 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
+
+	// Windows OpenGL fallback render path (render_opengl_win.cpp), used when Compose
+	// renders with Skiko's OpenGL backend instead of Direct3D.
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasWindowsOpenGLSurface)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height);
 #endif
 
 #ifdef __APPLE__
@@ -483,6 +500,59 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv * env, jclass
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
     return read_surface_pixels_to_java(env, ptr, dims);
+}
+
+// Windows OpenGL fallback render path (render_opengl_win.cpp).
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->create_render_context_win_gl() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->destroy_render_context_win_gl() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->set_surface_config_win_gl(width, height) : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? (jlong) instance->get_frame_state_win_gl() : 0;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasWindowsOpenGLSurface)(JNIEnv * env, jclass clazz, jlong ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->has_win_gl_surface() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
+    auto *instance = get_instance(ptr);
+    if (!instance) {
+        return JNI_FALSE;
+    }
+    scoped_utf_chars path_chars(env, path);
+    if (!path_chars.valid()) {
+        return JNI_FALSE;
+    }
+    return instance->save_surface_png_win_gl(path_chars.get());
+}
+
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jintArray dims) {
+    return read_surface_pixels_to_java(
+        env, ptr, dims, &mediampv::mpv_handle_t::read_surface_pixels_win_gl);
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height) {
+    auto *instance = get_instance(ptr);
+    if (!instance || dest_addr == 0) {
+        return 0;
+    }
+    return (jlong) instance->copy_latest_frame_win_gl(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(dest_addr)), width, height);
 }
 
 #endif

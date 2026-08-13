@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -27,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.singleWindowApplication
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.openani.mediamp.PlaybackException
 
 fun main(args: Array<String>) {
     val videoPath = args.firstOrNull()
@@ -37,6 +40,7 @@ fun main(args: Array<String>) {
         title = "mediamp mpv+Metal prototype",
         state = WindowState(size = DpSize(1280.dp, 800.dp)),
     ) {
+        val scope = rememberCoroutineScope()
         val player = remember { MpvPlayer().also { it.loadFile(videoPath) } }
         DisposableEffect(Unit) {
             onDispose { player.close() }
@@ -73,6 +77,22 @@ fun main(args: Array<String>) {
                     durationSeconds = duration,
                     onTogglePause = { player.togglePause() },
                     onSeek = { player.seekAbsolute(it) },
+                    onRestart = {
+                        scope.launch {
+                            player.close()
+                            delay(3000)
+                            try {
+                                player.loadFile(videoPath)
+                            } catch (e: PlaybackException) {
+                                println(e)
+                            }
+                        }
+                    },
+                    onStop = {
+                        scope.launch {
+                            player.close()
+                        }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }

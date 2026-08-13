@@ -32,7 +32,6 @@
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <dxgi1_2.h>
-#include <wincodec.h>
 
 #include <cstdint>
 #include <cstring>
@@ -45,6 +44,7 @@
 
 #include "mpv_handle_t.h"
 #include "log.h"
+#include "png_writer_win.h"
 
 namespace {
 
@@ -124,20 +124,6 @@ ID3D12Device *open_skia_d3d12_device(const void *instance_handle, int64_t skiko_
     }
     return device;  // AddRef'd by QueryInterface; caller owns.
 }
-
-struct scoped_co_init final {
-    scoped_co_init() {
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        // RPC_E_CHANGED_MODE: already initialized as STA on this thread; usable as-is.
-        initialized = SUCCEEDED(hr);
-        usable = initialized || hr == RPC_E_CHANGED_MODE;
-    }
-    ~scoped_co_init() {
-        if (initialized) CoUninitialize();
-    }
-    bool initialized = false;
-    bool usable = false;
-};
 
 }  // namespace
 
@@ -682,10 +668,10 @@ bool mpv_handle_t::read_surface_pixels(
     return read_frame_argb_locked(out_pixels, out_width, out_height);
 }
 
-// Writes the latest rendered frame as PNG via the staging-texture readback and WIC.
-// Independent of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va)
-// frames without zimg. render_mutex_ is only held for the readback; the encode works
-// on our own copy.
+// Writes the latest rendered frame as PNG via the staging-texture readback and WIC
+// (png_writer_win.cpp). Independent of mpv's screenshot pipeline, which cannot convert
+// hwdec (d3d11va) frames without zimg. render_mutex_ is only held for the readback;
+// the encode works on our own copy.
 bool mpv_handle_t::save_surface_png(const char *path) {
     if (!path) return false;
     std::vector<uint32_t> pixels;
@@ -695,44 +681,7 @@ bool mpv_handle_t::save_surface_png(const char *path) {
         if (!read_frame_argb_locked(pixels, width, height)) return false;
     }
 
-    scoped_co_init com;
-    if (!com.usable) {
-        LOG(this, LOG_LEVEL_ERROR, "CoInitializeEx failed");
-        return false;
-    }
-    bool ok = false;
-    IWICImagingFactory *factory = nullptr;
-    IWICStream *stream = nullptr;
-    IWICBitmapEncoder *encoder = nullptr;
-    IWICBitmapFrameEncode *frame = nullptr;
-    do {
-        if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                    __uuidof(IWICImagingFactory),
-                                    reinterpret_cast<void **>(&factory)))) break;
-        if (FAILED(factory->CreateStream(&stream))) break;
-        int wide_length = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
-        std::vector<wchar_t> wide_path((size_t) (wide_length > 0 ? wide_length : 1));
-        MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path.data(), wide_length);
-        if (FAILED(stream->InitializeFromFilename(wide_path.data(), GENERIC_WRITE))) break;
-        if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))) break;
-        if (FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache))) break;
-        if (FAILED(encoder->CreateNewFrame(&frame, nullptr))) break;
-        if (FAILED(frame->Initialize(nullptr))) break;
-        if (FAILED(frame->SetSize((UINT) width, (UINT) height))) break;
-        // ARGB ints are BGRA bytes in little-endian memory.
-        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-        if (FAILED(frame->SetPixelFormat(&format))) break;
-        if (FAILED(frame->WritePixels(
-                (UINT) height, (UINT) width * 4, (UINT) (pixels.size() * 4),
-                reinterpret_cast<BYTE *>(pixels.data())))) break;
-        if (FAILED(frame->Commit())) break;
-        if (FAILED(encoder->Commit())) break;
-        ok = true;
-    } while (false);
-    safe_release(frame);
-    safe_release(encoder);
-    safe_release(stream);
-    safe_release(factory);
+    const bool ok = write_argb_png_wic(path, width, height, pixels);
     if (!ok) LOG(this, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
     return ok;
 }

@@ -1,0 +1,186 @@
+/*
+ * Copyright (C) 2024-2026 OpenAni and contributors.
+ *
+ * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
+ *
+ * https://github.com/open-ani/mediamp/blob/main/LICENSE
+ */
+
+#ifdef _WIN32
+
+#include "gl_functions_win.h"
+
+#include <cstdint>
+#include <mutex>
+
+#include "log.h"
+
+namespace mediampv {
+namespace gl {
+
+namespace {
+
+void *resolve_gl_symbol(const char *name) {
+    if (PROC proc = wglGetProcAddress(name)) {
+        // Some drivers report "unsupported" with these sentinels instead of null.
+        const auto value = reinterpret_cast<intptr_t>(proc);
+        if (value != 1 && value != 2 && value != 3 && value != -1) {
+            return reinterpret_cast<void *>(proc);
+        }
+    }
+    static HMODULE const gl_module = LoadLibraryW(L"opengl32.dll");
+    return gl_module ? reinterpret_cast<void *>(GetProcAddress(gl_module, name)) : nullptr;
+}
+
+/** Core/ARB name first, then the pre-3.0 EXT spelling for compatibility contexts. */
+void *resolve_gl_symbol(const char *name, const char *ext_name) {
+    if (void *symbol = resolve_gl_symbol(name)) return symbol;
+    return resolve_gl_symbol(ext_name);
+}
+
+struct framebuffer_functions final {
+    PFNGLGENFRAMEBUFFERSPROC gen = nullptr;
+    PFNGLDELETEFRAMEBUFFERSPROC destroy = nullptr;
+    PFNGLBINDFRAMEBUFFERPROC bind = nullptr;
+    PFNGLFRAMEBUFFERTEXTURE2DPROC attach_texture = nullptr;
+    PFNGLCHECKFRAMEBUFFERSTATUSPROC check_status = nullptr;
+    bool complete = false;
+};
+
+const framebuffer_functions &framebuffer_api() {
+    static framebuffer_functions functions;
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (functions.complete) return functions;
+
+    // Retried until it succeeds: a call could in principle happen before any context
+    // is current, and wglGetProcAddress resolves nothing then.
+    functions.gen = reinterpret_cast<PFNGLGENFRAMEBUFFERSPROC>(
+        resolve_gl_symbol("glGenFramebuffers", "glGenFramebuffersEXT"));
+    functions.destroy = reinterpret_cast<PFNGLDELETEFRAMEBUFFERSPROC>(
+        resolve_gl_symbol("glDeleteFramebuffers", "glDeleteFramebuffersEXT"));
+    functions.bind = reinterpret_cast<PFNGLBINDFRAMEBUFFERPROC>(
+        resolve_gl_symbol("glBindFramebuffer", "glBindFramebufferEXT"));
+    functions.attach_texture = reinterpret_cast<PFNGLFRAMEBUFFERTEXTURE2DPROC>(
+        resolve_gl_symbol("glFramebufferTexture2D", "glFramebufferTexture2DEXT"));
+    functions.check_status = reinterpret_cast<PFNGLCHECKFRAMEBUFFERSTATUSPROC>(
+        resolve_gl_symbol("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT"));
+    functions.complete = functions.gen && functions.destroy && functions.bind &&
+        functions.attach_texture && functions.check_status;
+    if (!functions.complete && wglGetCurrentContext() != nullptr) {
+        LOGE("this OpenGL driver exposes no framebuffer objects; mpv cannot render offscreen");
+    }
+    return functions;
+}
+
+} // namespace
+
+void gen_framebuffers(GLsizei n, GLuint *framebuffers) {
+    const auto &api = framebuffer_api();
+    if (api.gen) {
+        api.gen(n, framebuffers);
+    } else if (framebuffers) {
+        for (GLsizei i = 0; i < n; ++i) framebuffers[i] = 0;
+    }
+}
+
+void delete_framebuffers(GLsizei n, const GLuint *framebuffers) {
+    const auto &api = framebuffer_api();
+    if (api.destroy) api.destroy(n, framebuffers);
+}
+
+void bind_framebuffer(GLenum target, GLuint framebuffer) {
+    const auto &api = framebuffer_api();
+    if (api.bind) api.bind(target, framebuffer);
+}
+
+void framebuffer_texture_2d(
+    GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
+    const auto &api = framebuffer_api();
+    if (api.attach_texture) api.attach_texture(target, attachment, textarget, texture, level);
+}
+
+GLenum check_framebuffer_status(GLenum target) {
+    const auto &api = framebuffer_api();
+    return api.check_status ? api.check_status(target) : 0;
+}
+
+namespace {
+
+struct buffer_functions final {
+    PFNGLGENBUFFERSPROC gen = nullptr;
+    PFNGLDELETEBUFFERSPROC destroy = nullptr;
+    PFNGLBINDBUFFERPROC bind = nullptr;
+    PFNGLBUFFERDATAPROC data = nullptr;
+    PFNGLMAPBUFFERPROC map = nullptr;
+    PFNGLUNMAPBUFFERPROC unmap = nullptr;
+    bool complete = false;
+};
+
+const buffer_functions &buffer_api() {
+    static buffer_functions functions;
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (functions.complete) return functions;
+
+    functions.gen = reinterpret_cast<PFNGLGENBUFFERSPROC>(
+        resolve_gl_symbol("glGenBuffers", "glGenBuffersARB"));
+    functions.destroy = reinterpret_cast<PFNGLDELETEBUFFERSPROC>(
+        resolve_gl_symbol("glDeleteBuffers", "glDeleteBuffersARB"));
+    functions.bind = reinterpret_cast<PFNGLBINDBUFFERPROC>(
+        resolve_gl_symbol("glBindBuffer", "glBindBufferARB"));
+    functions.data = reinterpret_cast<PFNGLBUFFERDATAPROC>(
+        resolve_gl_symbol("glBufferData", "glBufferDataARB"));
+    functions.map = reinterpret_cast<PFNGLMAPBUFFERPROC>(
+        resolve_gl_symbol("glMapBuffer", "glMapBufferARB"));
+    functions.unmap = reinterpret_cast<PFNGLUNMAPBUFFERPROC>(
+        resolve_gl_symbol("glUnmapBuffer", "glUnmapBufferARB"));
+    functions.complete = functions.gen && functions.destroy && functions.bind &&
+        functions.data && functions.map && functions.unmap;
+    return functions;
+}
+
+} // namespace
+
+bool buffer_objects_available() {
+    return buffer_api().complete;
+}
+
+void gen_buffers(GLsizei n, GLuint *buffers) {
+    const auto &api = buffer_api();
+    if (api.gen) {
+        api.gen(n, buffers);
+    } else if (buffers) {
+        for (GLsizei i = 0; i < n; ++i) buffers[i] = 0;
+    }
+}
+
+void delete_buffers(GLsizei n, const GLuint *buffers) {
+    const auto &api = buffer_api();
+    if (api.destroy) api.destroy(n, buffers);
+}
+
+void bind_buffer(GLenum target, GLuint buffer) {
+    const auto &api = buffer_api();
+    if (api.bind) api.bind(target, buffer);
+}
+
+void buffer_data(GLenum target, GLsizeiptr size, const void *data, GLenum usage) {
+    const auto &api = buffer_api();
+    if (api.data) api.data(target, size, data, usage);
+}
+
+void *map_buffer(GLenum target, GLenum access) {
+    const auto &api = buffer_api();
+    return api.map ? api.map(target, access) : nullptr;
+}
+
+GLboolean unmap_buffer(GLenum target) {
+    const auto &api = buffer_api();
+    return api.unmap ? api.unmap(target) : GL_FALSE;
+}
+
+} // namespace gl
+} // namespace mediampv
+
+#endif // _WIN32

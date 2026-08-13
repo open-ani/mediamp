@@ -18,8 +18,10 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
+import org.jetbrains.skiko.GraphicsApi
 import org.jetbrains.skiko.OS
 import org.jetbrains.skiko.SkiaLayer
+import org.jetbrains.skiko.SkikoProperties
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
@@ -81,30 +83,42 @@ internal class MpvConsumerRenderTarget(
 }
 
 /**
- * The native surface-ring backend for the current host: macOS renders through
- * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures,
- * and Linux through shared OpenGL textures (render_glx.cpp).
+ * The native surface backend for the current host: macOS renders through
+ * Metal/IOSurface (render_macos.mm), Windows through D3D11/D3D12 shared textures
+ * (render_d3d11.cpp) or the OpenGL readback fallback (render_opengl_win.cpp), and
+ * Linux through shared OpenGL textures (render_glx.cpp).
  */
-internal fun currentSurfaceRingBackend(): MpvSurfaceRingBackend? = when (hostOs) {
+internal fun currentSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
     OS.MacOS -> MacosSurfaceRingBackend
-    OS.Windows -> D3D11SurfaceRingBackend
+    OS.Windows -> windowsSurfaceBackend()
     OS.Linux -> OpenGLSurfaceRingBackend
     else -> null
 }
 
 /**
- * Platform half of the native surface-ring render path: the JNI entry points, how a
- * ring buffer's native texture is wrapped for Skia, which reflective Skia interop reads
- * the consumer device, and which [MpvRenderContextLifecycle] governs the producer
- * context. The consumer state machine on top ([MpvSurfaceRing]) is capability-based:
- * Metal/IOSurface on macOS, D3D11/D3D12 shared textures on Windows, and shared OpenGL
- * textures on Linux/GLX.
+ * The D3D11 shared-texture path needs Skia to run on Skiko's Direct3D backend (the
+ * Windows default): its ring buffers are opened on Skia's D3D12 device. When the host
+ * configures another Skiko render API (`SKIKO_RENDER_API=OPENGL`), Skia has no such
+ * device, so the OpenGL readback fallback drives mpv instead. Decided from Skiko's
+ * *configured* API because the backend (and with it mpv's render context type) must be
+ * chosen at player construction, before any SkiaLayer exists; if Skiko later falls back
+ * to a different redrawer at runtime, the draw-time interop reports the mismatch.
  */
-internal interface MpvSurfaceRingBackend {
+private fun windowsSurfaceBackend(): MpvSurfaceBackend =
+    if (SkikoProperties.renderApi == GraphicsApi.DIRECT3D) D3D11SurfaceRingBackend
+    else WindowsOpenGLSurfaceBackend
+
+/**
+ * Platform half of a native render path: the JNI entry points, which reflective Skia
+ * interop reads the consumer device, which [MpvRenderContextLifecycle] governs the
+ * producer context, and which [MpvSurfaceConsumer] turns published frames into Skia
+ * images.
+ */
+internal interface MpvSurfaceBackend {
     fun createRenderContext(ptr: Long): Boolean
     fun destroyRenderContext(ptr: Long): Boolean
 
-    /** Renderer name for user-facing logs: what Compose draws the ring's frames with. */
+    /** Renderer name for user-facing logs: what Compose draws the published frames with. */
     val rendererName: String
 
     /** Creates the reflective interop reading the consumer render device of [layer]. */
@@ -120,14 +134,13 @@ internal interface MpvSurfaceRingBackend {
 
     /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
-     * pointer to Skiko's native DirectXDevice struct on Windows. OpenGL attaches its GLX
-     * environment separately and ignores this value. 0 requests a consumer-less ring
-     * where that platform supports one.
+     * pointer to Skiko's native DirectXDevice struct on Windows/D3D11. The OpenGL
+     * backends ignore this value (Linux attaches its GLX environment separately; the
+     * Windows fallback has no consumer device at all). 0 requests a consumer-less
+     * surface where that platform supports one.
      */
     fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long): Boolean
     fun getFrameState(ptr: Long): Long
-    fun getBufferTexture(ptr: Long, index: Int): Long
-    fun ackRetiredBuffers(ptr: Long): Boolean
     fun hasSurface(ptr: Long): Boolean
     fun saveSurfacePng(ptr: Long, path: String): Boolean
 
@@ -138,9 +151,28 @@ internal interface MpvSurfaceRingBackend {
      */
     fun readSurfacePixels(ptr: Long, dims: IntArray): IntArray?
 
+    /** Creates the consumer state machine matching this backend's publication model. */
+    fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer
+}
+
+/**
+ * A [MpvSurfaceBackend] whose native render thread publishes a triple-buffered ring of
+ * GPU textures that are directly visible to Skia's render device: how a ring buffer's
+ * native texture is wrapped for Skia, plus the retire/ack protocol for ring swaps. The
+ * consumer state machine on top ([MpvSurfaceRing]) is capability-based: Metal/IOSurface
+ * on macOS, D3D11/D3D12 shared textures on Windows, shared OpenGL textures on
+ * Linux/GLX.
+ */
+internal interface MpvSurfaceRingBackend : MpvSurfaceBackend {
+    fun getBufferTexture(ptr: Long, index: Int): Long
+    fun ackRetiredBuffers(ptr: Long): Boolean
+
     fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long): MpvConsumerRenderTarget
     val wrapColorFormat: SurfaceColorFormat
     val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.TOP_LEFT
+
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer =
+        MpvSurfaceRing(handlePtr, this)
 }
 
 @OptIn(InternalMediampApi::class)
@@ -280,7 +312,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
 internal class MpvSurfaceRing(
     private val handlePtr: Long,
     private val backend: MpvSurfaceRingBackend,
-) {
+) : MpvSurfaceConsumer {
     private val wrappedSurfaces = arrayOfNulls<Surface>(SURFACE_RING_BUFFER_COUNT)
     private val consumerTargets = arrayOfNulls<MpvConsumerRenderTarget>(SURFACE_RING_BUFFER_COUNT)
     private var blitSurface: Surface? = null
@@ -303,7 +335,7 @@ internal class MpvSurfaceRing(
      * happens between frames on the render thread; until the first frame lands in the
      * new ring, [currentFrameImage] keeps returning the previous frame.
      */
-    fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
+    override fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
         if (width == requestedWidth && height == requestedHeight &&
             devicePtr == requestedDevicePtr
         ) return true
@@ -315,7 +347,7 @@ internal class MpvSurfaceRing(
     }
 
     /** Re-posts the current config when Skiko recreated its redrawer on a new device. */
-    fun refreshDeviceIfChanged(devicePtr: Long) {
+    override fun refreshDeviceIfChanged(devicePtr: Long) {
         if (requestedWidth > 0 && devicePtr != requestedDevicePtr) {
             requestSurface(requestedWidth, requestedHeight, devicePtr)
         }
@@ -326,7 +358,7 @@ internal class MpvSurfaceRing(
      * A replaced GLX context destroys its context-local FBOs itself; their shared texture
      * names must never be reused by the new context.
      */
-    fun invalidateForRenderEnvironmentChange() {
+    override fun invalidateForRenderEnvironmentChange() {
         cachedFrame?.close()
         cachedFrame = null
         cachedState = 0L
@@ -347,7 +379,7 @@ internal class MpvSurfaceRing(
      * returned until the new ring has content, so resizes never flash black. Do NOT
      * close the returned image — it is owned by this ring.
      */
-    fun currentFrameImage(directContext: DirectContext): Image? {
+    override fun currentFrameImage(directContext: DirectContext): Image? {
         val state = backend.getFrameState(handlePtr)
         if (state == cachedState && surfaceContext === directContext) {
             cachedFrame?.let { return it }
@@ -489,7 +521,7 @@ internal class MpvSurfaceRing(
         if (loggedStates.add(message)) MPVLog.log(handlePtr, level, message, throwable)
     }
 
-    fun release() {
+    override fun release() {
         cachedFrame?.close()
         cachedFrame = null
         cachedState = 0L

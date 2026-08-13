@@ -33,7 +33,7 @@ private const val FRAME_PREVIEW_LOAD_TARGET_PREFIX = "mediamp://frame_preview/"
 @OptIn(ExperimentalMediampApi::class)
 internal class MpvPreviewDecoder(
     context: Any,
-    private val ringBackend: MpvSurfaceRingBackend,
+    private val ringBackend: MpvSurfaceBackend,
     provisioning: MpvRenderContextProvisioning,
 ) : AutoCloseable {
     val handle = MPVHandle(context)
@@ -131,11 +131,11 @@ internal class MpvPreviewDecoder(
     fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean =
         handle.setRenderUpdateListener(listener)
 
-    /** See [MpvSurfaceRingBackend.setSurfaceConfig]; the preview ring is always headless. */
+    /** See [MpvSurfaceBackend.setSurfaceConfig]; the preview ring is always headless. */
     fun requestSurface(width: Int, height: Int): Boolean =
         ringBackend.setSurfaceConfig(handle.ptr, width, height, 0L)
 
-    /** See [MpvSurfaceRingBackend.readSurfacePixels]. */
+    /** See [MpvSurfaceBackend.readSurfacePixels]. */
     fun readSurfacePixels(dims: IntArray): IntArray? =
         ringBackend.readSurfacePixels(handle.ptr, dims)
 

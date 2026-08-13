@@ -30,8 +30,8 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.mpv.internal.MpvPreviewDecoder
-import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
-import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
+import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.source.MediaData
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -46,7 +46,7 @@ internal actual fun createMpvFramePreview(
 ): FramePreview? {
     // Without a surface-ring backend frames cannot be read back, so the
     // feature is absent rather than present-but-always-null.
-    val ringBackend = currentSurfaceRingBackend() ?: return null
+    val ringBackend = currentSurfaceBackend() ?: return null
     return MpvFramePreview(player, context, ringBackend, parentCoroutineContext)
 }
 
@@ -62,7 +62,7 @@ internal actual fun createMpvFramePreview(
 internal class MpvFramePreview(
     private val mainPlayer: JvmMpvMediampPlayer,
     private val context: Any,
-    private val ringBackend: MpvSurfaceRingBackend,
+    private val ringBackend: MpvSurfaceBackend,
     parentCoroutineContext: CoroutineContext,
 ) : FramePreview, AutoCloseable {
     private val scope = CoroutineScope(

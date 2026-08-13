@@ -353,8 +353,11 @@ abstract class JvmMpvMediampPlayer(
             }
 
             is Platform.Windows -> {
-                // The desktop render path drives the libmpv D3D11 render API on its own
-                // ID3D11Device (render_d3d11.cpp); gpu-context is not used with vo=libmpv.
+                // The desktop render path drives either the libmpv D3D11 render API on
+                // its own ID3D11Device (render_d3d11.cpp) or, when Compose renders with
+                // Skiko's OpenGL backend, the OpenGL render API on a private offscreen
+                // WGL context with CPU readback (render_opengl_win.cpp). gpu-context is
+                // not used with vo=libmpv either way.
                 handle.option("ao", "wasapi")
                 handle.option("vo", "libmpv")
             }
@@ -657,8 +660,11 @@ abstract class JvmMpvMediampPlayer(
         mediaMetadata.clear()
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
-        // thread, which used to hang the UI thread (v1 defect M8).
-        thread(name = "mediamp-mpv-teardown") {
+        // thread, which used to hang the UI thread (v1 defect M8). Daemon so that a wedged
+        // native join can never keep a naturally-exiting JVM alive: while the app runs the
+        // thread completes normally, and once the JVM is exiting anyway the OS reclaims
+        // whatever a killed teardown would have released.
+        thread(name = "mediamp-mpv-teardown", isDaemon = true) {
             runCatching { handle.command("stop") }
             runCatching { handle.destroy() }
             runCatching { handle.close() }

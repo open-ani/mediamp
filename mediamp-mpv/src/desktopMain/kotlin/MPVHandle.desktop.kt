@@ -103,6 +103,61 @@ external fun nHasD3D11Surface(ptr: Long): Boolean
 @InternalMediampApi
 external fun nSaveSurfacePngD3D11(ptr: Long, path: String): Boolean
 
+// Windows OpenGL fallback render path (render_opengl_win.cpp): used when Compose
+// renders with Skiko's OpenGL backend (SKIKO_RENDER_API=OPENGL) instead of the
+// Direct3D default. A native render thread drives mpv through the libmpv OpenGL render
+// API on a private offscreen WGL context (shared with nothing) and reads every frame
+// back to CPU memory; the consumer copies the latest frame into a Skia bitmap during
+// draw. There are no consumer-side textures, so this path has no getBufferTexture/
+// ackRetiredBuffers surface.
+
+@InternalMediampApi
+external fun nCreateRenderContextWindowsOpenGL(ptr: Long): Boolean
+
+@InternalMediampApi
+external fun nDestroyRenderContextWindowsOpenGL(ptr: Long): Boolean
+
+/**
+ * Asks the render thread to (re)allocate its render target for a [width] x [height]
+ * consumer area. The native side clamps the actual target to the video's display size
+ * (aspect-fit): every readback byte scales with the target area, and Skia upscales
+ * during the draw anyway. Non-positive size deactivates the surface. Resizes are
+ * asynchronous — the swap happens between frames; deactivation is synchronous
+ * (bounded by a 1s timeout): it returns once the render thread has dropped its FBO
+ * and parked, so the consumer may safely destroy its objects without racing the
+ * producer.
+ */
+@InternalMediampApi
+external fun nSetSurfaceConfigWindowsOpenGL(ptr: Long, width: Int, height: Int): Boolean
+
+/**
+ * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
+ * height(14) | serial(16). Any change means a new frame or a new render target.
+ */
+@InternalMediampApi
+external fun nGetFrameStateWindowsOpenGL(ptr: Long): Long
+
+@InternalMediampApi
+external fun nHasWindowsOpenGLSurface(ptr: Long): Boolean
+
+/** Saves the latest rendered frame (CPU copy) as PNG via WIC. */
+@InternalMediampApi
+external fun nSaveSurfacePngWindowsOpenGL(ptr: Long, path: String): Boolean
+
+/** Windows OpenGL fallback equivalent of [nReadSurfacePixelsD3D11]. */
+@InternalMediampApi
+external fun nReadSurfacePixelsWindowsOpenGL(ptr: Long, dims: IntArray): IntArray?
+
+/**
+ * Copies the latest frame as tightly packed RGBA_8888 rows (top-down) into the native
+ * memory at [destAddr] (which must hold [width] * [height] * 4 bytes, e.g. a Skia
+ * bitmap's pixel storage), provided the latest frame is exactly [width] x [height].
+ * Returns the packed frame state the copy corresponds to, or 0 when no matching frame
+ * is available.
+ */
+@InternalMediampApi
+external fun nCopyLatestFrameWindowsOpenGL(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
 // OpenGL render path (Linux/GLX): a native render thread
 // render into shared GL_TEXTURE_2D objects. The `consumerEnvironmentPtr` is an opaque
 // native description of Skiko's live GLX environment, not a producer FBO or a texture

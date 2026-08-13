@@ -18,9 +18,9 @@ import org.jetbrains.skiko.SkiaLayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
-import org.openani.mediamp.mpv.internal.MpvSurfaceRing
-import org.openani.mediamp.mpv.internal.MpvSurfaceRingBackend
-import org.openani.mediamp.mpv.internal.currentSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
+import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
+import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
 
@@ -36,9 +36,11 @@ actual class MpvMediampPlayer(
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
 
-    // Native surface-ring render path; the consumer state machine is shared (MpvSurfaceRing).
-    private val ringBackend: MpvSurfaceRingBackend? = currentSurfaceRingBackend()
-    private val surfaceRing: MpvSurfaceRing? = ringBackend?.let { MpvSurfaceRing(handle.ptr, it) }
+    // Native render path; the consumer state machine is chosen by the backend
+    // (MpvSurfaceRing for the shared-texture rings, MpvReadbackSurface for the Windows
+    // OpenGL fallback).
+    private val ringBackend: MpvSurfaceBackend? = currentSurfaceBackend()
+    private val surfaceRing: MpvSurfaceConsumer? = ringBackend?.createSurfaceConsumer(handle.ptr)
 
     /**
      * Producer-context lifecycle chosen by the backend: eager where the backend owns its
@@ -76,29 +78,29 @@ actual class MpvMediampPlayer(
     override fun ensureRenderContextForLoad(): Boolean =
         renderContextLifecycle?.ensureReadyForLoad() ?: true
 
-    /** See [MpvSurfaceRingBackend.createSkiaInterop]. */
+    /** See [MpvSurfaceBackend.createSkiaInterop]. */
     internal fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop? =
         ringBackend?.createSkiaInterop(layer)
 
-    /** See [MpvSurfaceRing.requestSurface]. */
+    /** See [MpvSurfaceConsumer.requestSurface]. */
     internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =
         surfaceRing?.requestSurface(width, height, devicePtr) ?: false
 
-    /** See [MpvSurfaceRing.refreshDeviceIfChanged]. */
+    /** See [MpvSurfaceConsumer.refreshDeviceIfChanged]. */
     internal fun refreshDeviceIfChanged(devicePtr: Long) {
         surfaceRing?.refreshDeviceIfChanged(devicePtr)
     }
 
-    /** See [MpvSurfaceRing.currentFrameImage]. Do NOT close the returned image. */
+    /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
     internal fun currentFrameImage(directContext: DirectContext): Image? =
         surfaceRing?.currentFrameImage(directContext)
 
-    /** See [MpvSurfaceRing.release]. */
+    /** See [MpvSurfaceConsumer.release]. */
     internal fun releaseSurface() {
         surfaceRing?.release()
     }
 
-    /** See [MpvSurfaceRingBackend.readSurfacePixels]. */
+    /** See [MpvSurfaceBackend.readSurfacePixels]. */
     internal fun readSurfacePixels(dims: IntArray): IntArray? =
         ringBackend?.readSurfacePixels(handle.ptr, dims)
 

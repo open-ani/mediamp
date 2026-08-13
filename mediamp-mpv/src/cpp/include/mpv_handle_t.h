@@ -103,6 +103,39 @@ public:
     // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
     // top-down) with alpha forced opaque. Returns false when no frame is available.
     bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+
+    // OpenGL fallback render path (render_opengl_win.cpp), used instead of the D3D11
+    // path above when Compose renders with Skiko's OpenGL backend
+    // (SKIKO_RENDER_API=OPENGL) — Skia then has no D3D12 device for the shared-texture
+    // ring to open its buffers on. A dedicated render thread drives mpv through the
+    // libmpv OpenGL render API on a private offscreen WGL context (no sharing with
+    // Skiko) into one FBO, and reads every frame back to CPU memory; the consumer
+    // copies the latest frame into a Skia bitmap during draw. One GPU->CPU->GPU round
+    // trip per frame by design: this is the compatibility path, robustness over
+    // zero-copy. Per player exactly one of the two Windows paths is ever created;
+    // which one is decided in Kotlin from Skiko's configured render API.
+    bool create_render_context_win_gl();
+    bool destroy_render_context_win_gl();
+    // Same request protocol as the D3D11 set_surface_config, but there is no
+    // consumer device: width/height <= 0 deactivates the surface (frames are then
+    // drained without rendering). Resizes are asynchronous; deactivation waits
+    // (bounded by a 1s timeout) until the render thread has dropped its FBO and
+    // parked, so the consumer can destroy its Skia GPU objects without racing this
+    // path's GL.
+    bool set_surface_config_win_gl(int width, int height);
+    // Packed frame state, same layout as the D3D11 path: generation(16) |
+    // latest_index(4, 0xF = none; always 0 when a frame exists) | width(14) |
+    // height(14) | serial(16).
+    uint64_t get_frame_state_win_gl();
+    bool has_win_gl_surface();
+    bool save_surface_png_win_gl(const char *path);
+    bool read_surface_pixels_win_gl(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    // Copies the latest frame as tightly packed RGBA8 rows (top-down) into dest,
+    // provided the frame is exactly width x height (dest must hold width*height*4
+    // bytes). Returns the packed frame state the copy corresponds to, or 0 when no
+    // matching frame is available. Called from the consumer (UI) thread; the copy is
+    // serialized against the render thread's buffer swap, never against rendering.
+    uint64_t copy_latest_frame_win_gl(void *dest, int width, int height);
 #endif
 
 #ifdef __APPLE__
@@ -240,6 +273,35 @@ private:
     // Staging-texture readback of the latest frame; shared by save_surface_png and
     // read_surface_pixels. Assumes render_mutex_ is held.
     bool read_frame_argb_locked(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+
+    // OpenGL fallback state (render_opengl_win.cpp). Behind a pointer so the D3D11
+    // members above keep their names and this header stays free of GL types; the
+    // struct is defined next to its implementation. Null until
+    // create_render_context_win_gl() and after cleanup_render_resources_win_gl().
+    struct win_gl_state;
+    win_gl_state *win_gl_ = nullptr;
+    static void on_render_update_win_gl(void *context);
+    void signal_render_update_win_gl();
+    void render_thread_loop_win_gl();
+    void cleanup_render_resources_win_gl();
+    // Frees win_gl_ itself (destructor only; the struct is incomplete in this header,
+    // so a plain `delete win_gl_` outside render_opengl_win.cpp would not destruct it).
+    void free_win_gl_state();
+    // The helpers below run on the render thread; *_locked ones assume the state
+    // mutex is held.
+    bool apply_config_win_gl_locked();
+    bool allocate_target_win_gl_locked(int width, int height);
+    void destroy_target_win_gl_locked();
+    void publish_state_win_gl_locked();
+    void publish_collected_frame_win_gl_locked(int width, int height);
+    // Renders mpv into the FBO and starts the readback: asynchronously into the next
+    // PBO when available, else synchronously into scratch.
+    bool render_frame_win_gl(int width, int height);
+    // Moves the oldest completed readback into scratch; false when none is ready.
+    // include_pbos=false only collects a synchronous-path frame (used right after a
+    // render, where mapping the just-queued PBO would defeat the asynchrony).
+    bool collect_ready_frame_win_gl(int *out_width, int *out_height, bool include_pbos);
+    void drain_one_frame_win_gl();
 #endif
 
 #ifdef __APPLE__
