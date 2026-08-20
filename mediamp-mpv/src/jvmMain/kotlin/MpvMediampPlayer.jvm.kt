@@ -377,6 +377,9 @@ abstract class JvmMpvMediampPlayer(
                 // gpu-context is not used with vo=libmpv.
                 handle.option("ao", "coreaudio")
                 handle.option("vo", "libmpv")
+                // https://github.com/open-ani/animeko/issues/3283
+                // https://github.com/open-ani/animeko/issues/3285
+                handle.option("audio-format", "float")
             }
 
             is Platform.Linux -> {
