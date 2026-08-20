@@ -11,7 +11,8 @@ package org.openani.mediamp.mpv
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -118,6 +119,14 @@ abstract class JvmMpvMediampPlayer(
      */
     @Volatile
     private var nativeTeardownStarted = false
+
+    /**
+     * Parent of the per-session await jobs passed to [SeekableInputMediaData.createInput]
+     * in [openImpl]. Cancelled first thing in [closeImpl]: a read still blocked in an await
+     * context holds the native stream lock, which the stream close inside `handle.destroy()`
+     * needs — the read must be unblocked before native teardown can join mpv's threads.
+     */
+    private val inputAwaitParent = SupervisorJob(parentCoroutineContext[Job])
 
     /** Bumped by [renderContextBecameReady]; [awaitRenderContextForLoad] waits on it. */
     private val renderContextReadySignal = MutableStateFlow(0L)
@@ -524,10 +533,24 @@ abstract class JvmMpvMediampPlayer(
 
             is SeekableInputMediaData -> {
                 val target = buildSeekableInputLoadTarget(data)
-                val input = data.createInput(currentCoroutineContext())
+                // The input's reads run on mpv demux threads for the whole session, and a
+                // read that must wait for data (e.g. a torrent input awaiting an
+                // undownloaded piece) blocks inside the await context passed here. This
+                // open coroutine's own job completes right after the open, so it must not
+                // be that context: every later wait would fail instantly with "Parent job
+                // is Completed" and surface as a spurious EOF. Hand the input a
+                // session-lifetime job instead.
+                val awaitJob = SupervisorJob(inputAwaitParent)
+                val input = try {
+                    data.createInput(Dispatchers.IO + awaitJob)
+                } catch (t: Throwable) {
+                    awaitJob.cancel()
+                    throw t
+                }
                 val registered = try {
                     handle.registerSeekableInput(input, target)
                 } catch (t: Throwable) {
+                    awaitJob.cancel()
                     input.close()
                     throw t
                 }
@@ -535,6 +558,9 @@ abstract class JvmMpvMediampPlayer(
                 // started native teardown the registry is torn down wholesale and the
                 // handle must not be touched anymore.
                 sessionResources = AutoCloseable {
+                    // Cancel before unregistering: a blocked read holds the native stream
+                    // lock that the stream close behind unregistration waits for.
+                    awaitJob.cancel()
                     if (!nativeTeardownStarted) {
                         runCatching { handle.unregisterSeekableInput(registered) }
                     }
@@ -655,6 +681,9 @@ abstract class JvmMpvMediampPlayer(
 
     override fun closeImpl() {
         nativeTeardownStarted = true
+        // Unblock reads still parked in a session await context before the teardown thread
+        // joins mpv's demux threads (a blocked read holds the native stream lock).
+        inputAwaitParent.cancel()
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
