@@ -383,9 +383,11 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         val epoch = ++openEpoch
         openingPhase = true
         var sessionInput: SeekableInput? = null
+        var sessionInputAwaitJob: Job? = null
         try {
             val prepared = buildMediaSource(data)
             sessionInput = prepared.sessionInput
+            sessionInputAwaitJob = prepared.sessionInputAwaitJob
             val source = mediaSourceInterceptor?.invoke(prepared.mediaSource, data) ?: prepared.mediaSource
 
             // Ready point (spec §3): the first onTracksChanged with non-empty tracks, which
@@ -424,8 +426,16 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
             // requested start position against the now-known duration (STATE_ENDED only arrives
             // asynchronously later).
             val durationMillis = exoPlayer.duration
+            val awaitJob = sessionInputAwaitJob
             return OpenResult(
-                sessionResources = sessionInput?.let { input -> AutoCloseable { input.close() } },
+                sessionResources = sessionInput?.let { input ->
+                    AutoCloseable {
+                        // Cancel before closing: unblocks a loader read still waiting in
+                        // the await context.
+                        awaitJob?.cancel()
+                        input.close()
+                    }
+                },
                 initialSnapshot = TransportSnapshot(
                     nativePlayWhenReady = exoPlayer.playWhenReady,
                     isStalled = nativeState == Media3Player.STATE_BUFFERING,
@@ -444,6 +454,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
             }
+            sessionInputAwaitJob?.cancel()
             sessionInput?.let { input ->
                 backgroundScope.launch(NonCancellable + Dispatchers.IO) {
                     runCatching { input.close() }
@@ -500,6 +511,8 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         val mediaSource: MediaSource,
         /** A [SeekableInput] opened for this session, to be closed with it; `null` if none. */
         val sessionInput: SeekableInput?,
+        /** Await-context job of [sessionInput]'s blocking reads, cancelled with the session. */
+        val sessionInputAwaitJob: Job? = null,
     )
 
     /**
@@ -566,13 +579,30 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 }.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                 PreparedSource(factory.createMediaSource(MediaItem.fromUri(data.uri)), sessionInput = null)
             } else {
-                val input = withContext(Dispatchers.IO) {
-                    data.createInput(currentCoroutineContext())
+                // The input's reads run on ExoPlayer loader threads for the whole session,
+                // and a read that must wait for data (e.g. a torrent input awaiting an
+                // undownloaded piece) blocks inside the await context passed here. This open
+                // coroutine's job (and the withContext job below) completes right after the
+                // open, so neither may be that context: every later wait would fail
+                // instantly with "Parent job is Completed". Hand the input a
+                // session-lifetime job instead.
+                val awaitJob = SupervisorJob(backgroundScope.coroutineContext[Job.Key])
+                val input = try {
+                    withContext(Dispatchers.IO) {
+                        data.createInput(Dispatchers.IO + awaitJob)
+                    }
+                } catch (t: Throwable) {
+                    awaitJob.cancel()
+                    throw t
                 }
                 val factory = ProgressiveMediaSource.Factory {
                     SeekableInputDataSource(data, input)
                 }.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
-                PreparedSource(factory.createMediaSource(MediaItem.fromUri(data.uri)), sessionInput = input)
+                PreparedSource(
+                    factory.createMediaSource(MediaItem.fromUri(data.uri)),
+                    sessionInput = input,
+                    sessionInputAwaitJob = awaitJob,
+                )
             }
         }
     }

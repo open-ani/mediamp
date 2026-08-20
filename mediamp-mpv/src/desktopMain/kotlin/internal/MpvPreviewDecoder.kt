@@ -8,8 +8,10 @@
 
 package org.openani.mediamp.mpv.internal
 
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.openani.mediamp.ExperimentalMediampApi
+import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.mpv.MPVHandle
 import org.openani.mediamp.mpv.RenderUpdateListener
@@ -41,6 +43,15 @@ internal class MpvPreviewDecoder(
     /** Input opened for stream_cb media; owned and closed by this decoder. */
     private var openInput: SeekableInput? = null
     private var loadTarget: String? = null
+
+    /**
+     * Await context job for [openInput]'s blocking reads (e.g. a torrent input awaiting an
+     * undownloaded piece). Decoder-lifetime — the coroutine calling [loadPaused] completes
+     * long before preview reads stop, so its job must not be the await context. Cancelled
+     * first in [close]: a blocked read holds the native stream lock that `handle.destroy()`
+     * needs to join mpv's threads.
+     */
+    private val inputAwaitJob = SupervisorJob()
 
     init {
         try {
@@ -112,7 +123,7 @@ internal class MpvPreviewDecoder(
             }
 
             is SeekableInputMediaData -> {
-                val input = data.createInput(currentCoroutineContext())
+                val input = data.createInput(Dispatchers.IO_ + inputAwaitJob)
                 val registered = try {
                     handle.registerSeekableInput(input, FRAME_PREVIEW_LOAD_TARGET_PREFIX + data.uri)
                 } catch (t: Throwable) {
@@ -140,6 +151,9 @@ internal class MpvPreviewDecoder(
         ringBackend.readSurfacePixels(handle.ptr, dims)
 
     override fun close() {
+        // Unblock a read still waiting for data before handle.destroy() joins mpv's
+        // threads (a blocked read holds the native stream lock).
+        inputAwaitJob.cancel()
         try {
             handle.setRenderUpdateListener(null)
             ringBackend.setSurfaceConfig(handle.ptr, 0, 0, 0L)

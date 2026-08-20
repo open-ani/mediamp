@@ -10,7 +10,8 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -30,7 +31,9 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -172,28 +175,42 @@ class MpvMediampPlayerSmokeTest {
     }
 
     /**
-     * Runs [block] with a player confined to a dedicated serial dispatcher (standing in for
+     * Runs [block] with a player confined to a dedicated single thread (standing in for
      * the UI thread — the block itself runs on it, so command-thread rules hold) and a
      * headless render surface.
+     *
+     * The dispatcher must own exactly one physical thread — `limitedParallelism(1)` only
+     * serializes and may migrate between pool workers, while the machine checks command
+     * threads by physical identity: a continuation resumed on a different worker (e.g. a
+     * join completed from the IO release dispatcher) flips close() onto its asynchronous
+     * trampoline, or trips checkMainThread, depending on scheduler luck (Windows CI flake).
      */
     private fun runPlayerTest(block: suspend CoroutineScope.(MpvMediampPlayer) -> Unit) {
-        val mainDispatcher = Dispatchers.Default.limitedParallelism(1)
-        runBlocking(mainDispatcher) {
-            val player = MpvMediampPlayer(
-                Any(), coroutineContext,
-                mainDispatcher = mainDispatcher,
-            )
-            val renderer = startHeadlessRenderer(player)
-            try {
-                block(player)
-            } finally {
-                renderer.close()
+        val mainDispatcher = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "mpv-test-main").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        try {
+            runBlocking(mainDispatcher) {
+                val player = MpvMediampPlayer(
+                    Any(), coroutineContext,
+                    mainDispatcher = mainDispatcher,
+                )
+                val renderer = startHeadlessRenderer(player)
+                try {
+                    block(player)
+                } finally {
+                    renderer.close()
+                    player.close()
+                }
+                // close() is terminal (spec: -> Released) and idempotent. Await rather than
+                // assert synchronously: called off the machine thread, close() trampolines
+                // doClose and Released commits asynchronously.
+                withTimeout(10_000) { player.state.first { it.mediaStatus == MediaStatus.Released } }
                 player.close()
+                assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
             }
-            // close() is terminal (spec: -> Released) and idempotent.
-            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
-            player.close()
-            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
+        } finally {
+            mainDispatcher.close()
         }
     }
 
@@ -453,6 +470,66 @@ class MpvMediampPlayerSmokeTest {
 
             player.stopPlayback()
             assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
+        }
+    }
+
+    /**
+     * Regression test for spurious EOF on still-downloading torrent sources
+     * (open-ani/animeko): the await context handed to [SeekableInputMediaData.createInput]
+     * used to be the open coroutine's own context, whose job completes right after the
+     * open. A read that later blocked for data — TorrentInput does
+     * `runBlocking(awaitContext) { piece.awaitFinished() }` on the mpv demux thread — then
+     * died instantly with "Parent job is Completed"; the JNI layer cleared the exception
+     * and returned -1, which mpv's stream layer treats as EOF: playback "finished" on the
+     * first seek into undownloaded data.
+     */
+    @OptIn(ExperimentalMediampApi::class)
+    @Test
+    fun `createInput await context outlives the open and is cancelled with the session`() {
+        if (!prepareOrSkip()) return
+        val video = generateTestVideo() ?: run { skip("ffmpeg unavailable or test video generation failed"); return }
+
+        runPlayerTest { player ->
+            var awaitContext: CoroutineContext? = null
+            val data = object : SeekableInputMediaData {
+                override val uri: String get() = "test://await-context/${video.name}"
+                override val extraFiles: MediaExtraFiles get() = MediaExtraFiles.EMPTY
+                override val options: List<String> get() = emptyList()
+                override fun fileLength(): Long = video.length()
+                override suspend fun createInput(coroutineContext: CoroutineContext): SeekableInput {
+                    awaitContext = coroutineContext
+                    return RandomAccessFileSeekableInput(RandomAccessFile(video, "r"))
+                }
+
+                override fun close() {}
+            }
+            player.setMediaData(data)
+            assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
+
+            val context = assertNotNull(awaitContext)
+            val awaitJob = assertNotNull(context[Job], "createInput must receive a context carrying a Job")
+            assertTrue(awaitJob.isActive, "the await context must stay active after the open completes")
+
+            // The exact shape of a blocked torrent read, on a foreign thread like mpv's
+            // demux thread. Must run, not die with "Parent job is Completed".
+            var probeError: Throwable? = null
+            thread(name = "fake-demux-read") {
+                try {
+                    runBlocking(context) { delay(10) }
+                } catch (t: Throwable) {
+                    probeError = t
+                }
+            }.join()
+            assertNull(probeError, "a blocking wait on the await context must work mid-session, got: $probeError")
+
+            // Ending the session must cancel the job so reads still blocked in the await
+            // context unwind before the native stream is closed (release is async on the
+            // machine's cleanup scope, hence the timeout-join rather than an immediate
+            // assertion).
+            player.stopPlayback()
+            assertEquals(MediaStatus.Idle, player.state.value.mediaStatus)
+            withTimeout(5_000) { awaitJob.join() }
+            assertTrue(awaitJob.isCancelled, "the await job must be cancelled when the session is released")
         }
     }
 
