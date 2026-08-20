@@ -22,6 +22,7 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.FileDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -117,7 +118,7 @@ import androidx.media3.common.Player as Media3Player
 @OptIn(UnstableApi::class)
 @kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 public class ExoPlayerMediampPlayer @UiThread public constructor(
-    context: Context,
+    private val context: Context,
     parentCoroutineContext: CoroutineContext,
     audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
     private val mediaSourceInterceptor: ((MediaSource, MediaData) -> MediaSource)? = null,
@@ -547,14 +548,15 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                     },
                 )
             }.build()
+            val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent(
+                    headers["User-Agent"]
+                        ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
+                )
+                .setDefaultRequestProperties(headers)
+                .setConnectTimeoutMs(30_000)
             val factory = DefaultMediaSourceFactory(
-                DefaultHttpDataSource.Factory()
-                    .setUserAgent(
-                        headers["User-Agent"]
-                            ?: """Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3""",
-                    )
-                    .setDefaultRequestProperties(headers)
-                    .setConnectTimeoutMs(30_000),
+                DefaultDataSource.Factory(context, httpDataSourceFactory),
             ).setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
             PreparedSource(factory.createMediaSource(item), sessionInput = null)
         }
