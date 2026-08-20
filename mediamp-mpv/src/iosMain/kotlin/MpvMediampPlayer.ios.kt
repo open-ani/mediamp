@@ -33,6 +33,7 @@ import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.VideoAspectRatio
 import org.openani.mediamp.features.buildPlayerFeatures
+import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.metadata.MediaProperties
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
@@ -419,7 +420,7 @@ actual class MpvMediampPlayer(
                 // session-lifetime job instead.
                 val awaitJob = SupervisorJob(inputAwaitParent)
                 val input = try {
-                    data.createInput(Dispatchers.IO + awaitJob)
+                    data.createInput(Dispatchers.IO_ + awaitJob)
                 } catch (t: Throwable) {
                     awaitJob.cancel()
                     throw t

@@ -11,6 +11,7 @@ package org.openani.mediamp.mpv.internal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.openani.mediamp.ExperimentalMediampApi
+import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.mpv.MPVHandle
 import org.openani.mediamp.mpv.RenderUpdateListener
@@ -122,7 +123,7 @@ internal class MpvPreviewDecoder(
             }
 
             is SeekableInputMediaData -> {
-                val input = data.createInput(Dispatchers.IO + inputAwaitJob)
+                val input = data.createInput(Dispatchers.IO_ + inputAwaitJob)
                 val registered = try {
                     handle.registerSeekableInput(input, FRAME_PREVIEW_LOAD_TARGET_PREFIX + data.uri)
                 } catch (t: Throwable) {
