@@ -10,8 +10,8 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -31,6 +31,7 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
@@ -174,28 +175,42 @@ class MpvMediampPlayerSmokeTest {
     }
 
     /**
-     * Runs [block] with a player confined to a dedicated serial dispatcher (standing in for
+     * Runs [block] with a player confined to a dedicated single thread (standing in for
      * the UI thread — the block itself runs on it, so command-thread rules hold) and a
      * headless render surface.
+     *
+     * The dispatcher must own exactly one physical thread — `limitedParallelism(1)` only
+     * serializes and may migrate between pool workers, while the machine checks command
+     * threads by physical identity: a continuation resumed on a different worker (e.g. a
+     * join completed from the IO release dispatcher) flips close() onto its asynchronous
+     * trampoline, or trips checkMainThread, depending on scheduler luck (Windows CI flake).
      */
     private fun runPlayerTest(block: suspend CoroutineScope.(MpvMediampPlayer) -> Unit) {
-        val mainDispatcher = Dispatchers.Default.limitedParallelism(1)
-        runBlocking(mainDispatcher) {
-            val player = MpvMediampPlayer(
-                Any(), coroutineContext,
-                mainDispatcher = mainDispatcher,
-            )
-            val renderer = startHeadlessRenderer(player)
-            try {
-                block(player)
-            } finally {
-                renderer.close()
+        val mainDispatcher = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "mpv-test-main").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        try {
+            runBlocking(mainDispatcher) {
+                val player = MpvMediampPlayer(
+                    Any(), coroutineContext,
+                    mainDispatcher = mainDispatcher,
+                )
+                val renderer = startHeadlessRenderer(player)
+                try {
+                    block(player)
+                } finally {
+                    renderer.close()
+                    player.close()
+                }
+                // close() is terminal (spec: -> Released) and idempotent. Await rather than
+                // assert synchronously: called off the machine thread, close() trampolines
+                // doClose and Released commits asynchronously.
+                withTimeout(10_000) { player.state.first { it.mediaStatus == MediaStatus.Released } }
                 player.close()
+                assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
             }
-            // close() is terminal (spec: -> Released) and idempotent.
-            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
-            player.close()
-            assertEquals(MediaStatus.Released, player.state.value.mediaStatus)
+        } finally {
+            mainDispatcher.close()
         }
     }
 
