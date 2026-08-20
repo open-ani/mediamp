@@ -78,8 +78,6 @@ internal class MpvPreviewDecoder(
         // HDR -> SDR tone-mapping, same as the main player (see there for the full
         // rationale) — without it HDR sources produce near-black thumbnails.
         handle.option("gpu-dumb-mode", "no")
-        handle.option("target-prim", "bt.709")
-        handle.option("target-trc", "srgb")
         handle.option("hwdec", "auto")
         handle.option("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         // Prefer libdav1d for software AV1 — same rationale as the main player (see
