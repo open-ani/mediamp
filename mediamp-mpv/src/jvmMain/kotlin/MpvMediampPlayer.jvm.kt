@@ -391,22 +391,14 @@ abstract class JvmMpvMediampPlayer(
 
         when (currentPlatform()) {
             is Platform.Windows, is Platform.MacOS, is Platform.Linux -> {
-                // HDR -> SDR tone-mapping. The desktop render API (render_d3d11.cpp /
-                // render_macos.mm) draws into an 8-bit SDR (sRGB) texture. By default
-                // mpv's renderer enters "dumb mode" (a fast passthrough blit) and writes
-                // HDR (PQ/bt2020) frames untonemapped — everything but the brightest
-                // highlights is crushed to black (symptom: an HDR video plays with audio
-                // but a near-black picture). check_dumb_mode() only inspects scaling /
-                // debanding / shaders, never the target colorspace, so the target-*
-                // options below cannot leave dumb mode on their own; gpu-dumb-mode=no
-                // forces the full color-management path. target-prim/target-trc then
-                // declare an SDR output so HDR is tone-mapped down to it. Values use
-                // libplacebo naming ("bt.709", not "bt709"). This is a no-op for SDR
-                // sources (target matches source). Android/iOS are excluded: Android
-                // uses vo=gpu-next, which does its own HDR handling.
+                // The desktop render API draws into an 8-bit SDR texture; force the full
+                // color-management path so HDR sources get tone-mapped instead of passed
+                // through near-black (check_dumb_mode() never inspects the colorspace).
+                // Keep target-prim/target-trc at "auto": it tone-maps HDR while passing
+                // SDR through untouched. Do not set target-trc=srgb — that re-grades SDR
+                // BT.1886 content to the sRGB curve, visibly darkening the whole picture
+                // compared to other players.
                 handle.option("gpu-dumb-mode", "no")
-                handle.option("target-prim", "bt.709")
-                handle.option("target-trc", "srgb")
             }
 
             else -> {}
