@@ -321,7 +321,7 @@ abstract class JvmMpvMediampPlayer(
         }
     }
 
-    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+    internal open fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
         return handle.setRenderUpdateListener(listener)
     }
 
@@ -675,14 +675,31 @@ abstract class JvmMpvMediampPlayer(
         buffering.bufferedPercentage.value = 0
     }
 
+    /**
+     * Called synchronously on the machine thread when close starts, before any asynchronous
+     * native teardown is launched. Desktop uses this to reject late Compose surface calls.
+     */
+    protected open fun nativeTeardownStarting() {}
+
+    /**
+     * Runs on the teardown thread immediately before the mpv handle is destroyed.
+     *
+     * Platform implementations may block here while serializing graphics-resource release
+     * with their UI/render thread. Throwing aborts handle destruction: leaking a terminal
+     * player is safer than destroying a graphics context without the required barrier.
+     */
+    protected open fun prepareNativeTeardown() {}
+
     override fun closeImpl() {
         nativeTeardownStarted = true
+        nativeTeardownStarting()
         // Unblock reads still parked in a session await context before the teardown thread
         // joins mpv's demux threads (a blocked read holds the native stream lock).
         inputAwaitParent.cancel()
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
+        val instanceHandle = handle.ptr
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
         // thread, which used to hang the UI thread (v1 defect M8). Daemon so that a wedged
@@ -690,6 +707,14 @@ abstract class JvmMpvMediampPlayer(
         // thread completes normally, and once the JVM is exiting anyway the OS reclaims
         // whatever a killed teardown would have released.
         thread(name = "mediamp-mpv-teardown", isDaemon = true) {
+            runCatching { prepareNativeTeardown() }.onFailure {
+                MPVLog.error(
+                    instanceHandle,
+                    "platform render teardown barrier failed; native handle destruction aborted",
+                    it,
+                )
+                return@thread
+            }
             runCatching { handle.command("stop") }
             runCatching { handle.destroy() }
             runCatching { handle.close() }
