@@ -11,11 +11,11 @@ package org.openani.mediamp.mpv.internal
 import java.awt.EventQueue
 
 /**
- * Runs [block] on the AWT event thread after all events already queued before this call.
+ * Runs [block] on the AWT event thread.
  *
- * Skiko's Linux frame dispatcher draws and swaps on this thread. Consequently, a caller
- * from a native-teardown thread can use this as a completion barrier for an in-flight
- * frame and perform GLX destruction without racing Mesa's swap path.
+ * Off the event thread, this waits for events already queued before this call and therefore
+ * acts as a completion barrier for an in-flight Skiko frame. On the event thread it runs
+ * inline and provides no ordering guarantee for events queued after the current event.
  */
 internal fun runOnAwtEventThreadAndWait(block: () -> Unit) {
     if (EventQueue.isDispatchThread()) {

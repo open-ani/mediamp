@@ -154,38 +154,39 @@ internal class MpvPreviewDecoder(
         // threads (a blocked read holds the native stream lock).
         inputAwaitJob.cancel()
         val instanceHandle = handle.ptr
-        val renderTeardownSucceeded = runCatching {
-            val releaseRenderResources = {
-                handle.setRenderUpdateListener(null)
-                ringBackend.setSurfaceConfig(instanceHandle, 0, 0, 0L)
-                ringBackend.destroyRenderContext(instanceHandle)
-                Unit
-            }
-            if (ringBackend === OpenGLSurfaceRingBackend) {
-                // Preview decoders borrow the same Skiko GLX share group as the main
-                // player. Their private context must obey the same swap/destroy barrier.
-                runOnAwtEventThreadAndWait(releaseRenderResources)
-            } else {
-                releaseRenderResources()
-            }
-        }.onFailure {
-            MPVLog.error(
-                instanceHandle,
-                "preview render teardown barrier failed; native handle destruction aborted",
-                it,
-            )
-        }.isSuccess
+        val renderTeardownSucceeded = runNativeTeardownSequence(
+            prepare = {
+                val releaseRenderResources = {
+                    handle.setRenderUpdateListener(null)
+                    ringBackend.setSurfaceConfig(instanceHandle, 0, 0, 0L)
+                    ringBackend.destroyRenderContext(instanceHandle)
+                    Unit
+                }
+                if (ringBackend === OpenGLSurfaceRingBackend) {
+                    // Preview decoders borrow the same Skiko GLX share group as the main
+                    // player. Their private context must obey the same swap/destroy barrier.
+                    runOnAwtEventThreadAndWait(releaseRenderResources)
+                } else {
+                    releaseRenderResources()
+                }
+            },
+            stop = { handle.command("stop") },
+            destroy = { handle.destroy() },
+            close = { handle.close() },
+            onPrepareFailure = {
+                MPVLog.error(
+                    instanceHandle,
+                    "preview render teardown barrier failed; native handle destruction aborted after requesting playback stop",
+                    it,
+                )
+            },
+        )
         if (renderTeardownSucceeded) {
             try {
-                handle.destroy()
+                openInput?.close()
             } catch (_: Exception) {
             }
-            handle.close()
+            openInput = null
         }
-        try {
-            openInput?.close()
-        } catch (_: Exception) {
-        }
-        openInput = null
     }
 }

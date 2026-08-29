@@ -43,6 +43,7 @@ import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
 import org.openani.mediamp.mpv.internal.MpvSessionAdapter
 import org.openani.mediamp.mpv.internal.mpvErrorToPlaybackException
+import org.openani.mediamp.mpv.internal.runNativeTeardownSequence
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -685,8 +686,9 @@ abstract class JvmMpvMediampPlayer(
      * Runs on the teardown thread immediately before the mpv handle is destroyed.
      *
      * Platform implementations may block here while serializing graphics-resource release
-     * with their UI/render thread. Throwing aborts handle destruction: leaking a terminal
-     * player is safer than destroying a graphics context without the required barrier.
+     * with their UI/render thread. Throwing prevents handle destruction, but the native
+     * player still receives a stop request so failed graphics cleanup does not silently
+     * skip transport shutdown.
      */
     protected open fun prepareNativeTeardown() {}
 
@@ -707,17 +709,19 @@ abstract class JvmMpvMediampPlayer(
         // thread completes normally, and once the JVM is exiting anyway the OS reclaims
         // whatever a killed teardown would have released.
         thread(name = "mediamp-mpv-teardown", isDaemon = true) {
-            runCatching { prepareNativeTeardown() }.onFailure {
-                MPVLog.error(
-                    instanceHandle,
-                    "platform render teardown barrier failed; native handle destruction aborted",
-                    it,
-                )
-                return@thread
-            }
-            runCatching { handle.command("stop") }
-            runCatching { handle.destroy() }
-            runCatching { handle.close() }
+            runNativeTeardownSequence(
+                prepare = { prepareNativeTeardown() },
+                stop = { handle.command("stop") },
+                destroy = { handle.destroy() },
+                close = { handle.close() },
+                onPrepareFailure = {
+                    MPVLog.error(
+                        instanceHandle,
+                        "platform render teardown barrier failed; native handle destruction aborted after requesting playback stop",
+                        it,
+                    )
+                },
+            )
         }
     }
     // endregion
