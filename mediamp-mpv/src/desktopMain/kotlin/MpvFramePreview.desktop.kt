@@ -30,8 +30,7 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.mpv.internal.MpvPreviewDecoder
-import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
-import org.openani.mediamp.mpv.internal.currentSurfaceBackend
+import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
 import org.openani.mediamp.source.MediaData
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -46,8 +45,8 @@ internal actual fun createMpvFramePreview(
 ): FramePreview? {
     // Without a surface-ring backend frames cannot be read back, so the
     // feature is absent rather than present-but-always-null.
-    val ringBackend = currentSurfaceBackend() ?: return null
-    return MpvFramePreview(player, context, ringBackend, parentCoroutineContext)
+    if (!supportsSurfaceBackend()) return null
+    return MpvFramePreview(player, context, parentCoroutineContext)
 }
 
 /**
@@ -62,7 +61,6 @@ internal actual fun createMpvFramePreview(
 internal class MpvFramePreview(
     private val mainPlayer: JvmMpvMediampPlayer,
     private val context: Any,
-    private val ringBackend: MpvSurfaceBackend,
     parentCoroutineContext: CoroutineContext,
 ) : FramePreview, AutoCloseable {
     private val scope = CoroutineScope(
@@ -117,8 +115,9 @@ internal class MpvFramePreview(
         // A new preview decoder can only be provisioned once the main player's render
         // prerequisites exist (environment-bound backends need their attached render
         // environment before vo=libmpv can load); null means they are not available yet.
-        val provisioning = (mainPlayer as? MpvMediampPlayer)
-            ?.renderContextLifecycle?.captureProvisioning() ?: return null
+        val player = mainPlayer as? MpvMediampPlayer ?: return null
+        val ringBackend = player.ringBackend ?: return null
+        val provisioning = player.renderContextLifecycle?.captureProvisioning() ?: return null
         return try {
             // NonCancellable: decoder creation is expensive shared state; a cancelled first
             // request must not abort it half-way (the next request reuses the session).

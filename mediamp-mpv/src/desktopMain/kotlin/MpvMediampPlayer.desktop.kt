@@ -14,13 +14,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
-import org.jetbrains.skiko.SkiaLayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
 import org.openani.mediamp.mpv.internal.currentSurfaceBackend
+import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
+import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
+import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
 
@@ -36,20 +38,34 @@ actual class MpvMediampPlayer(
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
 
-    // Native render path; the consumer state machine is chosen by the backend
-    // (MpvSurfaceRing for the shared-texture rings, MpvReadbackSurface for the Windows
-    // OpenGL fallback).
-    private val ringBackend: MpvSurfaceBackend? = currentSurfaceBackend()
-    private val surfaceRing: MpvSurfaceConsumer? = ringBackend?.createSurfaceConsumer(handle.ptr)
+    // Windows cannot choose its producer until the window has a live Skiko redrawer.
+    // Keep the backend, consumer, and lifecycle together so frame previews use the same path.
+    private class Rendering(
+        val backend: MpvSurfaceBackend,
+        val surface: MpvSurfaceConsumer,
+        val lifecycle: MpvRenderContextLifecycle,
+    )
 
-    /**
-     * Producer-context lifecycle chosen by the backend: eager where the backend owns its
-     * producer device (macOS/Windows), environment-bound on Linux. Platform-specific
-     * operations (such as the Linux GLX attach) exist only on the platform
-     * implementation, so other platforms cannot call them by mistake.
-     */
-    internal val renderContextLifecycle: MpvRenderContextLifecycle? =
-        ringBackend?.createRenderContextLifecycle(
+    @Volatile
+    private var rendering: Rendering? = null
+    internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
+    private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
+    internal val renderContextLifecycle: MpvRenderContextLifecycle? get() = rendering?.lifecycle
+
+    init {
+        currentSurfaceBackend()?.let { attachBackend(it) }
+    }
+
+    private fun attachBackend(backend: MpvSurfaceBackend) {
+        rendering?.let {
+            check(it.backend === backend) {
+                "Skiko changed the mpv surface backend from ${it.backend.rendererName} to ${backend.rendererName}. " +
+                    "Recreate the player to use the new renderer."
+            }
+            return
+        }
+        val surface = backend.createSurfaceConsumer(handle.ptr)
+        val lifecycle = backend.createRenderContextLifecycle(
             object : MpvRenderContextHost {
                 override val handle: MPVHandle get() = this@MpvMediampPlayer.handle
 
@@ -59,28 +75,33 @@ actual class MpvMediampPlayer(
                 override fun onRenderContextReady() = renderContextBecameReady()
 
                 override fun invalidateSurfaceRingForEnvironmentChange() {
-                    surfaceRing?.invalidateForRenderEnvironmentChange()
+                    surface.invalidateForRenderEnvironmentChange()
                 }
             },
         )
-
-    init {
-        renderContextLifecycle?.initialize()
+        lifecycle.initialize()
+        rendering = Rendering(backend, surface, lifecycle)
+        renderContextBecameReady()
     }
 
-    /** Creates the native render context and starts the render thread. Idempotent. */
-    internal fun createRenderContext(): Boolean =
-        ringBackend?.createRenderContext(handle.ptr) ?: false
+    /** Explicitly creates a windowless render context for headless capture. Idempotent. */
+    internal fun createRenderContext(): Boolean {
+        if (rendering == null) headlessSurfaceBackend()?.let { attachBackend(it) }
+        return ringBackend?.createRenderContext(handle.ptr) ?: false
+    }
 
     internal fun releaseRenderContext(): Boolean =
         ringBackend?.destroyRenderContext(handle.ptr) ?: false
 
     override fun ensureRenderContextForLoad(): Boolean =
-        renderContextLifecycle?.ensureReadyForLoad() ?: true
+        renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend()
 
-    /** See [MpvSurfaceBackend.createSkiaInterop]. */
-    internal fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop? =
-        ringBackend?.createSkiaInterop(layer)
+    /** Returns null until Skiko has chosen its redrawer; loading waits for that selection. */
+    internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
+        val backend = currentSurfaceBackend(layerRedrawer) ?: return null
+        attachBackend(backend)
+        return backend.createSkiaInterop(layerRedrawer)
+    }
 
     /** See [MpvSurfaceConsumer.requestSurface]. */
     internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =

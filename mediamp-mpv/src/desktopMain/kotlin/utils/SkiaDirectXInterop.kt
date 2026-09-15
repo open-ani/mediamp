@@ -9,9 +9,7 @@
 package org.openani.mediamp.mpv.utils
 
 import org.jetbrains.skia.DirectContext
-import org.jetbrains.skiko.SkiaLayer
 import java.lang.reflect.Field
-import java.lang.reflect.Method
 
 /**
  * Reflective access to the Direct3D 12 device and Skia DirectContext that Skiko uses to
@@ -25,8 +23,7 @@ import java.lang.reflect.Method
  * so nothing is cached across calls — every access re-reads the live redrawer from the
  * layer. Verified against Skiko 0.9.37 / CMP 1.10.
  */
-internal class SkiaDirectXInterop(private val layer: SkiaLayer) : SkiaRenderDeviceInterop {
-    private val getRedrawerMethod: Method = SkiaLayer::class.java.getMethod("getRedrawer\$skiko")
+internal class SkiaDirectXInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
 
     private class RedrawerAccess(redrawerClass: Class<*>) {
         val deviceField: Field = redrawerClass.getDeclaredField("device")
@@ -49,11 +46,11 @@ internal class SkiaDirectXInterop(private val layer: SkiaLayer) : SkiaRenderDevi
     private var cachedAccessClass: Class<*>? = null
 
     private fun currentRedrawer(): Any {
-        val redrawer = getRedrawerMethod.invoke(layer) ?: error("SkiaLayer has no redrawer")
+        val redrawer = layerRedrawer.redrawer
         check(redrawer.javaClass.name == "org.jetbrains.skiko.redrawer.Direct3DRedrawer") {
             "Unsupported Skiko redrawer ${redrawer.javaClass.name}. The mpv D3D11 render " +
-                "path requires Skiko's Direct3D backend (Windows default; do not set " +
-                "SKIKO_RENDER_API/skiko.renderApi to another backend)."
+                "path requires Skiko's Direct3DRedrawer. Recreate the player if Skiko changed " +
+                "its render backend."
         }
         return redrawer
     }

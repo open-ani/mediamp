@@ -54,6 +54,8 @@ kotlin {
         }
         getByName("desktopTest").dependencies {
             implementation(kotlin("test"))
+            // The live-redrawer regression test constructs a real SkiaLayer.
+            runtimeOnly(compose.desktop.currentOs)
         }
     }
 }

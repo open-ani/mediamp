@@ -36,7 +36,8 @@ import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import org.openani.mediamp.mpv.internal.MpvSurfaceDrawResolver
-import org.openani.mediamp.mpv.internal.currentSurfaceBackend
+import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
+import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import org.openani.mediamp.mpv.utils.findSkiaLayer
 import kotlin.time.Duration.Companion.milliseconds
@@ -46,7 +47,7 @@ actual fun MpvMediampPlayerSurface(
     player: MpvMediampPlayer,
     modifier: Modifier,
 ) {
-    if (currentSurfaceBackend() != null) {
+    if (supportsSurfaceBackend()) {
         MpvMediampPlayerSurfaceRing(player, modifier)
     } else {
         Box(modifier)
@@ -76,7 +77,7 @@ private fun MpvMediampPlayerSurfaceRing(
     modifier: Modifier,
 ) {
     val window = LocalAwtWindow.current
-    val interop: SkiaRenderDeviceInterop? = remember(window) {
+    val layerRedrawer = remember(window) {
         if (window == null) {
             MPVLog.warn(player.handle.ptr, "LocalAwtWindow.current is null; cannot locate SkiaLayer, video stays black")
             return@remember null
@@ -86,7 +87,15 @@ private fun MpvMediampPlayerSurfaceRing(
             MPVLog.warn(player.handle.ptr, "no SkiaLayer found in window $window; video stays black")
             return@remember null
         }
-        runCatching { player.createSkiaInterop(layer) }
+        SkiaLayerRedrawer(layer)
+    }
+    var interop: SkiaRenderDeviceInterop? by remember(player, layerRedrawer) { mutableStateOf(null) }
+    LaunchedEffect(player, layerRedrawer) {
+        val liveLayer = layerRedrawer ?: return@LaunchedEffect
+        // Composition can precede Skiko's first render. Wait for its actual choice,
+        // including startup fallbacks, before creating mpv's matching producer context.
+        while (liveLayer.redrawerOrNull == null) delay(50.milliseconds)
+        interop = runCatching { player.createSkiaInterop(liveLayer) }
             .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
     }
@@ -106,8 +115,8 @@ private fun MpvMediampPlayerSurfaceRing(
         if (loggedStates.add(state)) MPVLog.log(player.handle.ptr, level, state)
     }
 
-    DisposableEffect(player) {
-        renderContextReady = player.renderContextLifecycle?.createEagerly() ?: false
+    DisposableEffect(player, interop) {
+        renderContextReady = interop != null && player.renderContextLifecycle?.createEagerly() == true
         if (renderContextReady) {
             player.setRenderUpdateListener { frameTick.longValue++ }
         }

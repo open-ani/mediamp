@@ -87,6 +87,7 @@ class MpvZeroConfigTest {
                         assertTrue(player.handle.option("http-header-fields", "X-Mediamp-Test: present"))
                         assertTrue(player.handle.command("loadfile", uri, "replace"))
                     } else {
+                        check(player.createRenderContext()) { "Could not create the headless HTTP renderer" }
                         // v2 open contract: the 404 must fail fast INSIDE setMediaData.
                         val result = withTimeout(30_000) {
                             runCatching {

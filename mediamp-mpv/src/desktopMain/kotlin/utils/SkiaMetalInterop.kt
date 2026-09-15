@@ -9,7 +9,6 @@
 package org.openani.mediamp.mpv.utils
 
 import org.jetbrains.skia.DirectContext
-import org.jetbrains.skiko.SkiaLayer
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 
@@ -25,8 +24,7 @@ import java.lang.reflect.Method
  * Supports both of Skiko's Metal render paths (verified against Skiko 0.9.37 / CMP 1.10):
  * [MetalRedrawer] (AWT window rendering) and [MetalSwingRedrawer] (offscreen swing interop).
  */
-internal class SkiaMetalInterop(private val layer: SkiaLayer) : SkiaRenderDeviceInterop {
-    private val getRedrawerMethod: Method = SkiaLayer::class.java.getMethod("getRedrawer\$skiko")
+internal class SkiaMetalInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
 
     private class RedrawerAccess(redrawerClass: Class<*>) {
         val adapterField: Field = redrawerClass.getDeclaredField("adapter")
@@ -59,7 +57,7 @@ internal class SkiaMetalInterop(private val layer: SkiaLayer) : SkiaRenderDevice
     private var cachedAccessClass: Class<*>? = null
 
     private fun currentRedrawer(): Any =
-        getRedrawerMethod.invoke(layer) ?: error("SkiaLayer has no redrawer")
+        layerRedrawer.redrawer
 
     private fun accessFor(redrawer: Any): RedrawerAccess {
         val clazz = redrawer.javaClass
