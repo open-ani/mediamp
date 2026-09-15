@@ -1,0 +1,60 @@
+[demo] state: PlayerState(mediaStatus=Idle, playWhenReady=false, isBuffering=false)
+[demo] position: 0ms
+[demo] state: PlayerState(mediaStatus=Opening, playWhenReady=true, isBuffering=false)
+[  mediamp@0x8a79a8300][info] rendering 1280x772 via Metal surface
+[demo] state: PlayerState(mediaStatus=Ready, playWhenReady=true, isBuffering=false)
+[demo] position: 1000ms
+[demo] position: 2000ms
+[demo] position: 3000ms
+[demo] position: 4000ms
+[demo] position: 5000ms
+[demo][script] pause()
+[demo] state: PlayerState(mediaStatus=Ready, playWhenReady=false, isBuffering=false)
+[demo][script] play()
+[demo] state: PlayerState(mediaStatus=Ready, playWhenReady=true, isBuffering=false)
+[demo] position: 6000ms
+[demo] position: 7000ms
+[demo][script] seekTo(current + 30s)
+[demo] position: 37000ms
+[demo] event: SeekCompleted(positionMillis=37033)
+[demo] position: 38000ms
+[demo] position: 39000ms
+[demo][script] seekTo(duration - 2s) — expecting MediaEnded soon
+[demo] position: 43000ms
+[demo] event: SeekCompleted(positionMillis=43033)
+[demo] position: 44000ms
+[demo] position: 45000ms
+[demo] state: PlayerState(mediaStatus=Ended, playWhenReady=false, isBuffering=false)
+[demo] event: MediaEnded(mediaData=UriMediaData(uri=/tmp/issue-3416-evidence/playback.mp4, headers={}, extraFiles=org.openani.mediamp.source.MediaExtraFiles@104df3e6), finalPositionMillis=45000, durationMillis=45000)
+[demo] position: 0ms
+[demo] state: PlayerState(mediaStatus=Ready, playWhenReady=true, isBuffering=false)
+[demo] event: SeekCompleted(positionMillis=33)
+[demo] position: 1000ms
+[demo] position: 2000ms
+[demo] position: 3000ms
+[demo] position: 4000ms
+[demo] position: 5000ms
+[demo] position: 6000ms
+[demo] position: 7000ms
+[demo] position: 8000ms
+[demo] position: 9000ms
+[demo] position: 10000ms
+[demo] position: 11000ms
+[demo] position: 12000ms
+[demo] position: 13000ms
+[demo] position: 14000ms
+[demo] position: 15000ms
+[demo] position: 16000ms
+[demo] position: 17000ms
+[demo] position: 18000ms
+[demo] position: 19000ms
+[demo] position: 20000ms
+[demo] position: 21000ms
+[demo] position: 22000ms
+[demo] position: 23000ms
+[demo] position: 24000ms
+[demo] position: 25000ms
+[demo] position: 26000ms
+[demo] position: 27000ms
+[demo] position: 28000ms
+[demo] position: 29000ms
