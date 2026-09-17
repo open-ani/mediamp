@@ -14,6 +14,7 @@ import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.mpv.MPVHandle
+import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.RenderUpdateListener
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
@@ -152,21 +153,40 @@ internal class MpvPreviewDecoder(
         // Unblock a read still waiting for data before handle.destroy() joins mpv's
         // threads (a blocked read holds the native stream lock).
         inputAwaitJob.cancel()
-        try {
-            handle.setRenderUpdateListener(null)
-            ringBackend.setSurfaceConfig(handle.ptr, 0, 0, 0L)
-            ringBackend.destroyRenderContext(handle.ptr)
-        } catch (_: Exception) {
+        val instanceHandle = handle.ptr
+        val renderTeardownSucceeded = runNativeTeardownSequence(
+            prepare = {
+                val releaseRenderResources = {
+                    handle.setRenderUpdateListener(null)
+                    ringBackend.setSurfaceConfig(instanceHandle, 0, 0, 0L)
+                    ringBackend.destroyRenderContext(instanceHandle)
+                    Unit
+                }
+                if (ringBackend === OpenGLSurfaceRingBackend) {
+                    // Preview decoders borrow the same Skiko GLX share group as the main
+                    // player. Their private context must obey the same swap/destroy barrier.
+                    runOnAwtEventThreadAndWait(releaseRenderResources)
+                } else {
+                    releaseRenderResources()
+                }
+            },
+            stop = { handle.command("stop") },
+            destroy = { handle.destroy() },
+            close = { handle.close() },
+            onPrepareFailure = {
+                MPVLog.error(
+                    instanceHandle,
+                    "preview render teardown barrier failed; native handle destruction aborted after requesting playback stop",
+                    it,
+                )
+            },
+        )
+        if (renderTeardownSucceeded) {
+            try {
+                openInput?.close()
+            } catch (_: Exception) {
+            }
+            openInput = null
         }
-        try {
-            handle.destroy()
-        } catch (_: Exception) {
-        }
-        handle.close()
-        try {
-            openInput?.close()
-        } catch (_: Exception) {
-        }
-        openInput = null
     }
 }

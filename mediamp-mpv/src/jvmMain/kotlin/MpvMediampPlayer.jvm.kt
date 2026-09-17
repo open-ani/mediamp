@@ -43,6 +43,7 @@ import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
 import org.openani.mediamp.mpv.internal.MpvSessionAdapter
 import org.openani.mediamp.mpv.internal.mpvErrorToPlaybackException
+import org.openani.mediamp.mpv.internal.runNativeTeardownSequence
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -321,7 +322,7 @@ abstract class JvmMpvMediampPlayer(
         }
     }
 
-    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+    internal open fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
         return handle.setRenderUpdateListener(listener)
     }
 
@@ -675,14 +676,32 @@ abstract class JvmMpvMediampPlayer(
         buffering.bufferedPercentage.value = 0
     }
 
+    /**
+     * Called synchronously on the machine thread when close starts, before any asynchronous
+     * native teardown is launched. Desktop uses this to reject late Compose surface calls.
+     */
+    protected open fun nativeTeardownStarting() {}
+
+    /**
+     * Runs on the teardown thread immediately before the mpv handle is destroyed.
+     *
+     * Platform implementations may block here while serializing graphics-resource release
+     * with their UI/render thread. Throwing prevents handle destruction, but the native
+     * player still receives a stop request so failed graphics cleanup does not silently
+     * skip transport shutdown.
+     */
+    protected open fun prepareNativeTeardown() {}
+
     override fun closeImpl() {
         nativeTeardownStarted = true
+        nativeTeardownStarting()
         // Unblock reads still parked in a session await context before the teardown thread
         // joins mpv's demux threads (a blocked read holds the native stream lock).
         inputAwaitParent.cancel()
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
+        val instanceHandle = handle.ptr
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
         // thread, which used to hang the UI thread (v1 defect M8). Daemon so that a wedged
@@ -690,9 +709,19 @@ abstract class JvmMpvMediampPlayer(
         // thread completes normally, and once the JVM is exiting anyway the OS reclaims
         // whatever a killed teardown would have released.
         thread(name = "mediamp-mpv-teardown", isDaemon = true) {
-            runCatching { handle.command("stop") }
-            runCatching { handle.destroy() }
-            runCatching { handle.close() }
+            runNativeTeardownSequence(
+                prepare = { prepareNativeTeardown() },
+                stop = { handle.command("stop") },
+                destroy = { handle.destroy() },
+                close = { handle.close() },
+                onPrepareFailure = {
+                    MPVLog.error(
+                        instanceHandle,
+                        "platform render teardown barrier failed; native handle destruction aborted after requesting playback stop",
+                        it,
+                    )
+                },
+            )
         }
     }
     // endregion

@@ -20,7 +20,9 @@ import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
+import org.openani.mediamp.mpv.internal.OpenGLSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.currentSurfaceBackend
+import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
 
@@ -41,6 +43,14 @@ actual class MpvMediampPlayer(
     // OpenGL fallback).
     private val ringBackend: MpvSurfaceBackend? = currentSurfaceBackend()
     private val surfaceRing: MpvSurfaceConsumer? = ringBackend?.createSurfaceConsumer(handle.ptr)
+
+    /**
+     * Raised on the machine thread before native teardown is scheduled. Compose disposal
+     * may arrive later, after the handle has already been finalized, so every surface entry
+     * point must become a no-op as soon as this flag is visible.
+     */
+    @Volatile
+    private var surfaceTeardownStarted = false
 
     /**
      * Producer-context lifecycle chosen by the backend: eager where the backend owns its
@@ -70,39 +80,64 @@ actual class MpvMediampPlayer(
 
     /** Creates the native render context and starts the render thread. Idempotent. */
     internal fun createRenderContext(): Boolean =
-        ringBackend?.createRenderContext(handle.ptr) ?: false
+        !surfaceTeardownStarted && (ringBackend?.createRenderContext(handle.ptr) ?: false)
 
     internal fun releaseRenderContext(): Boolean =
-        ringBackend?.destroyRenderContext(handle.ptr) ?: false
+        !surfaceTeardownStarted && (ringBackend?.destroyRenderContext(handle.ptr) ?: false)
 
     override fun ensureRenderContextForLoad(): Boolean =
-        renderContextLifecycle?.ensureReadyForLoad() ?: true
+        !surfaceTeardownStarted && (renderContextLifecycle?.ensureReadyForLoad() ?: true)
 
     /** See [MpvSurfaceBackend.createSkiaInterop]. */
     internal fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop? =
-        ringBackend?.createSkiaInterop(layer)
+        if (surfaceTeardownStarted) null else ringBackend?.createSkiaInterop(layer)
 
     /** See [MpvSurfaceConsumer.requestSurface]. */
     internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =
-        surfaceRing?.requestSurface(width, height, devicePtr) ?: false
+        !surfaceTeardownStarted && (surfaceRing?.requestSurface(width, height, devicePtr) ?: false)
 
     /** See [MpvSurfaceConsumer.refreshDeviceIfChanged]. */
     internal fun refreshDeviceIfChanged(devicePtr: Long) {
-        surfaceRing?.refreshDeviceIfChanged(devicePtr)
+        if (!surfaceTeardownStarted) surfaceRing?.refreshDeviceIfChanged(devicePtr)
     }
 
     /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
     internal fun currentFrameImage(directContext: DirectContext): Image? =
-        surfaceRing?.currentFrameImage(directContext)
+        if (surfaceTeardownStarted) null else surfaceRing?.currentFrameImage(directContext)
 
     /** See [MpvSurfaceConsumer.release]. */
     internal fun releaseSurface() {
-        surfaceRing?.release()
+        if (!surfaceTeardownStarted) surfaceRing?.release()
     }
 
     /** See [MpvSurfaceBackend.readSurfacePixels]. */
     internal fun readSurfacePixels(dims: IntArray): IntArray? =
-        ringBackend?.readSurfacePixels(handle.ptr, dims)
+        if (surfaceTeardownStarted) null else ringBackend?.readSurfacePixels(handle.ptr, dims)
+
+    internal fun isSurfaceTeardownStarted(): Boolean = surfaceTeardownStarted
+
+    internal override fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean =
+        !surfaceTeardownStarted && super.setRenderUpdateListener(listener)
+
+    override fun nativeTeardownStarting() {
+        surfaceTeardownStarted = true
+    }
+
+    override fun prepareNativeTeardown() {
+        val ptr = handle.ptr
+        runOnAwtEventThreadAndWait {
+            // Skia wrappers belong to Skiko's consumer render thread. Closing them here also
+            // establishes an event-queue barrier after any draw/swap already in progress.
+            surfaceRing?.release()
+
+            if (ringBackend === OpenGLSurfaceRingBackend) {
+                // Skiko and mediamp borrow the same Xlib Display. Mesa's DRI3 GLX teardown
+                // can deadlock when glXDestroyContext/glXDestroyPbuffer runs concurrently
+                // with Skiko's swapBuffers. The queued AWT event serializes both operations.
+                ringBackend.destroyRenderContext(ptr)
+            }
+        }
+    }
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot
