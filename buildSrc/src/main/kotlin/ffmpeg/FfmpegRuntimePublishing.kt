@@ -3,6 +3,7 @@ package ffmpeg
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SourcesJar
+import PomLicenses
 import configurePom
 import nativebuild.DesktopRuntimeTarget
 import nativebuild.PublishedArtifact
@@ -28,6 +29,7 @@ import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.register
 import org.gradle.kotlin.dsl.support.serviceOf
 import org.gradle.process.ExecOperations
+import setPublicationLicenses
 import signAllPublicationsIfEnabled
 
 private const val APPLE_XCFRAMEWORK_ARTIFACT_ID = "mediamp-ffmpeg-runtime-ios-xcframework"
@@ -130,6 +132,18 @@ internal fun configureRuntimePublishing(
 ) {
     val deployVersion = context.project.version.toString()
     val runtimeTargets = context.desktopRuntimeTargets
+
+    // FFmpeg is configured without --enable-gpl on every target (LGPL-2.1-or-later), so all
+    // runtime artifacts are Apache-2.0 JNI code plus LGPL libraries. The Kotlin module itself
+    // (mediamp-ffmpeg) keeps the project default, Apache-2.0 only.
+    desktopRuntimeJarTasks.keys.forEach { target ->
+        context.project.setPublicationLicenses(
+            "ffmpegRuntime${target.publicationSuffix()}",
+            PomLicenses.APACHE_WITH_LGPL_RUNTIME,
+        )
+    }
+    context.project.setPublicationLicenses("ffmpegRuntimeIosXcframework", PomLicenses.APACHE_WITH_LGPL_RUNTIME)
+    context.project.setPublicationLicenses("ffmpegRuntime", PomLicenses.APACHE_WITH_LGPL_RUNTIME)
 
     context.project.extensions.getByType<com.vanniktech.maven.publish.MavenPublishBaseExtension>().apply {
         configure(KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")))

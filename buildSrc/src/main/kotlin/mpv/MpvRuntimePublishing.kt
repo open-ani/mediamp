@@ -1,5 +1,6 @@
 package mpv
 
+import PomLicenses
 import nativebuild.DesktopRuntimeTarget
 import nativebuild.MINIMUM_LINUX_GLIBC_VERSION
 import nativebuild.PublishedArtifact
@@ -18,6 +19,7 @@ import nativebuild.registerCompositeDesktopRuntimeElements
 import nativebuild.resolveMsys2Dir
 import nativebuild.resolveWindowsObjdump
 import nativebuild.wireDesktopRuntimeDependencyConstraints
+import setPublicationLicenses
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.jvm.tasks.Jar
@@ -128,6 +130,21 @@ internal fun configureRuntimePublishing(
 ) {
     val deployVersion = context.project.version.toString()
     val runtimeTargets = context.desktopRuntimeTargets
+
+    // POM licenses per runtime artifact. Every runtime bundles Apache-2.0 JNI code plus the
+    // libmpv it links against; libmpv is LGPL on every platform except Linux, which is
+    // built with GPL-only X11 code (see linuxX64Target in MpvTargets.kt) and therefore
+    // makes the combined artifact GPLv3. The fat aggregator drags in the Linux jar as well.
+    desktopRuntimeJarTasks.keys.forEach { target ->
+        context.project.setPublicationLicenses(
+            "mpvRuntime${target.publicationSuffix()}",
+            if (target.os == "linux") PomLicenses.GPL_3_ONLY else PomLicenses.APACHE_WITH_LGPL_RUNTIME,
+        )
+    }
+    context.project.setPublicationLicenses(
+        "mpvRuntime",
+        if (desktopRuntimeJarTasks.keys.any { it.os == "linux" }) PomLicenses.GPL_3_ONLY else PomLicenses.APACHE_WITH_LGPL_RUNTIME,
+    )
 
     context.project.extensions.getByType<PublishingExtension>().publications.apply {
         desktopRuntimeJarTasks.forEach { (target, jarTask) ->

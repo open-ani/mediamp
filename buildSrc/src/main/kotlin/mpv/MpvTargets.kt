@@ -97,6 +97,16 @@ internal data class MpvBuildTarget(
 // Shared meson options
 // ---------------------------------------------------------------------------------------
 
+/**
+ * mpv is GPLv2+ by default and LGPLv2.1+ when built with `-Dgpl=false`, which drops the
+ * GPL-only sources (see `Copyright` in the mpv tree). Every target that does not need any
+ * of the GPL-gated features (`cdda`, `dvbin`, `dvdnav`, `jack`, `oss-audio`, `caca`,
+ * `direct3d`, `x11` and everything that depends on `x11`) passes this so that the published
+ * runtime is LGPL. Linux is the exception: it enables `x11` for the GLX/VAAPI paths, so its
+ * runtime stays GPL and is published as GPLv3 (see MpvRuntimePublishing.kt and the README).
+ */
+internal const val LGPL_MESON_OPTION = "-Dgpl=false"
+
 internal val commonMesonOptions: List<String> = buildList {
     // Debian/Ubuntu 的 meson 默认 libdir 是 multiarch 子目录 (lib/x86_64-linux-gnu),
     // 而打包/JNI 链接统一从 install/lib 取, 显式固定为 lib.
@@ -222,6 +232,7 @@ private fun MpvBuildContext.windowsTarget(
             listOf(msys2Root.resolve("usr/bin/pacman.exe").absolutePath, "-Q") + msys2Packages,
         ),
         mesonOptions = commonMesonOptions + listOf(
+            LGPL_MESON_OPTION,
             "-Dgl=enabled",
             "-Dgl-win32=enabled",
             "-Degl=disabled",
@@ -231,7 +242,9 @@ private fun MpvBuildContext.windowsTarget(
             "-Dspirv-cross=enabled",
             "-Dd3d-hwaccel=enabled",
             "-Dd3d11=enabled",
-            "-Ddirect3d=enabled",
+            // vo_direct3d (legacy D3D9 VO) is GPL-only and unused: mediamp drives mpv
+            // through the libmpv render API (render_d3d11.cpp / render_opengl_win.cpp).
+            "-Ddirect3d=disabled",
             "-Dwasapi=enabled",
             "-Dwin32-smtc=disabled",
             "-Dx11=disabled",
@@ -279,6 +292,12 @@ internal fun MpvBuildContext.linuxX64Target(): MpvBuildTarget = MpvBuildTarget(
         listOf("ninja", "--version"),
         listOf("pkg-config", "--modversion", "libass", "libplacebo"),
     ),
+    // NOTE: no LGPL_MESON_OPTION here. `x11` (and everything below that depends on it:
+    // gl-x11, egl-x11, vaapi-x11) is GPL-only in mpv, and vaapi-copy obtains its VADisplay
+    // through the X11 path (video/vaapi.c). Building Linux as LGPL would need vaapi-drm,
+    // which in turn needs -Ddrm=enabled (libdrm + libdisplay-info) and a device-selection
+    // strategy for /dev/dri/renderD*. Until that lands the Linux runtime is GPLv2+ libmpv
+    // and is published under GPLv3 (MpvRuntimePublishing.kt).
     mesonOptions = commonMesonOptions + listOf(
         "-Dgl=enabled",
         "-Dgl-x11=enabled",
@@ -366,6 +385,7 @@ private fun MpvBuildContext.macosTarget(
             "LDFLAGS" to commonFlags,
         ),
         mesonOptions = commonMesonOptions + listOf(
+            LGPL_MESON_OPTION,
             "-Dcocoa=enabled",
             "-Dcoreaudio=enabled",
             "-Daudiounit=disabled",
@@ -488,6 +508,7 @@ internal fun MpvBuildContext.androidTarget(abi: AndroidAbi): MpvBuildTarget {
         wrapFiles = wrapFiles,
         msys2Packages = msys2Packages,
         mesonOptions = commonMesonOptions + listOf(
+            LGPL_MESON_OPTION,
             "--force-fallback-for=libass,libplacebo,expat,freetype2,fribidi,harfbuzz,libpng,zlib",
             "-Dgl=enabled",
             "-Degl=disabled",

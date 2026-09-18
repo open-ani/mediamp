@@ -360,15 +360,32 @@ class MainActivity : ComponentActivity() {
 
 ## License
 
-MediaMP is mainly licensed under the Apache License version 2. However, depending on the license of
-transitive dependencies, the backend-specific implementations may have different licenses.
+All MediaMP source code is licensed under the Apache License version 2 (see `LICENSE` in the
+repository root), except for the VLC modules noted below. The published Maven artifacts that
+bundle native libraries additionally carry the license of what they bundle, and each artifact's
+POM lists exactly the licenses that apply to it:
 
-A breakdown of the licenses:
+| Artifact                                                        | Contents                                              | License                       |
+|-----------------------------------------------------------------|-------------------------------------------------------|-------------------------------|
+| `mediamp-api`, `mediamp-compose`, `mediamp-exoplayer`, `mediamp-avkit`, `mediamp-ffmpeg`, `mediamp-mpv` (JVM/iOS), `mediamp-all` and other pure Kotlin modules | MediaMP code only                                     | Apache-2.0                    |
+| `mediamp-mpv` (Android AAR)                                     | MediaMP code + libmpv built with `-Dgpl=false`        | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-mpv-runtime-windows-*`, `mediamp-mpv-runtime-macos-*`  | JNI wrapper + libmpv built with `-Dgpl=false`         | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-mpv-runtime-linux-x64`                                 | JNI wrapper + libmpv built **with** GPL-only X11 code | **GPL-3.0**                   |
+| `mediamp-mpv-runtime` (all-platform aggregator)                 | Depends on every runtime above, including Linux       | **GPL-3.0**                   |
+| `mediamp-ffmpeg-runtime-*`, `mediamp-ffmpeg-runtime-ios-xcframework` | JNI wrapper + FFmpeg built without `--enable-gpl` | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-vlc-loader` (and the deprecated, unpublished `mediamp-vlc`) | Depends on vlcj                                  | GPL-3.0                       |
 
-- mediamp-exoplayer: Apache License 2.0 (Apache-v2)
-- mediamp-mpv: Apache License 2.0
-- All other published modules: Apache License 2.0
+What this means for a closed-source application:
 
-The deprecated, no-longer-published mediamp-vlc sources remain GPLv3 (`mediamp-vlc/LICENSE`).
-You can find the full license text of Apache-v2 in the `LICENSE` file from the root of the
-repository.
+- **Windows, macOS, Android**: libmpv and FFmpeg are LGPL, so you may ship them with a
+  proprietary application as long as the LGPL terms are met. The libraries are dynamically
+  loaded from the runtime jar / AAR, so users can replace them.
+- **Linux**: mpv's X11 video output, which the Linux runtime relies on for GLX and VAAPI, has
+  no LGPL relicensing, so `mediamp-mpv-runtime-linux-x64` is built as GPLv2+ libmpv. Combined
+  with MediaMP's Apache-2.0 code the artifact is distributed under GPLv3. Applications that
+  ship it must comply with the GPL; applications that do not target Linux can simply depend on
+  the per-platform `mediamp-mpv-runtime-<os>-<arch>` artifacts instead of the aggregator and
+  are unaffected. Making the Linux runtime LGPL (via mpv's `vaapi-drm` path) is planned.
+
+The corresponding sources for all bundled libraries are the git submodules under
+`mediamp-mpv/mpv` and `mediamp-ffmpeg/`, built by the Gradle scripts in `buildSrc`.
