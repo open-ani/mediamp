@@ -363,17 +363,32 @@ class MainActivity : ComponentActivity() {
 All MediaMP source code is licensed under the Apache License version 2 (see `LICENSE` in the
 repository root), except for the VLC modules noted below. The published Maven artifacts that
 bundle native libraries additionally carry the license of what they bundle, and each artifact's
-POM lists exactly the licenses that apply to it:
+POM lists exactly the licenses that apply to it.
 
-| Artifact                                                        | Contents                                              | License                       |
-|-----------------------------------------------------------------|-------------------------------------------------------|-------------------------------|
-| `mediamp-api`, `mediamp-compose`, `mediamp-exoplayer`, `mediamp-avkit`, `mediamp-ffmpeg`, `mediamp-mpv` (JVM/iOS), `mediamp-all` and other pure Kotlin modules | MediaMP code only                                     | Apache-2.0                    |
-| `mediamp-mpv` (Android AAR)                                     | MediaMP code + libmpv built with `-Dgpl=false`        | Apache-2.0 + LGPL-2.1-or-later |
-| `mediamp-mpv-runtime-windows-*`, `mediamp-mpv-runtime-macos-*`  | JNI wrapper + libmpv built with `-Dgpl=false`         | Apache-2.0 + LGPL-2.1-or-later |
-| `mediamp-mpv-runtime-linux-x64`                                 | JNI wrapper + libmpv built **with** GPL-only X11 code | **GPL-3.0**                   |
-| `mediamp-mpv-runtime` (all-platform aggregator)                 | Depends on every runtime above, including Linux       | **GPL-3.0**                   |
-| `mediamp-ffmpeg-runtime-*`, `mediamp-ffmpeg-runtime-ios-xcframework` | JNI wrapper + FFmpeg built without `--enable-gpl` | Apache-2.0 + LGPL-2.1-or-later |
-| `mediamp-vlc-loader` (and the deprecated, unpublished `mediamp-vlc`) | Depends on vlcj                                  | GPL-3.0                       |
+### Code artifacts
+
+These contain MediaMP code only (Kotlin/JVM/Android/iOS). None of them pulls in a native
+runtime: `mediamp-all` and `mediamp-mpv` only *pin* the runtime versions, so the desktop
+runtimes below are only on your classpath if you add them yourself.
+
+| Artifact                                                                                             | License                        |
+|------------------------------------------------------------------------------------------------------|--------------------------------|
+| `mediamp-api`, `mediamp-compose`, `mediamp-all`, `mediamp-exoplayer`, `mediamp-avkit`, `mediamp-ffmpeg`, `mediamp-mpv` (JVM / iOS), `mediamp-native-loader`, `mediamp-source-ktxio` | Apache-2.0                     |
+| `mediamp-mpv` (Android AAR, bundles libmpv `.so` built with `-Dgpl=false`)                           | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-vlc-loader` (depends on vlcj); the deprecated, unpublished `mediamp-vlc`                     | GPL-3.0                        |
+
+### Native runtime artifacts
+
+Desktop natives are separate artifacts that you add with `runtimeOnly(...)`. Each one contains
+the Apache-2.0 JNI wrapper plus the bundled libraries listed here.
+
+| Artifact                                                             | Bundled libraries                            | License                        |
+|----------------------------------------------------------------------|----------------------------------------------|--------------------------------|
+| `mediamp-mpv-runtime-windows-x64`, `-windows-arm64`, `-macos-x64`, `-macos-arm64` | libmpv built with `-Dgpl=false`   | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-mpv-runtime-linux-x64`                                      | libmpv built **with** GPL-only X11 code      | **GPL-3.0**                    |
+| `mediamp-mpv-runtime` (aggregator, depends on every mpv runtime above including Linux) | no files of its own        | **GPL-3.0**                    |
+| `mediamp-ffmpeg-runtime-<os>-<arch>`, `mediamp-ffmpeg-runtime` (aggregator) | FFmpeg built without `--enable-gpl`   | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-ffmpeg-runtime-ios-xcframework`                             | FFmpeg built without `--enable-gpl`          | Apache-2.0 + LGPL-2.1-or-later |
 
 What this means for a closed-source application:
 
