@@ -360,15 +360,47 @@ class MainActivity : ComponentActivity() {
 
 ## License
 
-MediaMP is mainly licensed under the Apache License version 2. However, depending on the license of
-transitive dependencies, the backend-specific implementations may have different licenses.
+All MediaMP source code is licensed under the Apache License version 2 (see `LICENSE` in the
+repository root), except for the VLC modules noted below. The published Maven artifacts that
+bundle native libraries additionally carry the license of what they bundle, and each artifact's
+POM lists exactly the licenses that apply to it.
 
-A breakdown of the licenses:
+### Code artifacts
 
-- mediamp-exoplayer: Apache License 2.0 (Apache-v2)
-- mediamp-mpv: Apache License 2.0
-- All other published modules: Apache License 2.0
+These contain MediaMP code only (Kotlin/JVM/Android/iOS). None of them pulls in a native
+runtime: `mediamp-all` and `mediamp-mpv` only *pin* the runtime versions, so the desktop
+runtimes below are only on your classpath if you add them yourself.
 
-The deprecated, no-longer-published mediamp-vlc sources remain GPLv3 (`mediamp-vlc/LICENSE`).
-You can find the full license text of Apache-v2 in the `LICENSE` file from the root of the
-repository.
+| Artifact                                                                                             | License                        |
+|------------------------------------------------------------------------------------------------------|--------------------------------|
+| `mediamp-api`, `mediamp-compose`, `mediamp-all`, `mediamp-exoplayer`, `mediamp-avkit`, `mediamp-ffmpeg`, `mediamp-mpv` (JVM / iOS), `mediamp-native-loader`, `mediamp-source-ktxio` | Apache-2.0                     |
+| `mediamp-mpv` (Android AAR, bundles libmpv `.so` built with `-Dgpl=false`)                           | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-vlc-loader` (depends on vlcj); the deprecated, unpublished `mediamp-vlc`                     | GPL-3.0                        |
+
+### Native runtime artifacts
+
+Desktop natives are separate artifacts that you add with `runtimeOnly(...)`. Each one contains
+the Apache-2.0 JNI wrapper plus the bundled libraries listed here.
+
+| Artifact                                                             | Bundled libraries                            | License                        |
+|----------------------------------------------------------------------|----------------------------------------------|--------------------------------|
+| `mediamp-mpv-runtime-windows-x64`, `-windows-arm64`, `-macos-x64`, `-macos-arm64` | libmpv built with `-Dgpl=false`   | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-mpv-runtime-linux-x64`                                      | libmpv built **with** GPL-only X11 code      | **GPL-3.0**                    |
+| `mediamp-mpv-runtime` (aggregator, depends on every mpv runtime above including Linux) | no files of its own        | **GPL-3.0**                    |
+| `mediamp-ffmpeg-runtime-<os>-<arch>`, `mediamp-ffmpeg-runtime` (aggregator) | FFmpeg built without `--enable-gpl`   | Apache-2.0 + LGPL-2.1-or-later |
+| `mediamp-ffmpeg-runtime-ios-xcframework`                             | FFmpeg built without `--enable-gpl`          | Apache-2.0 + LGPL-2.1-or-later |
+
+What this means for a closed-source application:
+
+- **Windows, macOS, Android**: libmpv and FFmpeg are LGPL, so you may ship them with a
+  proprietary application as long as the LGPL terms are met. The libraries are dynamically
+  loaded from the runtime jar / AAR, so users can replace them.
+- **Linux**: mpv's X11 video output, which the Linux runtime relies on for GLX and VAAPI, has
+  no LGPL relicensing, so `mediamp-mpv-runtime-linux-x64` is built as GPLv2+ libmpv. Combined
+  with MediaMP's Apache-2.0 code the artifact is distributed under GPLv3. Applications that
+  ship it must comply with the GPL; applications that do not target Linux can simply depend on
+  the per-platform `mediamp-mpv-runtime-<os>-<arch>` artifacts instead of the aggregator and
+  are unaffected. Making the Linux runtime LGPL (via mpv's `vaapi-drm` path) is planned.
+
+The corresponding sources for all bundled libraries are the git submodules under
+`mediamp-mpv/mpv` and `mediamp-ffmpeg/`, built by the Gradle scripts in `buildSrc`.
