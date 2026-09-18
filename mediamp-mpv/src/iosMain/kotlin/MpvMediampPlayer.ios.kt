@@ -569,6 +569,7 @@ actual class MpvMediampPlayer(
         inputAwaitParent.cancel()
         sessionAdapter = null
         mediaMetadata.clear()
+        buffering.reset()
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
         // thread, which must not hang the UI thread.
