@@ -352,6 +352,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 if (session != null && session.isValid) {
                     session.notifyPosition(exoPlayer.currentPosition)
                     buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
+                    buffering.bufferedPositionMillis.value = exoPlayer.bufferedPosition
                 }
                 delay(0.1.seconds)
             }
@@ -383,6 +384,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     ): OpenResult {
         val epoch = ++openEpoch
         openingPhase = true
+        buffering.reset()
         var sessionInput: SeekableInput? = null
         var sessionInputAwaitJob: Job? = null
         try {
@@ -491,6 +493,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     override fun stopImpl() {
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
+        buffering.reset()
     }
 
     override fun closeImpl() {
@@ -683,6 +686,12 @@ internal class ExoPlayerBuffering(
     )
     override val isBuffering: Flow<Boolean> = state.map { it.isBuffering }
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+    override val bufferedPositionMillis: MutableStateFlow<Long> = MutableStateFlow(Buffering.UNKNOWN_POSITION)
+
+    fun reset() {
+        bufferedPercentage.value = 0
+        bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+    }
 }
 
 @kotlin.OptIn(InternalForInheritanceMediampApi::class)

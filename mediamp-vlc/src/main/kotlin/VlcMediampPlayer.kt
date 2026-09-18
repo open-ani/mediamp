@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -747,6 +748,9 @@ internal class VlcBuffering(
     private val playbackState: StateFlow<PlaybackState>,
 ) : Buffering {
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+
+    /** libvlc does not expose the buffered range, so this is always [Buffering.UNKNOWN_POSITION]. */
+    override val bufferedPositionMillis: Flow<Long> = flowOf(Buffering.UNKNOWN_POSITION)
     override val isBuffering: Flow<Boolean> = flow {
         var lastState = playbackState.value
         var lastPosition = currentPositionMillis.value

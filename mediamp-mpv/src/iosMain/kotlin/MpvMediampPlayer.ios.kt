@@ -205,6 +205,10 @@ actual class MpvMediampPlayer(
                     sessionAdapter?.session?.notifyPosition((value * 1000).toLong().coerceAtLeast(0L))
                 }
 
+                "demuxer-cache-time" -> {
+                    buffering.bufferedPositionMillis.value = (value * 1000).toLong().coerceAtLeast(0L)
+                }
+
                 "duration" -> {
                     val adapter = sessionAdapter ?: return
                     adapter.lastDurationMillis = (value * 1000).toLong().takeIf { it > 0 } // unknown -> null
@@ -382,6 +386,7 @@ actual class MpvMediampPlayer(
         handle.observeProperty("volume", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("demuxer-cache-time", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
@@ -396,7 +401,7 @@ actual class MpvMediampPlayer(
         playWhenReady: Boolean,
         startPositionMillis: Long,
     ): OpenResult {
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
 
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
@@ -553,7 +558,7 @@ actual class MpvMediampPlayer(
         sessionAdapter = null
         handle.command("stop")
         mediaMetadata.clear()
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
     }
 
     @OptIn(DelicateCoroutinesApi::class)
