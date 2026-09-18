@@ -73,6 +73,17 @@ internal class MpvBuffering(state: StateFlow<PlayerState>) : Buffering {
      * buffered-ahead ratio of the whole media.
      */
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+
+    /**
+     * End timestamp of the demuxer cache ("demuxer-cache-time"), which is the position up to
+     * which data is buffered ahead of the playhead.
+     */
+    override val bufferedPositionMillis: MutableStateFlow<Long> = MutableStateFlow(Buffering.UNKNOWN_POSITION)
+
+    fun reset() {
+        bufferedPercentage.value = 0
+        bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+    }
 }
 
 @OptIn(InternalForInheritanceMediampApi::class)

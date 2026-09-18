@@ -164,6 +164,12 @@ public class AVKitMediampPlayer(
         @Suppress("OVERRIDE_DEPRECATION")
         override val isBuffering: Flow<Boolean> = state.map { it.isBuffering }
         override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+        override val bufferedPositionMillis: MutableStateFlow<Long> = MutableStateFlow(Buffering.UNKNOWN_POSITION)
+
+        fun reset() {
+            bufferedPercentage.value = 0
+            bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+        }
     }
 
     private val audioLevelController = AVKitAudioLevelController(impl)
@@ -326,7 +332,7 @@ public class AVKitMediampPlayer(
         currentAttachment?.close()
         impl.pause()
         impl.replaceCurrentItemWithPlayerItem(null)
-        bufferingFeature.bufferedPercentage.value = 0
+        bufferingFeature.reset()
     }
 
     override fun closeImpl() {
@@ -604,7 +610,11 @@ public class AVKitMediampPlayer(
                 lastNotifiedDurationMillis = durationMillis
                 session.notifyProperties(MediaProperties(title = null, durationMillis = durationMillis))
             }
-            bufferingFeature.bufferedPercentage.value = computeBufferedPercentage(durationMillis)
+            val bufferedPositionMillis = computeBufferedPositionMillis()
+            bufferingFeature.bufferedPositionMillis.value = bufferedPositionMillis ?: Buffering.UNKNOWN_POSITION
+            bufferingFeature.bufferedPercentage.value =
+                if (bufferedPositionMillis == null || durationMillis == null || durationMillis <= 0L) 0
+                else (bufferedPositionMillis * 100L / durationMillis).toInt().coerceIn(0, 100)
         }
 
         private fun detachOnMainThread() {
@@ -643,12 +653,11 @@ public class AVKitMediampPlayer(
         impl.currentItem?.let { cmTimeToMillisOrNull(it.duration) }
 
     /**
-     * Computes how far ahead of the playhead contiguous data is buffered, as a percentage of
-     * the total duration (v1: permanently 0).
+     * Computes the media position up to which contiguous data is buffered ahead of the playhead,
+     * or `null` when no item is loaded.
      */
-    private fun computeBufferedPercentage(durationMillis: Long?): Int {
-        if (durationMillis == null || durationMillis <= 0L) return 0
-        val item = impl.currentItem ?: return 0
+    private fun computeBufferedPositionMillis(): Long? {
+        val item = impl.currentItem ?: return null
         var reachableEndMillis = currentNativePositionMillis()
         for (rangeValue in item.loadedTimeRanges) {
             val range = (rangeValue as? NSValue)?.CMTimeRangeValue ?: continue
@@ -661,7 +670,7 @@ public class AVKitMediampPlayer(
                 }
             }
         }
-        return (reachableEndMillis * 100L / durationMillis).toInt().coerceIn(0, 100)
+        return reachableEndMillis
     }
     // endregion
 

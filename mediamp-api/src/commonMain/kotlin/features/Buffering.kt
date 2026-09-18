@@ -35,5 +35,19 @@ public interface Buffering : Feature {
      */
     public val bufferedPercentage: Flow<Int>
 
-    public companion object Key : FeatureKey<Buffering>
+    /**
+     * A flow of the media position, in milliseconds on the media timeline, up to which data is
+     * contiguously buffered ahead of the playhead. Data behind the playhead may have been evicted.
+     *
+     * Emits [UNKNOWN_POSITION] when no media is open or the engine can not report it. The value is
+     * reset to [UNKNOWN_POSITION] whenever media is opened or stopped.
+     */
+    public val bufferedPositionMillis: Flow<Long>
+
+    public companion object Key : FeatureKey<Buffering> {
+        /**
+         * Value of [bufferedPositionMillis] meaning the buffered position is not known.
+         */
+        public const val UNKNOWN_POSITION: Long = -1L
+    }
 }
