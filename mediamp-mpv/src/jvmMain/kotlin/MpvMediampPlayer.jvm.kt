@@ -725,6 +725,7 @@ abstract class JvmMpvMediampPlayer(
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
+        buffering.reset()
         val instanceHandle = handle.ptr
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
