@@ -13,10 +13,16 @@ import kotlin.coroutines.CoroutineContext
 
 actual class MpvMediampPlayer(
     context: Any,
-    parentCoroutineContext: CoroutineContext
+    parentCoroutineContext: CoroutineContext,
+    /**
+     * Optional hook to customize mpv options (e.g. `demuxer-max-bytes`, `cache-secs`) right
+     * before the native handle is initialized. See [JvmMpvMediampPlayer] for details.
+     */
+    configureOptions: ((MPVHandle) -> Unit)? = null,
 ) : JvmMpvMediampPlayer(
     context,
     parentCoroutineContext,
+    configureOptions = configureOptions,
 )
 
 actual fun limitDemuxer(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1

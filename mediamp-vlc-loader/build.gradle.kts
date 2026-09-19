@@ -32,5 +32,6 @@ mavenPublishing {
     configure(KotlinJvm(JavadocJar.Empty(), SourcesJar.Sources()))
     publishToMavenCentral()
     signAllPublicationsIfEnabled(project)
-    configurePom(project)
+    // Depends on vlcj (GPLv3), so the published artifact is GPLv3 (mediamp-vlc-loader/LICENSE).
+    configurePom(project, PomLicenses.GPL_3_ONLY)
 }

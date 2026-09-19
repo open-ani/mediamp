@@ -11,6 +11,7 @@ package org.openani.mediamp.exoplayer
 import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import org.openani.mediamp.MediampPlayerFactory
 import org.openani.mediamp.source.MediaData
@@ -37,6 +38,9 @@ public class ExoPlayerMediampPlayerFactory : MediampPlayerFactory<ExoPlayerMedia
      * @param audioTimeStretch the time-stretch backend used for playback speed changes.
      * @param mediaSourceInterceptor optional per-open hook applied to the built [MediaSource]
      *   before it is set on the player (spec `docs/playback-state-v2.md` §11).
+     * @param configurePlayerBuilder optional hook to customize the [ExoPlayer.Builder] (e.g.
+     *   `setLoadControl` for buffering) right before the underlying [ExoPlayer] is built. See
+     *   [ExoPlayerMediampPlayer] for details.
      */
     @OptIn(UnstableApi::class)
     public fun create(
@@ -44,7 +48,24 @@ public class ExoPlayerMediampPlayerFactory : MediampPlayerFactory<ExoPlayerMedia
         parentCoroutineContext: CoroutineContext,
         audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
         mediaSourceInterceptor: ((MediaSource, MediaData) -> MediaSource)? = null,
+        configurePlayerBuilder: ((ExoPlayer.Builder) -> Unit)? = null,
     ): ExoPlayerMediampPlayer {
-        return ExoPlayerMediampPlayer(context, parentCoroutineContext, audioTimeStretch, mediaSourceInterceptor)
+        return ExoPlayerMediampPlayer(
+            context,
+            parentCoroutineContext,
+            audioTimeStretch,
+            mediaSourceInterceptor,
+            configurePlayerBuilder,
+        )
     }
+
+    // Keeps the previous JVM signature (and its `$default` bridge) for already-compiled callers.
+    @Deprecated("Binary compatibility", level = DeprecationLevel.HIDDEN)
+    @OptIn(UnstableApi::class)
+    public fun create(
+        context: Context,
+        parentCoroutineContext: CoroutineContext,
+        audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
+        mediaSourceInterceptor: ((MediaSource, MediaData) -> MediaSource)? = null,
+    ): ExoPlayerMediampPlayer = create(context, parentCoroutineContext, audioTimeStretch, mediaSourceInterceptor, null)
 }

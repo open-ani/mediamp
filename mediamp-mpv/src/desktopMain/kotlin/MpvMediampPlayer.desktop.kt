@@ -19,8 +19,10 @@ import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
+import org.openani.mediamp.mpv.internal.OpenGLSurfaceRingBackend
 import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
+import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
@@ -36,7 +38,12 @@ actual class MpvMediampPlayer(
      * dispatcher's thread identity itself for the fail-fast command check.
      */
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
+    /**
+     * Optional hook to customize mpv options (e.g. `demuxer-max-bytes`, `cache-secs`) right
+     * before the native handle is initialized. See [JvmMpvMediampPlayer] for details.
+     */
+    configureOptions: ((MPVHandle) -> Unit)? = null,
+) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher, configureOptions) {
 
     // Windows cannot choose its producer until the window has a live Skiko redrawer.
     // Keep the backend, consumer, and lifecycle together so frame previews use the same path.
@@ -51,6 +58,14 @@ actual class MpvMediampPlayer(
     internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
     private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
     internal val renderContextLifecycle: MpvRenderContextLifecycle? get() = rendering?.lifecycle
+
+    /**
+     * Raised on the machine thread before native teardown is scheduled. Compose disposal
+     * may arrive later, after the handle has already been finalized, so every surface entry
+     * point must become a no-op as soon as this flag is visible.
+     */
+    @Volatile
+    private var surfaceTeardownStarted = false
 
     init {
         currentSurfaceBackend()?.let { attachBackend(it) }
@@ -86,18 +101,20 @@ actual class MpvMediampPlayer(
 
     /** Explicitly creates a windowless render context for headless capture. Idempotent. */
     internal fun createRenderContext(): Boolean {
+        if (surfaceTeardownStarted) return false
         if (rendering == null) headlessSurfaceBackend()?.let { attachBackend(it) }
         return ringBackend?.createRenderContext(handle.ptr) ?: false
     }
 
     internal fun releaseRenderContext(): Boolean =
-        ringBackend?.destroyRenderContext(handle.ptr) ?: false
+        !surfaceTeardownStarted && (ringBackend?.destroyRenderContext(handle.ptr) ?: false)
 
     override fun ensureRenderContextForLoad(): Boolean =
-        renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend()
+        !surfaceTeardownStarted && (renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend())
 
     /** Returns null until Skiko has chosen its redrawer; loading waits for that selection. */
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
+        if (surfaceTeardownStarted) return null
         val backend = currentSurfaceBackend(layerRedrawer) ?: return null
         attachBackend(backend)
         return backend.createSkiaInterop(layerRedrawer)
@@ -105,25 +122,51 @@ actual class MpvMediampPlayer(
 
     /** See [MpvSurfaceConsumer.requestSurface]. */
     internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =
-        surfaceRing?.requestSurface(width, height, devicePtr) ?: false
+        !surfaceTeardownStarted && (surfaceRing?.requestSurface(width, height, devicePtr) ?: false)
 
     /** See [MpvSurfaceConsumer.refreshDeviceIfChanged]. */
     internal fun refreshDeviceIfChanged(devicePtr: Long) {
-        surfaceRing?.refreshDeviceIfChanged(devicePtr)
+        if (!surfaceTeardownStarted) surfaceRing?.refreshDeviceIfChanged(devicePtr)
     }
 
     /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
     internal fun currentFrameImage(directContext: DirectContext): Image? =
-        surfaceRing?.currentFrameImage(directContext)
+        if (surfaceTeardownStarted) null else surfaceRing?.currentFrameImage(directContext)
 
     /** See [MpvSurfaceConsumer.release]. */
     internal fun releaseSurface() {
-        surfaceRing?.release()
+        if (!surfaceTeardownStarted) surfaceRing?.release()
     }
 
     /** See [MpvSurfaceBackend.readSurfacePixels]. */
     internal fun readSurfacePixels(dims: IntArray): IntArray? =
-        ringBackend?.readSurfacePixels(handle.ptr, dims)
+        if (surfaceTeardownStarted) null else ringBackend?.readSurfacePixels(handle.ptr, dims)
+
+    internal fun isSurfaceTeardownStarted(): Boolean = surfaceTeardownStarted
+
+    internal override fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean =
+        !surfaceTeardownStarted && super.setRenderUpdateListener(listener)
+
+    override fun nativeTeardownStarting() {
+        surfaceTeardownStarted = true
+    }
+
+    override fun prepareNativeTeardown() {
+        val ptr = handle.ptr
+        runOnAwtEventThreadAndWait {
+            // Skia wrappers belong to Skiko's consumer render thread. Closing them here also
+            // establishes an event-queue barrier after any draw/swap already in progress.
+            surfaceRing?.release()
+
+            val backend = ringBackend
+            if (backend === OpenGLSurfaceRingBackend) {
+                // Skiko and mediamp borrow the same Xlib Display. Mesa's DRI3 GLX teardown
+                // can deadlock when glXDestroyContext/glXDestroyPbuffer runs concurrently
+                // with Skiko's swapBuffers. The queued AWT event serializes both operations.
+                backend.destroyRenderContext(ptr)
+            }
+        }
+    }
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot

@@ -133,7 +133,9 @@ public interface MediampPlayer : AutoCloseable {
 
 **Buffering feature**: `Buffering.isBuffering` is deprecated and forwards to
 `state.map { it.isBuffering }`; the feature survives only for `bufferedPercentage`
-(how much is buffered ahead — genuinely extra data). One source of truth for "buffering".
+(how much is buffered ahead — genuinely extra data) and `bufferedPositionMillis` (the media
+position up to which data is buffered ahead of the playhead; `-1` when unknown). One source of
+truth for "buffering".
 
 ## 3. Command semantics
 

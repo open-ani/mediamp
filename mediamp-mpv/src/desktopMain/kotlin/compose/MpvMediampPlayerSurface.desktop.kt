@@ -146,6 +146,7 @@ private fun MpvMediampPlayerSurfaceRing(
                 }
                 if (configured) delay(150.milliseconds)
                 while (true) {
+                    if (player.isSurfaceTeardownStarted()) return@collectLatest
                     val devicePtr = runCatching { deviceInterop.renderDevicePtr }.getOrNull()
                     if (devicePtr != null &&
                         player.requestSurface(size.width, size.height, devicePtr)
@@ -162,6 +163,7 @@ private fun MpvMediampPlayerSurfaceRing(
     Canvas(modifier.onSizeChanged { canvasSize.value = it }) {
         frameTick.longValue // subscribe: redraw whenever mpv publishes a new frame
 
+        if (player.isSurfaceTeardownStarted()) return@Canvas
         if (drawResolver == null) {
             logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
             return@Canvas

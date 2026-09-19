@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
@@ -24,6 +25,7 @@ import org.openani.mediamp.PlaybackException
 import org.openani.mediamp.PlaybackSessionHandle
 import org.openani.mediamp.TransportSnapshot
 import org.openani.mediamp.features.AspectRatioMode
+import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
@@ -55,8 +57,8 @@ import kotlin.reflect.KClass
  *   held until released ([OpenBehavior.Hold]), or failing with a given [PlaybackException]
  *   ([OpenBehavior.Fail]).
  * - [injectStall], [injectEnded], [injectError], [injectExternalPlayWhenReady],
- *   [injectPosition] and [injectProperties] simulate native playback facts exactly the way a
- *   real adapter would report them.
+ *   [injectPosition], [injectProperties] and [injectBufferedPosition] simulate native playback
+ *   facts exactly the way a real adapter would report them.
  * - [holdSeeks] and [completeHeldSeek] control native seek completion, for testing the
  *   machine's seek gating. By default seeks complete synchronously.
  *
@@ -273,6 +275,15 @@ public class TestMediampPlayer private constructor(
     }
 
     /**
+     * Reports the media position up to which data is buffered ahead of the playhead, driving
+     * [Buffering.bufferedPositionMillis]. Pass [Buffering.UNKNOWN_POSITION] to report that the
+     * buffered position is unknown. Reset to unknown on every open and stop.
+     */
+    public fun injectBufferedPosition(positionMillis: Long) {
+        buffering.bufferedPositionMillis.value = positionMillis
+    }
+
+    /**
      * Completes the pending native seek at its target position, if [holdSeeks] held one.
      *
      * Attribution follows real engines under coalescing (spec §5): the completion is stamped
@@ -357,6 +368,7 @@ public class TestMediampPlayer private constructor(
         nativePlayWhenReady = playWhenReady
         nativeStalled = openInitiallyStalled
         heldSeekPositionMillis = null
+        buffering.reset()
 
         return OpenResult(
             sessionResources = null,
@@ -412,11 +424,27 @@ public class TestMediampPlayer private constructor(
         nativeStalled = false
         nativePositionMillis = 0L
         heldSeekPositionMillis = null
+        buffering.reset()
     }
     // endregion
 
+    private val buffering = TestBuffering()
+
+    private inner class TestBuffering : Buffering {
+        @Suppress("OVERRIDE_DEPRECATION")
+        override val isBuffering: Flow<Boolean> = state.map { it.isBuffering }
+        override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+        override val bufferedPositionMillis: MutableStateFlow<Long> = MutableStateFlow(Buffering.UNKNOWN_POSITION)
+
+        fun reset() {
+            bufferedPercentage.value = 0
+            bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+        }
+    }
+
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(PlaybackSpeed, machinePlaybackSpeed())
+        add(Buffering, buffering)
         add(
             MediaMetadata,
             object : MediaMetadata {

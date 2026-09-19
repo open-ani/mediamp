@@ -43,6 +43,7 @@ import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
 import org.openani.mediamp.mpv.internal.MpvSessionAdapter
 import org.openani.mediamp.mpv.internal.mpvErrorToPlaybackException
+import org.openani.mediamp.mpv.internal.runNativeTeardownSequence
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
@@ -84,12 +85,27 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  * `isStalled` is authoritative only while the native transport is playing. On Linux and Windows the
  * `surface-independent-open` capability is degraded: [openImpl] suspends until the selected render
  * context exists (see [ensureRenderContextForLoad]).
+ *
+ * @param configureOptions optional hook invoked once during construction, after Mediamp's
+ *   default mpv options are set and right before `mpv_initialize`, so options set here win and
+ *   options that can only be set before initialization are still accepted. Use
+ *   [MPVHandle.option] to customize the native player, e.g. buffering:
+ *   ```
+ *   configureOptions = { handle ->
+ *       handle.option("demuxer-max-bytes", "${256 * 1024 * 1024}")
+ *       handle.option("cache-secs", "120")
+ *   }
+ *   ```
+ *   Do not call [MPVHandle.initialize] or [MPVHandle.close] here. Mediamp relies on its
+ *   render/output options (`vo`, `gpu-context`) and re-applies `idle`/`keep-open` after
+ *   initialization; overriding the former may break video output.
  */
 @kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val configureOptions: ((MPVHandle) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = mainDispatcher,
@@ -209,6 +225,10 @@ abstract class JvmMpvMediampPlayer(
                     sessionAdapter?.session?.notifyPosition((value * 1000).toLong().coerceAtLeast(0L))
                 }
 
+                "demuxer-cache-time" -> {
+                    buffering.bufferedPositionMillis.value = (value * 1000).toLong().coerceAtLeast(0L)
+                }
+
                 "duration" -> {
                     val adapter = sessionAdapter ?: return
                     adapter.lastDurationMillis = (value * 1000).toLong().takeIf { it > 0 } // unknown -> null
@@ -321,7 +341,7 @@ abstract class JvmMpvMediampPlayer(
         }
     }
 
-    internal fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
+    internal open fun setRenderUpdateListener(listener: RenderUpdateListener?): Boolean {
         return handle.setRenderUpdateListener(listener)
     }
 
@@ -437,6 +457,10 @@ abstract class JvmMpvMediampPlayer(
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
 
+        // Last before initialize(), so user options win over the defaults above and
+        // pre-initialization-only options can still be set.
+        configureOptions?.invoke(handle)
+
         handle.initialize()
 
         handle.option("save-position-on-quit", "no")
@@ -452,6 +476,7 @@ abstract class JvmMpvMediampPlayer(
         handle.observeProperty("volume", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("demuxer-cache-time", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
@@ -515,7 +540,7 @@ abstract class JvmMpvMediampPlayer(
         // headless modes proceed immediately.
         awaitRenderContextForLoad()
 
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
             is UriMediaData -> {
@@ -672,17 +697,36 @@ abstract class JvmMpvMediampPlayer(
         sessionAdapter = null
         handle.command("stop")
         mediaMetadata.clear()
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
     }
+
+    /**
+     * Called synchronously on the machine thread when close starts, before any asynchronous
+     * native teardown is launched. Desktop uses this to reject late Compose surface calls.
+     */
+    protected open fun nativeTeardownStarting() {}
+
+    /**
+     * Runs on the teardown thread immediately before the mpv handle is destroyed.
+     *
+     * Platform implementations may block here while serializing graphics-resource release
+     * with their UI/render thread. Throwing prevents handle destruction, but the native
+     * player still receives a stop request so failed graphics cleanup does not silently
+     * skip transport shutdown.
+     */
+    protected open fun prepareNativeTeardown() {}
 
     override fun closeImpl() {
         nativeTeardownStarted = true
+        nativeTeardownStarting()
         // Unblock reads still parked in a session await context before the teardown thread
         // joins mpv's demux threads (a blocked read holds the native stream lock).
         inputAwaitParent.cancel()
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
+        buffering.reset()
+        val instanceHandle = handle.ptr
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
         // thread, which used to hang the UI thread (v1 defect M8). Daemon so that a wedged
@@ -690,9 +734,19 @@ abstract class JvmMpvMediampPlayer(
         // thread completes normally, and once the JVM is exiting anyway the OS reclaims
         // whatever a killed teardown would have released.
         thread(name = "mediamp-mpv-teardown", isDaemon = true) {
-            runCatching { handle.command("stop") }
-            runCatching { handle.destroy() }
-            runCatching { handle.close() }
+            runNativeTeardownSequence(
+                prepare = { prepareNativeTeardown() },
+                stop = { handle.command("stop") },
+                destroy = { handle.destroy() },
+                close = { handle.close() },
+                onPrepareFailure = {
+                    MPVLog.error(
+                        instanceHandle,
+                        "platform render teardown barrier failed; native handle destruction aborted after requesting playback stop",
+                        it,
+                    )
+                },
+            )
         }
     }
     // endregion

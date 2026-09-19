@@ -95,12 +95,20 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  * - No [org.openani.mediamp.features.FramePreview] (JVM-only decoder).
  * - [Screenshots] uses mpv's `screenshot-to-file` command, which cannot convert hwdec
  *   frames on all builds (the JVM desktop backend has a native surface-ring readback).
+ *
+ * @param configureOptions optional hook invoked once during construction, after Mediamp's
+ *   default mpv options are set and right before `mpv_initialize`, so options set here win and
+ *   options that can only be set before initialization are still accepted. Use
+ *   [MPVHandle.option] to customize the native player, e.g. buffering
+ *   (`demuxer-max-bytes`, `cache-secs`). Do not call [MPVHandle.initialize] or
+ *   [MPVHandle.close] here.
  */
 @OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 actual class MpvMediampPlayer(
     context: Any = Unit,
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val configureOptions: ((MPVHandle) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = mainDispatcher,
@@ -203,6 +211,10 @@ actual class MpvMediampPlayer(
                 "time-pos" -> {
                     // Stale pre-seek reports are dropped by the machine's seek gating.
                     sessionAdapter?.session?.notifyPosition((value * 1000).toLong().coerceAtLeast(0L))
+                }
+
+                "demuxer-cache-time" -> {
+                    buffering.bufferedPositionMillis.value = (value * 1000).toLong().coerceAtLeast(0L)
                 }
 
                 "duration" -> {
@@ -367,6 +379,10 @@ actual class MpvMediampPlayer(
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
 
+        // Last before initialize(), so user options win over the defaults above and
+        // pre-initialization-only options can still be set.
+        configureOptions?.invoke(handle)
+
         handle.initialize()
 
         handle.option("save-position-on-quit", "no")
@@ -382,6 +398,7 @@ actual class MpvMediampPlayer(
         handle.observeProperty("volume", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("demuxer-cache-time", MPVFormat.MPV_FORMAT_DOUBLE)
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
@@ -396,7 +413,7 @@ actual class MpvMediampPlayer(
         playWhenReady: Boolean,
         startPositionMillis: Long,
     ): OpenResult {
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
 
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
@@ -553,7 +570,7 @@ actual class MpvMediampPlayer(
         sessionAdapter = null
         handle.command("stop")
         mediaMetadata.clear()
-        buffering.bufferedPercentage.value = 0
+        buffering.reset()
     }
 
     @OptIn(DelicateCoroutinesApi::class)
@@ -564,6 +581,7 @@ actual class MpvMediampPlayer(
         inputAwaitParent.cancel()
         sessionAdapter = null
         mediaMetadata.clear()
+        buffering.reset()
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
         // thread, which must not hang the UI thread.

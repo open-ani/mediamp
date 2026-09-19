@@ -112,6 +112,22 @@ import androidx.media3.common.Player as Media3Player
  * @param mediaSourceInterceptor optional hook (spec §11) invoked on the main dispatcher during
  *   each open, after the [MediaSource] is built and before it is set on the player. Use it to
  *   wrap or replace the source (e.g. subtitle burn-in pipelines) without racing the open.
+ * @param configurePlayerBuilder optional hook invoked once on the constructing (UI) thread,
+ *   right before the underlying [ExoPlayer] is built. It receives the [ExoPlayer.Builder]
+ *   with Mediamp's defaults already applied, so anything set here wins. Use it to customize
+ *   the native player, e.g. buffering:
+ *   ```
+ *   configurePlayerBuilder = { builder ->
+ *       builder.setLoadControl(
+ *           DefaultLoadControl.Builder()
+ *               .setBufferDurationsMs(minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
+ *               .build(),
+ *       )
+ *   }
+ *   ```
+ *   Mediamp relies on its own track selector (subtitle selection through [MediaMetadata]) and,
+ *   for [ExoPlayerAudioTimeStretch.HighQualityWsola], its own renderers factory; replacing
+ *   either via `setTrackSelector`/`setRenderersFactory` disables the corresponding feature.
  *
  * @see ExoPlayerMediampPlayerFactory
  */
@@ -122,6 +138,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     parentCoroutineContext: CoroutineContext,
     audioTimeStretch: ExoPlayerAudioTimeStretch = ExoPlayerAudioTimeStretch.Media3Default,
     private val mediaSourceInterceptor: ((MediaSource, MediaData) -> MediaSource)? = null,
+    configurePlayerBuilder: ((ExoPlayer.Builder) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = Dispatchers.Main.immediate,
@@ -134,14 +151,22 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     public constructor(
         context: Context,
         parentCoroutineContext: CoroutineContext,
-    ) : this(context, parentCoroutineContext, ExoPlayerAudioTimeStretch.Media3Default, null)
+    ) : this(context, parentCoroutineContext, ExoPlayerAudioTimeStretch.Media3Default, null, null)
 
     @UiThread
     public constructor(
         context: Context,
         parentCoroutineContext: CoroutineContext,
         audioTimeStretch: ExoPlayerAudioTimeStretch,
-    ) : this(context, parentCoroutineContext, audioTimeStretch, null)
+    ) : this(context, parentCoroutineContext, audioTimeStretch, null, null)
+
+    @UiThread
+    public constructor(
+        context: Context,
+        parentCoroutineContext: CoroutineContext,
+        audioTimeStretch: ExoPlayerAudioTimeStretch,
+        mediaSourceInterceptor: ((MediaSource, MediaData) -> MediaSource)?,
+    ) : this(context, parentCoroutineContext, audioTimeStretch, mediaSourceInterceptor, null)
 
     private val backgroundScope: CoroutineScope = CoroutineScope(
         parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
@@ -323,6 +348,8 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 val renderersFactory = WsolaRenderersFactory(context)
                 setRenderersFactory(renderersFactory)
             }
+            // Last, so user configuration wins over the defaults above.
+            configurePlayerBuilder?.invoke(this)
         }
         .build()
         .apply {
@@ -352,6 +379,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 if (session != null && session.isValid) {
                     session.notifyPosition(exoPlayer.currentPosition)
                     buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
+                    buffering.bufferedPositionMillis.value = exoPlayer.bufferedPosition
                 }
                 delay(0.1.seconds)
             }
@@ -383,6 +411,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     ): OpenResult {
         val epoch = ++openEpoch
         openingPhase = true
+        buffering.reset()
         var sessionInput: SeekableInput? = null
         var sessionInputAwaitJob: Job? = null
         try {
@@ -491,6 +520,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     override fun stopImpl() {
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
+        buffering.reset()
     }
 
     override fun closeImpl() {
@@ -683,6 +713,12 @@ internal class ExoPlayerBuffering(
     )
     override val isBuffering: Flow<Boolean> = state.map { it.isBuffering }
     override val bufferedPercentage: MutableStateFlow<Int> = MutableStateFlow(0)
+    override val bufferedPositionMillis: MutableStateFlow<Long> = MutableStateFlow(Buffering.UNKNOWN_POSITION)
+
+    fun reset() {
+        bufferedPercentage.value = 0
+        bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+    }
 }
 
 @kotlin.OptIn(InternalForInheritanceMediampApi::class)

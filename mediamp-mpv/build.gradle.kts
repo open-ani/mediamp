@@ -215,6 +215,11 @@ if (hostMpvRuntimeJarTaskName != null && hostMpvRuntimeJarTaskName in tasks.name
     }
 }
 
+// The Android AAR bundles the LGPL libmpv (.so) built with -Dgpl=false; every other
+// publication of this module is pure Kotlin/JNI glue (Apache-2.0). Desktop natives ship in
+// the separate mediamp-mpv-runtime-* artifacts (see MpvRuntimePublishing.kt).
+setPublicationLicenses("android", PomLicenses.APACHE_WITH_LGPL_RUNTIME)
+
 mavenPublishing {
     configure(
         KotlinMultiplatform(JavadocJar.Empty(), SourcesJar.Sources(), listOf("debug", "release")),
