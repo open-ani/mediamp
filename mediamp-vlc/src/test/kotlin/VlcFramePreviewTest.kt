@@ -13,7 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.io.SeekableInput
@@ -39,7 +38,6 @@ import kotlin.test.assertTrue
  * Run manually:
  *   ./gradlew :mediamp-vlc:test --tests "org.openani.mediamp.vlc.VlcFramePreviewTest"
  */
-@OptIn(ExperimentalMediampApi::class)
 class VlcFramePreviewTest {
 
     private fun assumeRealPlaybackEnvironment() {
@@ -134,7 +132,6 @@ class VlcFramePreviewTest {
         )
     }
 
-    @OptIn(ExperimentalMediampApi::class)
     private class FileSeekableInputMediaData(private val file: File) : SeekableInputMediaData {
         override val uri: String get() = "test://${file.name}"
         override val extraFiles: MediaExtraFiles get() = MediaExtraFiles()

@@ -8,7 +8,6 @@
 
 @file:OptIn(
     ExperimentalCoroutinesApi::class,
-    ExperimentalMediampApi::class,
     InternalMediampApi::class,
     InternalForInheritanceMediampApi::class,
 )
@@ -27,7 +26,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediaLoadCancellationException

@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(ExperimentalCoroutinesApi::class, ExperimentalMediampApi::class)
+@file:OptIn(ExperimentalCoroutinesApi::class)
 
 package org.openani.mediamp.test
 
@@ -20,7 +20,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.MediaLoadCancellationException
 import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.MediampPlayer

@@ -17,7 +17,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.OpenResult
@@ -103,7 +102,7 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  *   (`demuxer-max-bytes`, `cache-secs`). Do not call [MPVHandle.initialize] or
  *   [MPVHandle.close] here.
  */
-@OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
+@OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 actual class MpvMediampPlayer(
     context: Any = Unit,
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,

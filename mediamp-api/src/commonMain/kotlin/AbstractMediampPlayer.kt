@@ -69,7 +69,7 @@ import kotlin.coroutines.EmptyCoroutineContext
  *   dispatcher where the platform has one ([Dispatchers.Default] on wasmJs).
  */
 @InternalMediampApi
-@OptIn(InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
+@OptIn(InternalForInheritanceMediampApi::class)
 public abstract class AbstractMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
     final override val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,

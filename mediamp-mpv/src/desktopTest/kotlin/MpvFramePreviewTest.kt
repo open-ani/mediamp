@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.io.SeekableInput
@@ -39,7 +38,6 @@ import kotlin.test.assertTrue
  * [MpvMediampPlayerSmokeTest]). Run manually:
  *   ./gradlew :mediamp-mpv:desktopTest --tests "org.openani.mediamp.mpv.MpvFramePreviewTest"
  */
-@OptIn(ExperimentalMediampApi::class)
 class MpvFramePreviewTest {
 
     private fun devNativeDir(): File? =
@@ -279,7 +277,6 @@ class MpvFramePreviewTest {
         )
     }
 
-    @OptIn(ExperimentalMediampApi::class)
     private class FileSeekableInputMediaData(
         private val file: File,
         /** Artificial latency per read, to widen decode/seek timing windows in race tests. */

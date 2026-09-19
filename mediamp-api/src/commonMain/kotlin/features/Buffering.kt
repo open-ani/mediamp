@@ -9,13 +9,11 @@
 package org.openani.mediamp.features
 
 import kotlinx.coroutines.flow.Flow
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 
 /**
  * An optional feature of the [org.openani.mediamp.MediampPlayer] that allows retrieving buffering information.
  */
-@ExperimentalMediampApi
 @SubclassOptInRequired(InternalForInheritanceMediampApi::class)
 public interface Buffering : Feature {
     /**

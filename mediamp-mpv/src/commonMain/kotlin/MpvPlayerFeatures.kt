@@ -58,7 +58,7 @@ internal class MpvAudioLevelController(private val handle: MPVHandle) : AudioLev
     }
 }
 
-@OptIn(InternalForInheritanceMediampApi::class, org.openani.mediamp.ExperimentalMediampApi::class)
+@OptIn(InternalForInheritanceMediampApi::class)
 internal class MpvBuffering(state: StateFlow<PlayerState>) : Buffering {
     @Deprecated(
         "Buffering is part of the core state now. Use player.state.map { it.isBuffering }.",

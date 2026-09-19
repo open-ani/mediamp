@@ -6,8 +6,6 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(ExperimentalMediampApi::class)
-
 package org.openani.mediamp.test.features
 
 import kotlinx.coroutines.flow.first
@@ -15,7 +13,6 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.source.UriMediaData
 import org.openani.mediamp.test.TestMediampPlayer

@@ -17,7 +17,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.PlaybackState
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.source.MediaData
@@ -65,7 +64,6 @@ class VlcSeekSkipRaceTest {
         runScenario(UriMediaData("file://${ensureTestVideo().absolutePath}"))
     }
 
-    @OptIn(ExperimentalMediampApi::class)
     @Test
     fun `repro - rapid skips on a slow seekable input`() {
         assumeRealPlaybackEnvironment()
@@ -184,7 +182,6 @@ class VlcSeekSkipRaceTest {
      * torrent/HTTP streams, with [seekLatencyMillis] of artificial latency per seek
      * (≈ waiting for a torrent piece / range request).
      */
-    @OptIn(ExperimentalMediampApi::class)
     private class SlowSeekMediaData(
         private val file: File,
         private val seekLatencyMillis: Long,

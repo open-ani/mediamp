@@ -6,7 +6,7 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-@file:OptIn(ExperimentalMediampApi::class, InternalMediampApi::class)
+@file:OptIn(InternalMediampApi::class)
 
 package org.openani.mediamp.mpv
 
@@ -16,7 +16,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.features.Buffering

@@ -8,8 +8,6 @@
 
 package org.openani.mediamp.source
 
-import org.openani.mediamp.ExperimentalMediampApi
-
 /**
  * A [MediaData] that represents a media that can be fetched from a URI, typically a streaming media.
  */
@@ -48,7 +46,6 @@ public fun UriMediaData(
  *
  * @param uri The URI of the media. For example `https://example.com/video.mp4` or `file:///sdcard/video.mp4`.
  */
-@OptIn(ExperimentalMediampApi::class)
 public fun UriMediaData(
     uri: String,
     headers: Map<String, String> = emptyMap(),
@@ -57,11 +54,10 @@ public fun UriMediaData(
 ): UriMediaData = UriMediaDataImpl(uri, headers, extraFiles, options)
 
 
-internal class UriMediaDataImpl @ExperimentalMediampApi constructor(
+internal class UriMediaDataImpl(
     override val uri: String,
     override val headers: Map<String, String>,
     override val extraFiles: MediaExtraFiles,
-    @property:ExperimentalMediampApi
     override val options: List<String> = emptyList(),
 ) : MediaData, UriMediaData {
     constructor(

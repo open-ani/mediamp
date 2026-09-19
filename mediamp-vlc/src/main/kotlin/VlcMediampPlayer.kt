@@ -31,7 +31,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediampPlayer
@@ -155,7 +154,6 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
     private val videoAspectRatio = VlcVideoAspectRatio()
     private val framePreview = VlcFramePreview { openResource.value?.mediaData }
 
-    @OptIn(ExperimentalMediampApi::class)
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(Screenshots.Key, screenshots)
         add(Buffering.Key, buffering)
@@ -381,7 +379,6 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
         return playbackState.value
     }
 
-    @OptIn(ExperimentalMediampApi::class)
     override suspend fun setMediaDataImpl(data: MediaData): VlcjData = when (data) {
         is UriMediaData -> {
             playbackStateMapper.reset()
@@ -742,7 +739,7 @@ internal class VlcAudioLevelController(
     }
 }
 
-@OptIn(InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
+@OptIn(InternalForInheritanceMediampApi::class)
 internal class VlcBuffering(
     private val currentPositionMillis: StateFlow<Long>,
     private val playbackState: StateFlow<PlaybackState>,

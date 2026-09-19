@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.PlaybackEvent
@@ -215,7 +214,7 @@ class MpvMediampPlayerSmokeTest {
         }
     }
 
-    @OptIn(InternalMediampApi::class, ExperimentalMediampApi::class)
+    @OptIn(InternalMediampApi::class)
     @Test
     fun `uri playback - state machine, seek, features`() {
         if (!prepareOrSkip()) return
@@ -446,7 +445,7 @@ class MpvMediampPlayerSmokeTest {
      * Pixel-level verification: the real Metal render path must produce frames whose
      * content matches the source video, and seeking must update the rendered frame.
      */
-    @OptIn(InternalMediampApi::class, ExperimentalMediampApi::class)
+    @OptIn(InternalMediampApi::class)
     @Test
     fun `screenshot pixel verification - frame content matches source and updates on seek`() {
         if (!prepareOrSkip()) return
@@ -510,7 +509,6 @@ class MpvMediampPlayerSmokeTest {
      * and returned -1, which mpv's stream layer treats as EOF: playback "finished" on the
      * first seek into undownloaded data.
      */
-    @OptIn(ExperimentalMediampApi::class)
     @Test
     fun `createInput await context outlives the open and is cancelled with the session`() {
         if (!prepareOrSkip()) return
@@ -560,7 +558,6 @@ class MpvMediampPlayerSmokeTest {
         }
     }
 
-    @OptIn(ExperimentalMediampApi::class)
     private class FileSeekableInputMediaData(private val file: File) : SeekableInputMediaData {
         override val uri: String get() = "test://${file.name}"
         override val extraFiles: MediaExtraFiles get() = MediaExtraFiles.EMPTY

@@ -10,7 +10,6 @@ package org.openani.mediamp.mpv.internal
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.mpv.MPVHandle
@@ -33,7 +32,6 @@ private const val FRAME_PREVIEW_LOAD_TARGET_PREFIX = "mediamp://frame_preview/"
  * cache would read ahead tens of MB after every scrub seek, which is hostile to
  * torrent-backed [SeekableInputMediaData] sources.
  */
-@OptIn(ExperimentalMediampApi::class)
 internal class MpvPreviewDecoder(
     context: Any,
     private val ringBackend: MpvSurfaceBackend,

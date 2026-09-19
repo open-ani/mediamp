@@ -16,7 +16,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.io.SeekableInput
@@ -48,7 +47,6 @@ import kotlin.math.roundToInt
  * the buffer format), plays muted until the first frame arrives, then stays paused; each request
  * is a seek-while-paused, which makes VLC decode and display the frame at the target position.
  */
-@OptIn(ExperimentalMediampApi::class)
 internal class VlcFramePreview(
     /** The media currently playing in the main player, or `null` if none. */
     private val currentMediaData: () -> MediaData?,

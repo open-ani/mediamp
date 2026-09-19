@@ -26,7 +26,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.mpv.internal.MpvPreviewDecoder
@@ -58,7 +57,6 @@ internal actual fun createMpvFramePreview(
  * and renders into a small native surface ring sized per request; each request is a
  * keyframe seek followed by a direct pixel readback.
  */
-@OptIn(ExperimentalMediampApi::class)
 internal class MpvFramePreview(
     private val mainPlayer: JvmMpvMediampPlayer,
     private val context: Any,

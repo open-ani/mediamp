@@ -15,7 +15,6 @@ import kotlinx.io.IOException
 import kotlinx.io.files.FileNotFoundException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
 import org.openani.mediamp.io.SystemFileSeekableInput
 import org.openani.mediamp.io.SystemFileIoDispatcher
@@ -24,7 +23,6 @@ import kotlin.coroutines.CoroutineContext
 /**
  * A [MediaData] that represents a media that is backed by a system file.
  */
-@OptIn(ExperimentalMediampApi::class)
 public sealed interface SystemFileMediaData : SeekableInputMediaData {
 
     /**
@@ -34,7 +32,6 @@ public sealed interface SystemFileMediaData : SeekableInputMediaData {
 }
 
 
-@OptIn(ExperimentalMediampApi::class)
 internal class SystemFileMediaDataImpl(
     override val file: Path,
     override val extraFiles: MediaExtraFiles,

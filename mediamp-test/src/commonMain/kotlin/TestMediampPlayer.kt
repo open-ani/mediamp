@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediampPlayer
@@ -92,7 +91,7 @@ import kotlin.reflect.KClass
  * (or `runCurrent()`); with the default [Dispatchers.Unconfined] they take effect before the
  * injection call returns.
  */
-@OptIn(InternalForInheritanceMediampApi::class, InternalMediampApi::class, ExperimentalMediampApi::class)
+@OptIn(InternalForInheritanceMediampApi::class, InternalMediampApi::class)
 public class TestMediampPlayer private constructor(
     coroutineContext: CoroutineContext,
     mainDispatcher: CoroutineDispatcher,

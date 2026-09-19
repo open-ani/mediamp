@@ -9,7 +9,6 @@
 package org.openani.mediamp.source
 
 import kotlinx.io.IOException
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.io.SeekableInput
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -31,7 +30,6 @@ public sealed interface MediaData {
      *
      * Note that this is implementation-specific. Some implementations may ignore this.
      */
-    @ExperimentalMediampApi
     public val options: List<String>
 
     /**
@@ -46,7 +44,6 @@ public sealed interface MediaData {
 /**
  * A [MediaData] that represents a media that may open a custom [SeekableInput] to provide the payload for playing.
  */
-@SubclassOptInRequired(ExperimentalMediampApi::class)
 public interface SeekableInputMediaData : MediaData {
     /**
      * The unique identifier of the media data.

@@ -68,7 +68,6 @@ import kotlin.reflect.KClass
 @OptIn(
     InternalForInheritanceMediampApi::class,
     InternalMediampApi::class,
-    ExperimentalMediampApi::class,
 )
 public class WebMediampPlayer(
     public val videoElement: HTMLVideoElement = document.createElement("video") as HTMLVideoElement,

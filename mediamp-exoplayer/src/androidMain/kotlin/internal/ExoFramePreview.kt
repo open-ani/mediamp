@@ -17,7 +17,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.io.SeekableInput
@@ -34,7 +33,6 @@ import kotlin.coroutines.cancellation.CancellationException
  * torrent-like media); a request at a position whose data is not locally available will block
  * until the data arrives, so callers should prefer positions that are already downloaded.
  */
-@OptIn(ExperimentalMediampApi::class)
 internal class ExoFramePreview(
     /** The media currently playing in the main player, or `null` if none. */
     private val currentMediaData: () -> MediaData?,

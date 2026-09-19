@@ -51,7 +51,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.OpenResult
@@ -132,7 +131,7 @@ import androidx.media3.common.Player as Media3Player
  * @see ExoPlayerMediampPlayerFactory
  */
 @OptIn(UnstableApi::class)
-@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
+@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 public class ExoPlayerMediampPlayer @UiThread public constructor(
     private val context: Context,
     parentCoroutineContext: CoroutineContext,
@@ -703,7 +702,7 @@ internal class ExoPlayerMediaMetadata : MediaMetadata {
     override val chapters: StateFlow<List<Chapter>> = MutableStateFlow(listOf())
 }
 
-@kotlin.OptIn(ExperimentalMediampApi::class, InternalForInheritanceMediampApi::class)
+@kotlin.OptIn(InternalForInheritanceMediampApi::class)
 internal class ExoPlayerBuffering(
     state: StateFlow<PlayerState>,
 ) : Buffering {

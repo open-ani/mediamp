@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import org.openani.mediamp.AbstractMediampPlayer
-import org.openani.mediamp.ExperimentalMediampApi
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.OpenResult
@@ -100,7 +99,7 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  *   render/output options (`vo`, `gpu-context`) and re-applies `idle`/`keep-open` after
  *   initialization; overriding the former may break video output.
  */
-@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
+@kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
 abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
