@@ -11,7 +11,7 @@
 package org.openani.mediamp.mpv
 
 import com.sun.net.httpserver.HttpServer
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -188,19 +188,27 @@ class MpvBufferingTest {
     }
 
     private fun withPlayer(block: suspend (player: MpvMediampPlayer, buffering: Buffering) -> Unit) {
-        // A dedicated serial dispatcher stands in for the UI thread: the machine is confined
-        // to it, and this test body runs on it too, so command-thread rules hold.
-        val mainDispatcher = Dispatchers.Default.limitedParallelism(1)
-        runBlocking(mainDispatcher) {
-            val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = mainDispatcher)
-            try {
-                // Audio device drain is not under test; see MpvHeadlessEofTest.
-                (player.impl as MPVHandle).setPropertyString("ao", "null")
-                val buffering = checkNotNull(player.features[Buffering]) { "mpv player must expose Buffering" }
-                block(player, buffering)
-            } finally {
-                player.close()
+        // A dedicated single-thread dispatcher stands in for the UI thread: the machine is
+        // confined to it, and this test body runs on it too, so command-thread rules hold.
+        // It must own exactly one physical thread: `limitedParallelism(1)` only serializes,
+        // and the player's main-thread check compares thread identity across suspensions.
+        val mainDispatcher = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "mpv-buffering-test-main").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+        try {
+            runBlocking(mainDispatcher) {
+                val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = mainDispatcher)
+                try {
+                    // Audio device drain is not under test; see MpvHeadlessEofTest.
+                    (player.impl as MPVHandle).setPropertyString("ao", "null")
+                    val buffering = checkNotNull(player.features[Buffering]) { "mpv player must expose Buffering" }
+                    block(player, buffering)
+                } finally {
+                    player.close()
+                }
             }
+        } finally {
+            mainDispatcher.close()
         }
     }
 
