@@ -8,7 +8,6 @@
 
 package org.openani.mediamp.mpv.internal
 
-import org.jetbrains.skiko.SkiaLayer
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.nCopyLatestFrameWindowsOpenGL
 import org.openani.mediamp.mpv.nCreateRenderContextWindowsOpenGL
@@ -18,13 +17,14 @@ import org.openani.mediamp.mpv.nHasWindowsOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsWindowsOpenGL
 import org.openani.mediamp.mpv.nSaveSurfacePngWindowsOpenGL
 import org.openani.mediamp.mpv.nSetSurfaceConfigWindowsOpenGL
+import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import org.openani.mediamp.mpv.utils.SkiaWindowsOpenGLInterop
 
 /**
  * Windows OpenGL fallback backend (render_opengl_win.cpp): drives mpv when Compose
- * renders with Skiko's OpenGL backend (`SKIKO_RENDER_API=OPENGL`) instead of the
- * Direct3D default, where the D3D11 shared-texture path has no D3D12 consumer device.
+ * renders with Skiko's WindowsOpenGLRedrawer (configured explicitly or selected by
+ * Skiko's fallback) instead of the Direct3D default, where the D3D11 shared-texture path has no D3D12 consumer device.
  *
  * The producer is a private offscreen WGL context on a dedicated render thread; it
  * shares nothing with Skiko — frames leave it as CPU pixel copies which the consumer
@@ -57,8 +57,8 @@ internal object WindowsOpenGLSurfaceBackend : MpvSurfaceBackend {
         MpvReadbackSurface(handlePtr, this)
 
     override val rendererName: String get() = "OpenGL/WGL readback"
-    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop =
-        SkiaWindowsOpenGLInterop(layer)
+    override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop =
+        SkiaWindowsOpenGLInterop(layerRedrawer)
 
     override fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
         WindowsOpenGLRenderContextLifecycle(EagerRenderContextLifecycle(this, host), host)

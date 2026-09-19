@@ -18,10 +18,7 @@ import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
-import org.jetbrains.skiko.GraphicsApi
 import org.jetbrains.skiko.OS
-import org.jetbrains.skiko.SkiaLayer
-import org.jetbrains.skiko.SkikoProperties
 import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.MPVLog
@@ -57,6 +54,7 @@ import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
 import org.openani.mediamp.mpv.nAttachRenderEnvironmentOpenGL
 import org.openani.mediamp.mpv.utils.OpenGLRenderEnvironment
 import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
+import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaMetalInterop
 import org.openani.mediamp.mpv.utils.SkiaOpenGLInterop
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
@@ -88,25 +86,34 @@ internal class MpvConsumerRenderTarget(
  * (render_d3d11.cpp) or the OpenGL readback fallback (render_opengl_win.cpp), and
  * Linux through shared OpenGL textures (render_glx.cpp).
  */
-internal fun currentSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
+internal fun supportsSurfaceBackend(): Boolean = when (hostOs) {
+    OS.MacOS, OS.Windows, OS.Linux -> true
+    else -> false
+}
+
+/** Windows selection waits for the window's actual redrawer, including Skiko fallbacks. */
+internal fun currentSurfaceBackend(layerRedrawer: SkiaLayerRedrawer? = null): MpvSurfaceBackend? = when (hostOs) {
     OS.MacOS -> MacosSurfaceRingBackend
-    OS.Windows -> windowsSurfaceBackend()
+    OS.Windows -> windowsSurfaceBackend(layerRedrawer?.redrawerOrNull?.javaClass)
     OS.Linux -> OpenGLSurfaceRingBackend
     else -> null
 }
 
-/**
- * The D3D11 shared-texture path needs Skia to run on Skiko's Direct3D backend (the
- * Windows default): its ring buffers are opened on Skia's D3D12 device. When the host
- * configures another Skiko render API (`SKIKO_RENDER_API=OPENGL`), Skia has no such
- * device, so the OpenGL readback fallback drives mpv instead. Decided from Skiko's
- * *configured* API because the backend (and with it mpv's render context type) must be
- * chosen at player construction, before any SkiaLayer exists; if Skiko later falls back
- * to a different redrawer at runtime, the draw-time interop reports the mismatch.
- */
-private fun windowsSurfaceBackend(): MpvSurfaceBackend =
-    if (SkikoProperties.renderApi == GraphicsApi.DIRECT3D) D3D11SurfaceRingBackend
-    else WindowsOpenGLSurfaceBackend
+/** A windowless renderer for explicit headless capture; no Skiko preference is involved. */
+internal fun headlessSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
+    OS.Windows -> D3D11SurfaceRingBackend
+    else -> currentSurfaceBackend()
+}
+
+internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend? = when (redrawerClass?.name) {
+    null -> null
+    "org.jetbrains.skiko.redrawer.Direct3DRedrawer" -> D3D11SurfaceRingBackend
+    "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer" -> WindowsOpenGLSurfaceBackend
+    else -> error(
+        "Unsupported Skiko redrawer ${redrawerClass.name}. The mpv Windows render path " +
+            "requires Direct3DRedrawer or WindowsOpenGLRedrawer.",
+    )
+}
 
 /**
  * Platform half of a native render path: the JNI entry points, which reflective Skia
@@ -121,8 +128,8 @@ internal interface MpvSurfaceBackend {
     /** Renderer name for user-facing logs: what Compose draws the published frames with. */
     val rendererName: String
 
-    /** Creates the reflective interop reading the consumer render device of [layer]. */
-    fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop
+    /** Creates the reflective interop reading the consumer render device of [layerRedrawer]. */
+    fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop
 
     /**
      * Creates the per-player producer-context lifecycle. Backends owning their producer
@@ -194,7 +201,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
 
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.BGRA_8888
     override val rendererName: String get() = "Metal"
-    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaMetalInterop(layer)
+    override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaMetalInterop(layerRedrawer)
 }
 
 @OptIn(InternalMediampApi::class)
@@ -233,7 +240,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     // The producer renders through D3D11, but the consumer side Compose draws with is
     // Skiko's D3D12 device.
     override val rendererName: String get() = "D3D12"
-    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaDirectXInterop(layer)
+    override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaDirectXInterop(layerRedrawer)
 }
 
 /**
@@ -297,7 +304,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
     override val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.BOTTOM_LEFT
     override val rendererName: String get() = "OpenGL/GLX"
-    override fun createSkiaInterop(layer: SkiaLayer): SkiaRenderDeviceInterop = SkiaOpenGLInterop(layer)
+    override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaOpenGLInterop(layerRedrawer)
 
     override fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
         OpenGLRenderContextLifecycle(this, host)

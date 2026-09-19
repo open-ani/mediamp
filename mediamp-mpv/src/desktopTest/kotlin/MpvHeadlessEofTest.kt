@@ -118,15 +118,13 @@ class MpvHeadlessEofTest {
                 Any(), coroutineContext,
                 mainDispatcher = mainDispatcher,
             )
-            val renderer = if (useSurfaceRing) {
-                check(player.createRenderContext()) { "createRenderContext failed" }
-                check(player.requestSurface(320, 180, 0L)) { "requestSurface failed" }
-                AutoCloseable {
-                    player.releaseSurface()
-                    player.releaseRenderContext()
-                }
-            } else null
             try {
+                // Both modes need a producer context to drain video frames. A surface ring
+                // controls where frames are rendered, independently of backend selection.
+                check(player.createRenderContext()) { "createRenderContext failed" }
+                if (useSurfaceRing) {
+                    check(player.requestSurface(320, 180, 0L)) { "requestSurface failed" }
+                }
                 // Route audio to the null output: this test is about the playback clock and
                 // EOF state transitions, not audio rendering, and a headless environment's
                 // audio device can accept the stream but never consume it (observed on dev
@@ -139,7 +137,7 @@ class MpvHeadlessEofTest {
                 }
 
                 // playUri autoplays: playWhenReady = true by default.
-                player.playUri(video.absolutePath)
+                withTimeout(15_000) { player.playUri(video.absolutePath) }
                 assertEquals(MediaStatus.Ready, player.state.value.mediaStatus)
                 assertTrue(player.state.value.playWhenReady, "open must apply the requested intent")
 
@@ -166,7 +164,8 @@ class MpvHeadlessEofTest {
                             "got ${player.currentPositionMillis.value}",
                 )
             } finally {
-                renderer?.close()
+                player.releaseSurface()
+                player.releaseRenderContext()
                 player.close()
             }
         }

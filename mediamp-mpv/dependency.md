@@ -325,6 +325,14 @@ Android 子项目额外选项：
 
 ## Windows 渲染与开发工作流
 
+Windows 后端根据已挂载 `SkiaLayer` 的实际 redrawer 类型选择：`Direct3DRedrawer`
+使用 D3D11 共享纹理，`WindowsOpenGLRedrawer` 使用 OpenGL readback。其他类型会明确报错。
+不读取 Skiko 的全局渲染偏好，因此启动时自动回退到 OpenGL 也能选中正确的后端。
+`SkiaLayerRedrawer` 封装 layer 和实时 redrawer 访问，所有平台 interop 共用；只缓存反射方法，
+不缓存 redrawer 实例。Windows 在首次挂载 surface 前的加载等待在 `Opening`，选择并初始化
+渲染后端后才发出 `loadfile`；预览解码器使用主播放器已选定的后端。窗口内同一类型的 redrawer
+重建仍由各 interop 实时读取；切换后端类型则需要重建播放器。
+
 Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
 **D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
 以 `render_d3d11.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除)在我们自建的

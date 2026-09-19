@@ -9,9 +9,7 @@
 package org.openani.mediamp.mpv.utils
 
 import java.lang.reflect.Field
-import java.lang.reflect.Method
 import org.jetbrains.skia.DirectContext
-import org.jetbrains.skiko.SkiaLayer
 
 /**
  * Reflective access to Skiko 0.9.37.4's Windows OpenGL redrawer
@@ -28,8 +26,7 @@ import org.jetbrains.skiko.SkiaLayer
  * so nothing is cached across calls — every access re-reads the live redrawer from the
  * layer.
  */
-internal class SkiaWindowsOpenGLInterop(private val layer: SkiaLayer) : SkiaRenderDeviceInterop {
-    private val getRedrawerMethod: Method = SkiaLayer::class.java.getMethod("getRedrawer\$skiko")
+internal class SkiaWindowsOpenGLInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
 
     private class RedrawerAccess(redrawerClass: Class<*>) {
         val contextHandlerField: Field = redrawerClass.getDeclaredField("contextHandler")
@@ -58,14 +55,11 @@ internal class SkiaWindowsOpenGLInterop(private val layer: SkiaLayer) : SkiaRend
     private var cachedAccessClass: Class<*>? = null
 
     private fun currentRedrawer(): Any {
-        val redrawer = getRedrawerMethod.invoke(layer) ?: error(
-            "SkiaLayer has no redrawer yet. Attach the player after the Compose window is visible."
-        )
+        val redrawer = layerRedrawer.redrawer
         check(redrawer.javaClass.name == WINDOWS_OPENGL_REDRAWER) {
             "Unsupported Skiko redrawer ${redrawer.javaClass.name}. The mpv OpenGL fallback " +
-                "on Windows requires Skiko's WindowsOpenGLRedrawer, which Compose only uses when " +
-                "SKIKO_RENDER_API/skiko.renderApi is OPENGL. Unset it to use the Direct3D render " +
-                "path instead (mediamp then drives mpv through D3D11)."
+                "on Windows requires Skiko's WindowsOpenGLRedrawer. Recreate the player if " +
+                "Skiko changed its render backend."
         }
         return redrawer
     }

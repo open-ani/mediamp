@@ -69,10 +69,14 @@ class MpvBufferingTest {
             runBlocking(mainDispatcher) {
                 val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = mainDispatcher)
                 try {
+                    // Windows selects its backend from a live Skiko redrawer; without a window
+                    // the open would suspend forever unless the headless renderer is explicit.
+                    check(player.createRenderContext()) { "createRenderContext failed" }
                     // Audio device drain is not under test; see MpvHeadlessEofTest.
                     (player.impl as MPVHandle).setPropertyString("ao", "null")
                     val buffering = checkNotNull(player.features[Buffering]) { "mpv player must expose Buffering" }
-                    block(player, buffering)
+                    // An open that never completes must fail the test, not hang the CI job.
+                    withTimeout(TEST_TIMEOUT_MILLIS) { block(player, buffering) }
                 } finally {
                     player.close()
                 }
@@ -330,5 +334,8 @@ class MpvBufferingTest {
 
         /** The last packet timestamps sit slightly before the container duration. */
         const val END_SLACK_MILLIS = 1_500L
+
+        /** Upper bound for one test body; well above the sum of its individual waits. */
+        const val TEST_TIMEOUT_MILLIS = 180_000L
     }
 }

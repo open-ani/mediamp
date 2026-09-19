@@ -42,7 +42,7 @@ internal fun interface MpvRenderContextProvisioning {
 /**
  * Per-player lifecycle of the backend's producer render context: WHEN
  * [MpvSurfaceBackend.createRenderContext] may run. Backends that own their producer
- * device ([EagerRenderContextLifecycle]) create it at player construction; backends whose
+ * device ([EagerRenderContextLifecycle]) create it when the backend is selected; backends whose
  * producer context must join an externally owned render environment
  * (`OpenGLRenderContextLifecycle`) create it only once that environment has been attached
  * and gate `loadfile` on it. Chosen by [MpvSurfaceBackend], so the shared player and
@@ -52,7 +52,7 @@ internal fun interface MpvRenderContextProvisioning {
  */
 internal interface MpvRenderContextLifecycle {
     /**
-     * One-time backend setup at player construction (after mpv initialization): eager
+     * One-time setup after mpv initialization and backend selection: eager
      * backends create the producer context and start the render thread now;
      * environment-bound backends apply their decode constraints and wait for the attach.
      */
@@ -94,7 +94,8 @@ internal interface MpvRenderContextLifecycle {
 /**
  * Lifecycle for backends that own their producer device (macOS Metal, Windows D3D11,
  * and the Windows OpenGL fallback): the render context is created eagerly at player
- * construction and needs nothing from the live Skiko renderer.
+ * construction on macOS and after redrawer selection on Windows. Producer creation itself
+ * needs nothing from the live Skiko renderer.
  */
 internal class EagerRenderContextLifecycle(
     private val backend: MpvSurfaceBackend,

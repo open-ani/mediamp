@@ -82,8 +82,8 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  *
  * Capability notes (spec §6): mpv cannot measure data starvation while user-paused
  * (`paused-for-cache` does not engage at pause) — the `paused-stall` capability is degraded;
- * `isStalled` is authoritative only while the native transport is playing. On Linux the
- * `surface-independent-open` capability is degraded: [openImpl] suspends until the GLX render
+ * `isStalled` is authoritative only while the native transport is playing. On Linux and Windows the
+ * `surface-independent-open` capability is degraded: [openImpl] suspends until the selected render
  * context exists (see [ensureRenderContextForLoad]).
  *
  * @param configureOptions optional hook invoked once during construction, after Mediamp's
@@ -505,7 +505,7 @@ abstract class JvmMpvMediampPlayer(
     /**
      * Whether the producer render context may exist for `loadfile` right now. Platform
      * subclasses whose render context is unavailable until an external render environment is
-     * attached (Linux/GLX) return `false`; [openImpl] then suspends (holding the machine in
+     * attached (Linux/GLX or Windows redrawer selection) return `false`; [openImpl] then suspends (holding the machine in
      * Opening — spec §6, degraded `surface-independent-open`) until [renderContextBecameReady].
      */
     protected open fun ensureRenderContextForLoad(): Boolean = true

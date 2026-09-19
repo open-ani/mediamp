@@ -56,8 +56,7 @@ internal data class OpenGLRenderSnapshot(
  * address, not the GLXContext value itself. Native attachment deliberately performs the
  * same single dereference as Skiko's makeCurrent/destroyContext JNI implementations.
  */
-internal class SkiaOpenGLInterop(private val layer: SkiaLayer) : SkiaRenderDeviceInterop {
-    private val getRedrawerMethod: Method = SkiaLayer::class.java.getMethod("getRedrawer\$skiko")
+internal class SkiaOpenGLInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
     private val getBackedLayerMethod: Method = SkiaLayer::class.java.getMethod("getBackedLayer\$skiko")
     private val getContentHandleMethod: Method = SkiaLayer::class.java.getMethod("getContentHandle")
     private val getWindowHandleMethod: Method = SkiaLayer::class.java.getMethod("getWindowHandle")
@@ -89,9 +88,7 @@ internal class SkiaOpenGLInterop(private val layer: SkiaLayer) : SkiaRenderDevic
     private var cachedAccessClass: Class<*>? = null
 
     private fun currentRedrawer(): Any {
-        val redrawer = getRedrawerMethod.invoke(layer) ?: error(
-            "SkiaLayer has no redrawer yet. Attach the player after the Compose window is visible."
-        )
+        val redrawer = layerRedrawer.redrawer
         check(redrawer.javaClass.name == LINUX_OPENGL_REDRAWER) {
             "Unsupported Skiko redrawer ${redrawer.javaClass.name}. Linux mpv texture sharing " +
                 "requires Skiko's LinuxOpenGLRedrawer (GLX/X11). The active renderer is likely " +
@@ -111,14 +108,14 @@ internal class SkiaOpenGLInterop(private val layer: SkiaLayer) : SkiaRenderDevic
     }
 
     private fun renderEnvironment(redrawer: Any, access: RedrawerAccess): OpenGLRenderEnvironment {
-        val component = getBackedLayerMethod.invoke(layer) as? Component ?: error(
+        val component = getBackedLayerMethod.invoke(layerRedrawer.layer) as? Component ?: error(
             "SkiaLayer backedLayer is not an AWT Component; cannot obtain the GLX Display through JAWT."
         )
         return OpenGLRenderEnvironment(
             component = component,
             shareContext = access.glxContextField.getLong(redrawer),
-            drawable = getContentHandleMethod.invoke(layer) as Long,
-            window = getWindowHandleMethod.invoke(layer) as Long,
+            drawable = getContentHandleMethod.invoke(layerRedrawer.layer) as Long,
+            window = getWindowHandleMethod.invoke(layerRedrawer.layer) as Long,
         )
     }
 
