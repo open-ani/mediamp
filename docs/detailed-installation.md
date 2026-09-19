@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         create("mediampLibs") {
-            from("org.openani.mediamp:catalog:0.0.23") // replace with the latest version
+            from("org.openani.mediamp:catalog:0.5.0") // replace with the latest version
         }
     }
 }
@@ -66,7 +66,7 @@ dependencyResolutionManagement {
     }
     versionCatalogs {
         create("mediampLibs") {
-            from("org.openani.mediamp:catalog:0.0.23") // replace with the latest version
+            from("org.openani.mediamp:catalog:0.5.0") // replace with the latest version
         }
     }
 }
