@@ -55,9 +55,13 @@ class MpvNetworkStatsTest {
             runBlocking(mainDispatcher) {
                 val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = mainDispatcher)
                 try {
+                    // Windows selects its backend from a live Skiko redrawer; without a window
+                    // the open would suspend forever unless the headless renderer is explicit.
+                    check(player.createRenderContext()) { "createRenderContext failed" }
                     (player.impl as MPVHandle).setPropertyString("ao", "null")
                     val stats = checkNotNull(player.features[NetworkStats]) { "mpv player must expose NetworkStats" }
-                    block(player, stats)
+                    // An open that never completes must fail the test, not hang the CI job.
+                    withTimeout(TEST_TIMEOUT_MILLIS) { block(player, stats) }
                 } finally {
                     player.close()
                 }
@@ -145,5 +149,6 @@ class MpvNetworkStatsTest {
         const val CLIP_SECONDS = 30
         const val THROTTLED_DOWNLOAD_SECONDS = 12L
         const val END_SLACK_MILLIS = 1_500L
+        const val TEST_TIMEOUT_MILLIS = 180_000L
     }
 }
