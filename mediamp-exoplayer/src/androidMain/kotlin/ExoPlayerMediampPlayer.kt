@@ -25,6 +25,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.FileDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -86,6 +87,8 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.PlaybackException as Media3PlaybackException
 import androidx.media3.common.Player as Media3Player
+
+private const val BACK_BUFFER_DURATION_MS = 30_000
 
 
 /**
@@ -319,6 +322,11 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     private val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .apply {
             setTrackSelector(trackSelector)
+            setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBackBuffer(BACK_BUFFER_DURATION_MS, true)
+                    .build(),
+            )
             if (audioTimeStretch == ExoPlayerAudioTimeStretch.HighQualityWsola) {
                 val renderersFactory = WsolaRenderersFactory(context)
                 setRenderersFactory(renderersFactory)
