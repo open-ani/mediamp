@@ -48,6 +48,7 @@ import io.github.typesafegithub.workflows.actions.nickfields.Retry_Untyped
 import io.github.typesafegithub.workflows.actions.softprops.ActionGhRelease
 import io.github.typesafegithub.workflows.domain.ActionStep
 import io.github.typesafegithub.workflows.domain.CommandStep
+import io.github.typesafegithub.workflows.domain.Concurrency
 import io.github.typesafegithub.workflows.domain.Job
 import io.github.typesafegithub.workflows.domain.JobOutputs
 import io.github.typesafegithub.workflows.domain.Mode
@@ -461,6 +462,14 @@ workflow(
         // - pushing to a branch that has an associated PR
         Push(pathsIgnore = listOf("**/*.md")),
         PullRequest(pathsIgnore = listOf("**/*macosDmg.md")),
+    ),
+    // A new push to a PR (or any non-main branch) cancels the runs it supersedes. Runs on
+    // main get a unique group each, so they are never cancelled nor queued behind each other.
+    // `event_name` keeps the push run and the pull_request run of one commit apart.
+    concurrency = Concurrency(
+        group = "build-" + expr { "github.event_name" } + "-" +
+                expr { "github.ref == 'refs/heads/main' && github.run_id || github.ref" },
+        cancelInProgress = true,
     ),
     sourceFile = __FILE__,
     targetFileName = "build.yml",
