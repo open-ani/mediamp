@@ -10,7 +10,6 @@
 
 package org.openani.mediamp.mpv
 
-import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -19,12 +18,12 @@ import kotlinx.coroutines.withTimeout
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.MediaStatus
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.mpv.utils.MpvTestMedia
+import org.openani.mediamp.mpv.utils.RangeFileServer
 import org.openani.mediamp.playUri
 import org.openani.mediamp.source.UriMediaData
 import java.io.File
-import java.net.InetSocketAddress
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -47,144 +46,16 @@ import kotlin.test.assertTrue
  *   new position, after which the value covers the seek target.
  *
  * Skipped (or failed under `mediamp.mpv.test.required=true`) when the native runtime or
- * ffmpeg is unavailable, like the other real-libmpv tests in this source set.
+ * ffmpeg is unavailable, like the other real-libmpv tests in this source set. Fixtures
+ * (clip generation, HTTP range server) live in [MpvTestMedia] and [RangeFileServer].
  */
 class MpvBufferingTest {
 
-    private fun devNativeDir(): File? =
-        System.getProperty("mediamp.mpv.dev.native.dir")
-            ?.let(::File)
-            ?.takeIf {
-                it.resolve("libmediampv.dylib").isFile || it.resolve("libmediampv.so").isFile ||
-                        it.resolve("mediampv.dll").isFile
-            }
+    private fun prepareOrSkip(): Boolean = MpvTestMedia.prepareOrSkip(TAG)
 
-    private fun skip(reason: String): Boolean {
-        System.err.println("[MpvBufferingTest] setup skipped: $reason")
-        check(System.getProperty("mediamp.mpv.test.required") != "true") {
-            "mpv buffering tests are required on this runner but would be skipped: $reason"
-        }
-        return false
-    }
+    private fun skip(reason: String): Boolean = MpvTestMedia.skip(TAG, reason)
 
-    private fun prepareOrSkip(): Boolean {
-        val osName = System.getProperty("os.name")
-        if (!osName.contains("Mac") && !osName.contains("Windows")) {
-            return skip("no desktop render path on $osName")
-        }
-        val dir = devNativeDir()
-            ?: return skip(
-                "dev native dir not usable " +
-                        "(mediamp.mpv.dev.native.dir=${System.getProperty("mediamp.mpv.dev.native.dir")})",
-            )
-        runCatching { MpvMediampPlayer.prepareLibraries(dir.absolutePath, extractRuntimeLibrary = false) }
-            .onFailure { return skip("prepareLibraries failed: $it") }
-        return true
-    }
-
-    private fun findFfmpeg(): String? =
-        listOfNotNull(
-            devNativeDir()?.resolve("ffmpeg.exe")?.absolutePath,
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/local/bin/ffmpeg",
-            "ffmpeg",
-            "ffmpeg.exe",
-        )
-            .firstOrNull { runCatching { ProcessBuilder(it, "-version").start().waitFor() }.getOrNull() == 0 }
-
-    /**
-     * A [CLIP_SECONDS] audio+video clip with the `moov` atom up front (`faststart`), so mpv
-     * can start decoding from a sequential HTTP read without first seeking to the file end.
-     */
-    private fun generateClip(): File? {
-        val target = File(System.getProperty("java.io.tmpdir"), "mediamp-mpv-test-buffering-${CLIP_SECONDS}s.mp4")
-        if (target.isFile && target.length() > 0) return target
-        val ffmpeg = findFfmpeg() ?: return null
-        val process = ProcessBuilder(
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30",
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-            "-t", CLIP_SECONDS.toString(), "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac",
-            "-movflags", "+faststart",
-            target.absolutePath,
-        ).redirectErrorStream(true).start()
-        process.inputStream.readAllBytes()
-        if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) return null
-        return target
-    }
-
-    /**
-     * Static file server with HTTP range support, so mpv treats the clip as a seekable
-     * network stream (stream cache on). Requests are served concurrently: mpv keeps one
-     * connection streaming while probing other byte ranges on another.
-     *
-     * @param bytesPerSecond optional bandwidth limit per connection, to keep the clip from
-     *   being fully cached before the test has observed the partially-buffered states.
-     */
-    private class RangeFileServer(
-        private val file: File,
-        private val bytesPerSecond: Long? = null,
-    ) : AutoCloseable {
-        private val executor = Executors.newCachedThreadPool { runnable ->
-            Thread(runnable, "mpv-test-http").apply { isDaemon = true }
-        }
-        private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
-            executor = this@RangeFileServer.executor
-            createContext("/clip.mp4") { exchange ->
-                val length = file.length()
-                val range = exchange.requestHeaders.getFirst("Range")
-                    ?.removePrefix("bytes=")
-                    ?.split("-", limit = 2)
-                val start = range?.getOrNull(0)?.toLongOrNull() ?: 0L
-                val end = range?.getOrNull(1)?.takeIf { it.isNotEmpty() }?.toLongOrNull() ?: (length - 1)
-                exchange.responseHeaders.add("Accept-Ranges", "bytes")
-                exchange.responseHeaders.add("Content-Type", "video/mp4")
-                val count = end - start + 1
-                if (range != null) {
-                    exchange.responseHeaders.add("Content-Range", "bytes $start-$end/$length")
-                    exchange.sendResponseHeaders(206, count)
-                } else {
-                    exchange.sendResponseHeaders(200, count)
-                }
-                try {
-                    if (exchange.requestMethod != "HEAD") {
-                        file.inputStream().use { input ->
-                            input.skipNBytes(start)
-                            val buffer = ByteArray(CHUNK_BYTES)
-                            var remaining = count
-                            exchange.responseBody.use { out ->
-                                while (remaining > 0) {
-                                    val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                                    if (read < 0) break
-                                    out.write(buffer, 0, read)
-                                    out.flush()
-                                    remaining -= read
-                                    bytesPerSecond?.let { Thread.sleep(read * 1000L / it) }
-                                }
-                            }
-                        }
-                    }
-                } catch (_: java.io.IOException) {
-                    // mpv closes connections it no longer needs (e.g. after a seek); that is
-                    // not a server failure.
-                } finally {
-                    exchange.close()
-                }
-            }
-            start()
-        }
-
-        val url: String get() = "http://127.0.0.1:${server.address.port}/clip.mp4"
-
-        override fun close() {
-            server.stop(0)
-            executor.shutdownNow()
-        }
-
-        private companion object {
-            const val CHUNK_BYTES = 16 * 1024
-        }
-    }
+    private fun generateClip(): File? = MpvTestMedia.generateClip(CLIP_SECONDS)
 
     private fun withPlayer(block: suspend (player: MpvMediampPlayer, buffering: Buffering) -> Unit) {
         // A dedicated single-thread dispatcher stands in for the UI thread: the machine is
@@ -449,6 +320,7 @@ class MpvBufferingTest {
     private fun throttleBytesPerSecond(clip: File): Long = clip.length() / THROTTLED_DOWNLOAD_SECONDS
 
     private companion object {
+        const val TAG = "MpvBufferingTest"
         const val CLIP_SECONDS = 30
         const val THROTTLED_DOWNLOAD_SECONDS = 12L
         const val SEEK_TARGET_MILLIS = 20_000L

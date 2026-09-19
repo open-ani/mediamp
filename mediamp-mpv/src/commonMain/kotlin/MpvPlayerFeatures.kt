@@ -10,6 +10,7 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -19,6 +20,7 @@ import org.openani.mediamp.PlayerState
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.NetworkStats
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.Screenshots
 import org.openani.mediamp.features.VideoAspectRatio
@@ -84,6 +86,61 @@ internal class MpvBuffering(state: StateFlow<PlayerState>) : Buffering {
         bufferedPercentage.value = 0
         bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
     }
+}
+
+/**
+ * Download speed from mpv's "cache-speed" property: bytes per second read from the stream
+ * layer into the demuxer cache, averaged over one second.
+ *
+ * mpv measures it for every stream, including local files, and stops updating it once the
+ * cache is filled (the last reading then goes stale). So the value is only published for
+ * network media ([isNetworkMedia], decided at open), and reads `0` while "demuxer-cache-idle"
+ * says the demuxer is not reading.
+ */
+@OptIn(InternalForInheritanceMediampApi::class, org.openani.mediamp.ExperimentalMediampApi::class)
+internal class MpvNetworkStats : NetworkStats {
+    override val downloadSpeedBytesPerSecond: MutableStateFlow<Long> = MutableStateFlow(NetworkStats.UNKNOWN_SPEED)
+
+    /** Whether the open media is loaded over the network. Set at open, before mpv reports. */
+    @Volatile
+    var isNetworkMedia: Boolean = false
+
+    private var cacheSpeed: Long = 0L
+    private var cacheIdle: Boolean = false
+
+    fun onCacheSpeed(bytesPerSecond: Long) {
+        cacheSpeed = bytesPerSecond.coerceAtLeast(0L)
+        publish()
+    }
+
+    fun onCacheIdle(idle: Boolean) {
+        cacheIdle = idle
+        publish()
+    }
+
+    private fun publish() {
+        if (!isNetworkMedia) return
+        downloadSpeedBytesPerSecond.value = if (cacheIdle) 0L else cacheSpeed
+    }
+
+    fun reset() {
+        isNetworkMedia = false
+        cacheSpeed = 0L
+        cacheIdle = false
+        downloadSpeedBytesPerSecond.value = NetworkStats.UNKNOWN_SPEED
+    }
+}
+
+/**
+ * Whether mpv will load [uri] through a network protocol rather than from the local file
+ * system: a URL scheme other than `file`, excluding Windows drive letters (`C:\...`).
+ */
+internal fun isNetworkUri(uri: String): Boolean {
+    val colon = uri.indexOf(':')
+    if (colon <= 1) return false // no scheme, or a drive letter
+    val scheme = uri.substring(0, colon)
+    if (!scheme.all { it.isLetterOrDigit() || it == '+' || it == '-' || it == '.' }) return false
+    return !scheme.equals("file", ignoreCase = true)
 }
 
 @OptIn(InternalForInheritanceMediampApi::class)

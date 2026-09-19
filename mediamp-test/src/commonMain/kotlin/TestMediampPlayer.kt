@@ -26,6 +26,7 @@ import org.openani.mediamp.TransportSnapshot
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
 import org.openani.mediamp.features.MediaMetadata
+import org.openani.mediamp.features.NetworkStats
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.VideoAspectRatio
@@ -56,8 +57,8 @@ import kotlin.reflect.KClass
  *   held until released ([OpenBehavior.Hold]), or failing with a given [PlaybackException]
  *   ([OpenBehavior.Fail]).
  * - [injectStall], [injectEnded], [injectError], [injectExternalPlayWhenReady],
- *   [injectPosition], [injectProperties] and [injectBufferedPosition] simulate native playback
- *   facts exactly the way a real adapter would report them.
+ *   [injectPosition], [injectProperties], [injectBufferedPosition] and [injectDownloadSpeed]
+ *   simulate native playback facts exactly the way a real adapter would report them.
  * - [holdSeeks] and [completeHeldSeek] control native seek completion, for testing the
  *   machine's seek gating. By default seeks complete synchronously.
  *
@@ -283,6 +284,15 @@ public class TestMediampPlayer private constructor(
     }
 
     /**
+     * Reports the current network download speed in bytes per second, driving
+     * [NetworkStats.downloadSpeedBytesPerSecond]. Pass [NetworkStats.UNKNOWN_SPEED] to report
+     * that the speed is unknown. Reset to unknown on every open and stop.
+     */
+    public fun injectDownloadSpeed(bytesPerSecond: Long) {
+        networkStats.downloadSpeedBytesPerSecond.value = bytesPerSecond
+    }
+
+    /**
      * Completes the pending native seek at its target position, if [holdSeeks] held one.
      *
      * Attribution follows real engines under coalescing (spec §5): the completion is stamped
@@ -368,6 +378,7 @@ public class TestMediampPlayer private constructor(
         nativeStalled = openInitiallyStalled
         heldSeekPositionMillis = null
         buffering.reset()
+        networkStats.reset()
 
         return OpenResult(
             sessionResources = null,
@@ -424,10 +435,20 @@ public class TestMediampPlayer private constructor(
         nativePositionMillis = 0L
         heldSeekPositionMillis = null
         buffering.reset()
+        networkStats.reset()
     }
     // endregion
 
     private val buffering = TestBuffering()
+    private val networkStats = TestNetworkStats()
+
+    private inner class TestNetworkStats : NetworkStats {
+        override val downloadSpeedBytesPerSecond: MutableStateFlow<Long> = MutableStateFlow(NetworkStats.UNKNOWN_SPEED)
+
+        fun reset() {
+            downloadSpeedBytesPerSecond.value = NetworkStats.UNKNOWN_SPEED
+        }
+    }
 
     private inner class TestBuffering : Buffering {
         @Suppress("OVERRIDE_DEPRECATION")
@@ -444,6 +465,7 @@ public class TestMediampPlayer private constructor(
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(PlaybackSpeed, machinePlaybackSpeed())
         add(Buffering, buffering)
+        add(NetworkStats, networkStats)
         add(
             MediaMetadata,
             object : MediaMetadata {

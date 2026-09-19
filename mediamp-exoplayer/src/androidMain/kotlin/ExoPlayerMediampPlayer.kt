@@ -12,6 +12,7 @@ package org.openani.mediamp.exoplayer
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Pair
 import androidx.annotation.MainThread
 import androidx.annotation.OptIn
@@ -25,6 +26,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.FileDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -64,6 +68,8 @@ import org.openani.mediamp.exoplayer.internal.toPlaybackException
 import org.openani.mediamp.exoplayer.internal.videoDisplaySizeOrNull
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.NetworkStats
+import org.openani.mediamp.internal.TransferRateMeter
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
@@ -82,6 +88,7 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.CoroutineContext
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.seconds
 import androidx.media3.common.PlaybackException as Media3PlaybackException
 import androidx.media3.common.Player as Media3Player
@@ -358,12 +365,14 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
     override val impl: ExoPlayer get() = exoPlayer
 
     private val buffering = ExoPlayerBuffering(state)
+    private val networkStats = ExoPlayerNetworkStats()
     private val videoAspectRatio = ExoPlayerVideoAspectRatio()
     private val framePreview = ExoFramePreview { mediaData.value }
 
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(PlaybackSpeed, machinePlaybackSpeed())
         add(Buffering, buffering)
+        add(NetworkStats, networkStats)
         add(MediaMetadata, mediaMetadataFeature)
         add(VideoAspectRatio, videoAspectRatio)
         add(FramePreview.Key, framePreview)
@@ -379,6 +388,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                     session.notifyPosition(exoPlayer.currentPosition)
                     buffering.bufferedPercentage.value = exoPlayer.bufferedPercentage
                     buffering.bufferedPositionMillis.value = exoPlayer.bufferedPosition
+                    networkStats.sample(SystemClock.elapsedRealtime())
                 }
                 delay(0.1.seconds)
             }
@@ -411,6 +421,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         val epoch = ++openEpoch
         openingPhase = true
         buffering.reset()
+        networkStats.reset()
         var sessionInput: SeekableInput? = null
         var sessionInputAwaitJob: Job? = null
         try {
@@ -520,6 +531,7 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
         buffering.reset()
+        networkStats.reset()
     }
 
     override fun closeImpl() {
@@ -598,7 +610,8 @@ public class ExoPlayerMediampPlayer @UiThread public constructor(
                 .setDefaultRequestProperties(headers)
                 .setConnectTimeoutMs(30_000)
             val factory = DefaultMediaSourceFactory(
-                DefaultDataSource.Factory(context, httpDataSourceFactory),
+                DefaultDataSource.Factory(context, httpDataSourceFactory)
+                    .setTransferListener(networkStats.transferListener),
             ).setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
             PreparedSource(factory.createMediaSource(item), sessionInput = null)
         }
@@ -717,6 +730,47 @@ internal class ExoPlayerBuffering(
     fun reset() {
         bufferedPercentage.value = 0
         bufferedPositionMillis.value = Buffering.UNKNOWN_POSITION
+    }
+}
+
+/**
+ * Download speed of the current [UriMediaData], measured from the bytes media3 reads through
+ * network data sources. Stays [NetworkStats.UNKNOWN_SPEED] until the first network byte of
+ * the current media arrives, so local `file://` URIs never report a speed.
+ */
+@kotlin.OptIn(ExperimentalMediampApi::class, InternalForInheritanceMediampApi::class, InternalMediampApi::class)
+internal class ExoPlayerNetworkStats : NetworkStats {
+    override val downloadSpeedBytesPerSecond: MutableStateFlow<Long> = MutableStateFlow(NetworkStats.UNKNOWN_SPEED)
+
+    /** Cumulative network bytes of the current media; written from media3 loader threads. */
+    private val networkBytes = AtomicLong(0)
+
+    /** Read on the poll thread only. */
+    private val meter = TransferRateMeter()
+
+    val transferListener: TransferListener = object : TransferListener {
+        override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+        override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+        override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) {}
+
+        override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+            if (isNetwork && bytesTransferred > 0) {
+                networkBytes.addAndGet(bytesTransferred.toLong())
+            }
+        }
+    }
+
+    /** Called from the position poll: updates the reported speed from the byte counter. */
+    fun sample(nowMillis: Long) {
+        val total = networkBytes.get()
+        if (total == 0L) return // no network transfer yet for this media: stay unknown
+        downloadSpeedBytesPerSecond.value = meter.sample(total, nowMillis)
+    }
+
+    fun reset() {
+        networkBytes.set(0)
+        meter.reset()
+        downloadSpeedBytesPerSecond.value = NetworkStats.UNKNOWN_SPEED
     }
 }
 

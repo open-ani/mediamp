@@ -37,6 +37,8 @@ import org.openani.mediamp.TransportSnapshot
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.NetworkStats
+import org.openani.mediamp.internal.TransferRateMeter
 import org.openani.mediamp.features.PlaybackSpeed
 import org.openani.mediamp.features.PlayerFeatures
 import org.openani.mediamp.features.VideoAspectRatio
@@ -57,6 +59,9 @@ import platform.AVFoundation.AVFoundationErrorDomain
 import platform.AVFoundation.AVPlayer
 import platform.AVFoundation.AVPlayerActionAtItemEndPause
 import platform.AVFoundation.AVPlayerItem
+import platform.AVFoundation.AVPlayerItemAccessLogEvent
+import platform.AVFoundation.accessLog
+import platform.AVFoundation.asset
 import platform.AVFoundation.AVPlayerItemDidPlayToEndTimeNotification
 import platform.AVFoundation.AVPlayerItemFailedToPlayToEndTimeErrorKey
 import platform.AVFoundation.AVPlayerItemFailedToPlayToEndTimeNotification
@@ -108,6 +113,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToLong
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 
 /**
  * AVFoundation-backed MediaMP player for Apple platforms.
@@ -180,6 +186,21 @@ public class AVKitMediampPlayer(
         }
     }
 
+    /**
+     * Download speed from the item's access log: the sum of `numberOfBytesTransferred` over all
+     * log events is the cumulative byte count of the item, sampled in [SessionAttachment.pollTick].
+     * Only measured for network assets; local files stay [NetworkStats.UNKNOWN_SPEED].
+     */
+    private val networkStatsFeature = object : NetworkStats {
+        override val downloadSpeedBytesPerSecond: MutableStateFlow<Long> = MutableStateFlow(NetworkStats.UNKNOWN_SPEED)
+        val meter = TransferRateMeter()
+
+        fun reset() {
+            meter.reset()
+            downloadSpeedBytesPerSecond.value = NetworkStats.UNKNOWN_SPEED
+        }
+    }
+
     private val audioLevelController = AVKitAudioLevelController(impl)
 
     /**
@@ -193,6 +214,7 @@ public class AVKitMediampPlayer(
 
     override val features: PlayerFeatures = buildPlayerFeatures {
         add(Buffering, bufferingFeature)
+        add(NetworkStats, networkStatsFeature)
         add(AudioLevelController, audioLevelController)
         add(PlaybackSpeed, playbackSpeedFeature)
         add(VideoAspectRatio, videoAspectRatioFeature)
@@ -224,6 +246,8 @@ public class AVKitMediampPlayer(
         if (impl.status == AVPlayerStatusFailed) {
             throw impl.error.toPlaybackException("AVPlayer is in the failed state and cannot open media")
         }
+        bufferingFeature.reset()
+        networkStatsFeature.reset()
 
         val playerItem = when (data) {
             is UriMediaData -> makePlayerItem(data)
@@ -342,6 +366,7 @@ public class AVKitMediampPlayer(
         impl.pause()
         impl.replaceCurrentItemWithPlayerItem(null)
         bufferingFeature.reset()
+        networkStatsFeature.reset()
     }
 
     override fun closeImpl() {
@@ -624,6 +649,7 @@ public class AVKitMediampPlayer(
             bufferingFeature.bufferedPercentage.value =
                 if (bufferedPositionMillis == null || durationMillis == null || durationMillis <= 0L) 0
                 else (bufferedPositionMillis * 100L / durationMillis).toInt().coerceIn(0, 100)
+            sampleNetworkStats()
         }
 
         private fun detachOnMainThread() {
@@ -660,6 +686,21 @@ public class AVKitMediampPlayer(
 
     private fun currentItemDurationMillis(): Long? =
         impl.currentItem?.let { cmTimeToMillisOrNull(it.duration) }
+
+    private val clockStart = TimeSource.Monotonic.markNow()
+    private fun nowMillis(): Long = clockStart.elapsedNow().inWholeMilliseconds
+
+    private fun sampleNetworkStats() {
+        val item = impl.currentItem ?: return
+        val isNetwork = (item.asset as? AVURLAsset)?.URL?.scheme?.lowercase().let { it == "http" || it == "https" }
+        if (!isNetwork) return
+        val totalBytes = item.accessLog()?.events?.sumOf { event ->
+            (event as? AVPlayerItemAccessLogEvent)?.numberOfBytesTransferred ?: 0L
+        } ?: return
+        if (totalBytes <= 0L) return // nothing received yet: stay unknown
+        networkStatsFeature.downloadSpeedBytesPerSecond.value =
+            networkStatsFeature.meter.sample(totalBytes, nowMillis())
+    }
 
     /**
      * Computes the media position up to which contiguous data is buffered ahead of the playhead,
