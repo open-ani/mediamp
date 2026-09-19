@@ -27,6 +27,7 @@ import org.openani.mediamp.PlaybackSessionHandle
 import org.openani.mediamp.TransportSnapshot
 import org.openani.mediamp.features.AudioLevelController
 import org.openani.mediamp.features.Buffering
+import org.openani.mediamp.features.NetworkStats
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.MediaMetadata
 import org.openani.mediamp.features.PlaybackSpeed
@@ -150,6 +151,7 @@ abstract class JvmMpvMediampPlayer(
 
     private val audioLevelController = MpvAudioLevelController(handle)
     private val buffering = MpvBuffering(state)
+    private val networkStats = MpvNetworkStats()
     private val screenshots = MpvScreenshots { path -> takeScreenshotImpl(path) }
     private val videoAspectRatio = MpvVideoAspectRatio(handle)
     private val mediaMetadata = MpvMediaMetadata(handle)
@@ -159,6 +161,7 @@ abstract class JvmMpvMediampPlayer(
         add(PlaybackSpeed.Key, machinePlaybackSpeed())
         add(AudioLevelController.Key, audioLevelController)
         add(Buffering.Key, buffering)
+        add(NetworkStats.Key, networkStats)
         add(Screenshots.Key, screenshots)
         add(VideoAspectRatio.Key, videoAspectRatio)
         add(MediaMetadata, mediaMetadata)
@@ -194,6 +197,8 @@ abstract class JvmMpvMediampPlayer(
                     adapter.session.reportTransport(liveTransportSnapshot())
                 }
 
+                "demuxer-cache-idle" -> networkStats.onCacheIdle(value)
+
                 "paused-for-cache" -> {
                     sessionAdapter?.session?.reportTransport(liveTransportSnapshot())
                 }
@@ -213,6 +218,7 @@ abstract class JvmMpvMediampPlayer(
             if (nativeTeardownStarted) return
             when (name) {
                 "cache-buffering-state" -> buffering.bufferedPercentage.value = value.toInt().coerceIn(0, 100)
+                "cache-speed" -> networkStats.onCacheSpeed(value)
             }
         }
 
@@ -477,6 +483,8 @@ abstract class JvmMpvMediampPlayer(
         handle.observeProperty("mute", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("cache-buffering-state", MPVFormat.MPV_FORMAT_INT64)
         handle.observeProperty("demuxer-cache-time", MPVFormat.MPV_FORMAT_DOUBLE)
+        handle.observeProperty("cache-speed", MPVFormat.MPV_FORMAT_INT64)
+        handle.observeProperty("demuxer-cache-idle", MPVFormat.MPV_FORMAT_FLAG)
         handle.observeProperty("media-title", MPVFormat.MPV_FORMAT_STRING)
         handle.observeProperty("track-list", MPVFormat.MPV_FORMAT_NONE)
         handle.observeProperty("chapter-list", MPVFormat.MPV_FORMAT_NONE)
@@ -541,9 +549,11 @@ abstract class JvmMpvMediampPlayer(
         awaitRenderContextForLoad()
 
         buffering.reset()
+        networkStats.reset()
         var sessionResources: AutoCloseable? = null
         val loadTarget: String = when (data) {
             is UriMediaData -> {
+                networkStats.isNetworkMedia = isNetworkUri(data.uri)
                 val headers = data.headers.toMutableMap()
                 headers.remove("User-Agent")?.let { handle.option("user-agent", it) }
                 headers.remove("Referer")?.let { handle.option("referrer", it) }
@@ -698,6 +708,7 @@ abstract class JvmMpvMediampPlayer(
         handle.command("stop")
         mediaMetadata.clear()
         buffering.reset()
+        networkStats.reset()
     }
 
     /**
@@ -726,6 +737,7 @@ abstract class JvmMpvMediampPlayer(
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()
         buffering.reset()
+        networkStats.reset()
         val instanceHandle = handle.ptr
         // Released is already committed and the session detached; do the heavy native
         // teardown off the machine thread (spec §4): mpv destruction joins the native event
