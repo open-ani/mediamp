@@ -132,6 +132,14 @@ import kotlin.time.Duration.Companion.milliseconds
  *   creating a new [AVPlayer]; this player instance must therefore be recreated. The failure
  *   surfaces as an asynchronous `Error` status, and subsequent [setMediaData] calls fail fast
  *   with the mapped [PlaybackException] instead of silently reusing the dead player.
+ *
+ * @param configurePlayer optional hook invoked once during construction on the newly created
+ *   [AVPlayer], before Mediamp uses it. Use it to customize the native player, e.g.
+ *   `automaticallyWaitsToMinimizeStalling`.
+ * @param configurePlayerItem optional hook invoked on the main dispatcher during each open,
+ *   after the [AVPlayerItem] is created and before it is attached to the player. AVFoundation
+ *   keeps buffering settings on the item, so this is the place for e.g.
+ *   `preferredForwardBufferDuration` or `preferredPeakBitRate`.
  */
 @OptIn(
     InternalMediampApi::class,
@@ -141,11 +149,13 @@ import kotlin.time.Duration.Companion.milliseconds
 )
 public class AVKitMediampPlayer(
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
+    configurePlayer: ((AVPlayer) -> Unit)? = null,
+    private val configurePlayerItem: ((AVPlayerItem, MediaData) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = Dispatchers.Main,
 ) {
-    override val impl: AVPlayer = AVPlayer()
+    override val impl: AVPlayer = AVPlayer().also { configurePlayer?.invoke(it) }
 
     private val notificationCenter = NSNotificationCenter.defaultCenter
 
@@ -223,6 +233,7 @@ public class AVKitMediampPlayer(
                 "SeekableInputMediaData is not supported by AVKitMediampPlayer yet.",
             )
         }
+        configurePlayerItem?.invoke(playerItem, data)
 
         // Defensive: a superseded session's observers may still be attached (the machine
         // invalidates the handle, so their facts are dropped, but the observers linger until

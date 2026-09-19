@@ -358,6 +358,44 @@ class MainActivity : ComponentActivity() {
 }
 ```
 
+### Configuring the Platform Player
+
+Some native settings (e.g. buffering) can only be set while the platform player is being
+built. Each backend accepts an optional hook that runs after MediaMP's defaults are applied,
+so your settings win.
+
+```kotlin
+// On Android: customize the ExoPlayer.Builder before build()
+val player = ExoPlayerMediampPlayerFactory().create(
+    context, coroutineContext,
+    configurePlayerBuilder = { builder ->
+        builder.setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
+                .build(),
+        )
+    },
+)
+```
+
+```kotlin
+// On Desktop / Android / iOS with mpv: set mpv options before mpv_initialize
+val player = MpvMediampPlayer(context, coroutineContext) { handle ->
+    handle.option("demuxer-max-bytes", "${256 * 1024 * 1024}")
+    handle.option("cache-secs", "120")
+}
+```
+
+```kotlin
+// On iOS: AVFoundation keeps buffering settings on each AVPlayerItem
+val player = AVKitMediampPlayer(
+    configurePlayer = { it.automaticallyWaitsToMinimizeStalling = true },
+    configurePlayerItem = { item, _ -> item.preferredForwardBufferDuration = 60.0 },
+)
+```
+
+On Web, pass your own pre-configured `HTMLVideoElement` to `WebMediampPlayer`.
+
 ## License
 
 All MediaMP source code is licensed under the Apache License version 2 (see `LICENSE` in the

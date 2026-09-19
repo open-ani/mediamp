@@ -85,12 +85,27 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  * `isStalled` is authoritative only while the native transport is playing. On Linux the
  * `surface-independent-open` capability is degraded: [openImpl] suspends until the GLX render
  * context exists (see [ensureRenderContextForLoad]).
+ *
+ * @param configureOptions optional hook invoked once during construction, after Mediamp's
+ *   default mpv options are set and right before `mpv_initialize`, so options set here win and
+ *   options that can only be set before initialization are still accepted. Use
+ *   [MPVHandle.option] to customize the native player, e.g. buffering:
+ *   ```
+ *   configureOptions = { handle ->
+ *       handle.option("demuxer-max-bytes", "${256 * 1024 * 1024}")
+ *       handle.option("cache-secs", "120")
+ *   }
+ *   ```
+ *   Do not call [MPVHandle.initialize] or [MPVHandle.close] here. Mediamp relies on its
+ *   render/output options (`vo`, `gpu-context`) and re-applies `idle`/`keep-open` after
+ *   initialization; overriding the former may break video output.
  */
 @kotlin.OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 abstract class JvmMpvMediampPlayer(
     context: Any,
     parentCoroutineContext: CoroutineContext,
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val configureOptions: ((MPVHandle) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = mainDispatcher,
@@ -441,6 +456,10 @@ abstract class JvmMpvMediampPlayer(
         handle.option("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
+
+        // Last before initialize(), so user options win over the defaults above and
+        // pre-initialization-only options can still be set.
+        configureOptions?.invoke(handle)
 
         handle.initialize()
 
