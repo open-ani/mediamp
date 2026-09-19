@@ -95,12 +95,20 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  * - No [org.openani.mediamp.features.FramePreview] (JVM-only decoder).
  * - [Screenshots] uses mpv's `screenshot-to-file` command, which cannot convert hwdec
  *   frames on all builds (the JVM desktop backend has a native surface-ring readback).
+ *
+ * @param configureOptions optional hook invoked once during construction, after Mediamp's
+ *   default mpv options are set and right before `mpv_initialize`, so options set here win and
+ *   options that can only be set before initialization are still accepted. Use
+ *   [MPVHandle.option] to customize the native player, e.g. buffering
+ *   (`demuxer-max-bytes`, `cache-secs`). Do not call [MPVHandle.initialize] or
+ *   [MPVHandle.close] here.
  */
 @OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class, ExperimentalMediampApi::class)
 actual class MpvMediampPlayer(
     context: Any = Unit,
     parentCoroutineContext: CoroutineContext = EmptyCoroutineContext,
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val configureOptions: ((MPVHandle) -> Unit)? = null,
 ) : AbstractMediampPlayer(
     parentCoroutineContext = parentCoroutineContext,
     mainDispatcher = mainDispatcher,
@@ -370,6 +378,10 @@ actual class MpvMediampPlayer(
         handle.option("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
         // workaround for <https://github.com/mpv-player/mpv/issues/14651>
         handle.option("vd-lavc-film-grain", "cpu")
+
+        // Last before initialize(), so user options win over the defaults above and
+        // pre-initialization-only options can still be set.
+        configureOptions?.invoke(handle)
 
         handle.initialize()
 

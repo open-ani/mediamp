@@ -10,6 +10,7 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -296,6 +297,32 @@ class MpvMediampPlayerSmokeTest {
             }
             assertEquals(640, properties?.videoWidth)
             assertEquals(360, properties?.videoHeight)
+        }
+    }
+
+    /**
+     * `configureOptions` runs once, before `mpv_initialize`, and after Mediamp's defaults — so
+     * a user option (here the demuxer cache size used for buffering) overrides the default.
+     */
+    @OptIn(InternalMediampApi::class)
+    @Test
+    fun `configureOptions overrides default options before initialize`() {
+        if (!prepareOrSkip()) return
+
+        val main = Dispatchers.Default.limitedParallelism(1)
+        var invocations = 0
+        val player = MpvMediampPlayer(Any(), main, mainDispatcher = main) { handle ->
+            invocations++
+            assertTrue(handle.option("demuxer-max-bytes", "${128 * 1024 * 1024}"))
+        }
+        try {
+            assertEquals(1, invocations)
+            assertEquals(
+                128 * 1024 * 1024,
+                (player.impl as MPVHandle).getPropertyInt("demuxer-max-bytes"),
+            )
+        } finally {
+            player.close()
         }
     }
 

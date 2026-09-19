@@ -36,7 +36,12 @@ actual class MpvMediampPlayer(
      * dispatcher's thread identity itself for the fail-fast command check.
      */
     mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher) {
+    /**
+     * Optional hook to customize mpv options (e.g. `demuxer-max-bytes`, `cache-secs`) right
+     * before the native handle is initialized. See [JvmMpvMediampPlayer] for details.
+     */
+    configureOptions: ((MPVHandle) -> Unit)? = null,
+) : JvmMpvMediampPlayer(context, parentCoroutineContext, mainDispatcher, configureOptions) {
 
     // Native render path; the consumer state machine is chosen by the backend
     // (MpvSurfaceRing for the shared-texture rings, MpvReadbackSurface for the Windows
