@@ -116,8 +116,14 @@ actual class MpvMediampPlayer(
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
         if (surfaceTeardownStarted) return null
         val backend = currentSurfaceBackend(layerRedrawer) ?: return null
+        val interop = backend.createSkiaInterop(layerRedrawer)
+        if (rendering == null) {
+            // Before attachBackend: eager lifecycles create the producer device there.
+            runCatching { interop.renderDevicePtr }.getOrNull()
+                ?.let { backend.hintConsumerDevice(handle.ptr, it) }
+        }
         attachBackend(backend)
-        return backend.createSkiaInterop(layerRedrawer)
+        return interop
     }
 
     /** See [MpvSurfaceConsumer.requestSurface]. */

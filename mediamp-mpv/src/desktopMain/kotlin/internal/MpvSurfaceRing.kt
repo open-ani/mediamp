@@ -48,6 +48,7 @@ import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
 import org.openani.mediamp.mpv.nSaveSurfacePng
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
 import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
+import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
@@ -140,6 +141,13 @@ internal interface MpvSurfaceBackend {
         EagerRenderContextLifecycle(this, host)
 
     /**
+     * Passes the consumer render device ([setSurfaceConfig]'s `devicePtr`) before the
+     * producer context is created, for backends whose producer device must live on the
+     * same GPU. No-op by default.
+     */
+    fun hintConsumerDevice(ptr: Long, devicePtr: Long) {}
+
+    /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
      * pointer to Skiko's native DirectXDevice struct on Windows/D3D11. The OpenGL
      * backends ignore this value (Linux attaches its GLX environment separately; the
@@ -210,6 +218,12 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
 
     override fun createRenderContext(ptr: Long) = nCreateRenderContextD3D11(ptr)
     override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextD3D11(ptr)
+
+    // NT-handle textures cannot be opened on another adapter's D3D12 device.
+    override fun hintConsumerDevice(ptr: Long, devicePtr: Long) {
+        nSetConsumerDeviceHintD3D11(ptr, devicePtr)
+    }
+
     override fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long) =
         nSetSurfaceConfigD3D11(ptr, width, height, devicePtr)
 

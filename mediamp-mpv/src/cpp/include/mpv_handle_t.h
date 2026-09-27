@@ -78,6 +78,12 @@ public:
     bool create_render_context();
     bool destroy_render_context();
 
+    // Skiko's DirectXDevice pointer (see set_surface_config), recorded before
+    // create_render_context so our ID3D11Device is created on the same adapter as
+    // Skia's ID3D12Device: NT-handle textures cannot be opened across adapters, which
+    // on hybrid-GPU machines would otherwise leave the video black. 0 = no preference.
+    bool set_consumer_device_hint(int64_t skiko_device_ptr);
+
     // Requests the render thread to (re)allocate the buffer ring at width x height,
     // opening each texture on the ID3D12Device extracted from skiko_device_ptr (a
     // pointer to Skiko's native DirectXDevice struct; 0 = D3D11-only, no D3D12 side —
@@ -237,6 +243,7 @@ private:
     // Consumer-side D3D12 device (owned reference), extracted from Skiko's native
     // DirectXDevice struct; null while the ring is headless (device ptr 0).
     ID3D12Device *skia_device_ = nullptr;
+    int64_t consumer_device_hint_ = 0;
     bool has_retired_buffers_ = false;
     bool buffers_allocated_ = false;
     int buffer_width_ = 0, buffer_height_ = 0;

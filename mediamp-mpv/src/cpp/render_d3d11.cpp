@@ -27,14 +27,20 @@
 
 #ifdef _WIN32
 
+// COM methods returning a struct (ID3D12Device::GetAdapterLuid) use a hidden result
+// pointer in the MSVC ABI; MinGW's default by-value declarations do not match it. The
+// explicit form declares that pointer, so it is correct under both g++ and clang.
+#define WIDL_EXPLICIT_AGGREGATE_RETURNS
+
 #include <initguid.h>
 #include <windows.h>
 #include <d3d11_4.h>
 #include <d3d12.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -125,6 +131,116 @@ ID3D12Device *open_skia_d3d12_device(const void *instance_handle, int64_t skiko_
     return device;  // AddRef'd by QueryInterface; caller owns.
 }
 
+bool same_luid(const LUID &a, const LUID &b) {
+    return a.LowPart == b.LowPart && a.HighPart == b.HighPart;
+}
+
+LUID d3d12_adapter_luid(ID3D12Device *device) {
+    LUID luid{};
+    device->GetAdapterLuid(&luid);
+    return luid;
+}
+
+std::string adapter_name(const DXGI_ADAPTER_DESC &desc) {
+    char name[256] = {};
+    WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+    return name;
+}
+
+// The adapter an ID3D11Device was created on; false when DXGI cannot tell.
+bool d3d11_adapter_desc(ID3D11Device *device, DXGI_ADAPTER_DESC &desc) {
+    IDXGIDevice *dxgi_device = nullptr;
+    if (FAILED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgi_device)))) {
+        return false;
+    }
+    IDXGIAdapter *adapter = nullptr;
+    HRESULT hr = dxgi_device->GetAdapter(&adapter);
+    dxgi_device->Release();
+    if (FAILED(hr) || !adapter) return false;
+    hr = adapter->GetDesc(&desc);
+    adapter->Release();
+    return SUCCEEDED(hr);
+}
+
+// The DXGI adapter with `luid`; caller owns it.
+IDXGIAdapter *adapter_by_luid(const void *instance_handle, const LUID &luid) {
+    IDXGIFactory4 *factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory4), reinterpret_cast<void **>(&factory));
+    if (FAILED(hr) || !factory) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "CreateDXGIFactory1(IDXGIFactory4) failed: 0x%lx", hr);
+        return nullptr;
+    }
+    IDXGIAdapter *adapter = nullptr;
+    hr = factory->EnumAdapterByLuid(luid, __uuidof(IDXGIAdapter), reinterpret_cast<void **>(&adapter));
+    factory->Release();
+    if (FAILED(hr) || !adapter) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "EnumAdapterByLuid(%08lx:%08lx) failed: 0x%lx", luid.HighPart, luid.LowPart, hr);
+        return nullptr;
+    }
+    return adapter;
+}
+
+// Adapter name for logs; "unknown" when DXGI cannot resolve the LUID.
+std::string adapter_name_for_luid(const void *instance_handle, const LUID &luid) {
+    IDXGIAdapter *adapter = adapter_by_luid(instance_handle, luid);
+    if (!adapter) return "unknown";
+    DXGI_ADAPTER_DESC desc{};
+    const HRESULT hr = adapter->GetDesc(&desc);
+    adapter->Release();
+    return SUCCEEDED(hr) ? adapter_name(desc) : "unknown";
+}
+
+// The adapter Skia renders on, from Skiko's DirectXDevice pointer; caller owns it.
+IDXGIAdapter *skia_adapter(const void *instance_handle, int64_t skiko_device_ptr) {
+    ID3D12Device *skia_device = open_skia_d3d12_device(instance_handle, skiko_device_ptr);
+    if (!skia_device) return nullptr;
+    const LUID luid = d3d12_adapter_luid(skia_device);
+    skia_device->Release();
+    return adapter_by_luid(instance_handle, luid);
+}
+
+// VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to the
+// device; retried without it for drivers/WARP levels that reject the flag (playback then
+// falls back to software decoding but rendering still works). With an explicit adapter
+// the driver type must be UNKNOWN; without one, the default hardware adapter is tried
+// before WARP (headless CI / no GPU).
+HRESULT create_d3d11_device(
+    const void *instance_handle, IDXGIAdapter *adapter,
+    ID3D11Device **device, ID3D11DeviceContext **context) {
+    const UINT flag_sets[] = {
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    };
+    const D3D_DRIVER_TYPE default_driver_types[] = {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+    const D3D_DRIVER_TYPE adapter_driver_types[] = {D3D_DRIVER_TYPE_UNKNOWN};
+    const D3D_DRIVER_TYPE *driver_types = adapter ? adapter_driver_types : default_driver_types;
+    const size_t driver_type_count = adapter ? ARRAYSIZE(adapter_driver_types) : ARRAYSIZE(default_driver_types);
+    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    HRESULT hr = E_FAIL;
+    for (size_t i = 0; i < driver_type_count; ++i) {
+        const D3D_DRIVER_TYPE driver_type = driver_types[i];
+        for (UINT flags : flag_sets) {
+            hr = D3D11CreateDevice(
+                adapter, driver_type, nullptr, flags,
+                levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, device, nullptr, context);
+            if (hr == E_INVALIDARG) {
+                // Pre-11.1 runtime rejects the 11_1 entry; retry without it.
+                hr = D3D11CreateDevice(
+                    adapter, driver_type, nullptr, flags,
+                    levels + 1, ARRAYSIZE(levels) - 1, D3D11_SDK_VERSION, device, nullptr, context);
+            }
+            if (SUCCEEDED(hr)) return hr;
+            if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
+                LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+                    "D3D11CreateDevice(adapter=%p type=%d flags=0x%x) failed (0x%lx)",
+                    adapter, (int) driver_type, flags, hr);
+            }
+        }
+    }
+    return hr;
+}
+
 }  // namespace
 
 namespace mediampv {
@@ -136,45 +252,35 @@ bool mpv_handle_t::create_render_context() {
     }
     if (render_context_) return true;
 
-    // VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to
-    // this device; retried without it for drivers/WARP levels that reject the flag
-    // (playback then falls back to software decoding but rendering still works).
-    const UINT flag_sets[] = {
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    };
-    const D3D_DRIVER_TYPE driver_types[] = {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
-    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    // Shared textures only open on a D3D12 device of the same adapter, so follow Skia's
+    // adapter when it is known; the default adapter differs from it on hybrid-GPU
+    // machines (GPU preference settings, skiko.gpu.priority).
     ID3D11Device *device = nullptr;
     ID3D11DeviceContext *context = nullptr;
     HRESULT hr = E_FAIL;
-    for (D3D_DRIVER_TYPE driver_type : driver_types) {
-        for (UINT flags : flag_sets) {
-            hr = D3D11CreateDevice(
-                nullptr, driver_type, nullptr, flags,
-                levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &device, nullptr, &context);
-            if (hr == E_INVALIDARG) {
-                // Pre-11.1 runtime rejects the 11_1 entry; retry without it.
-                hr = D3D11CreateDevice(
-                    nullptr, driver_type, nullptr, flags,
-                    levels + 1, ARRAYSIZE(levels) - 1, D3D11_SDK_VERSION, &device, nullptr, &context);
-            }
-            if (SUCCEEDED(hr)) break;
-            if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
-                // Headless CI / no GPU: WARP renders in software but supports the full
-                // API, including shared resources (Windows 8+).
-                LOG(this, LOG_LEVEL_WARN,
-                    "D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)",
-                    (int) driver_type, flags, hr);
-            }
+    IDXGIAdapter *adapter = consumer_device_hint_ ? skia_adapter(this, consumer_device_hint_) : nullptr;
+    if (adapter) {
+        hr = create_d3d11_device(this, adapter, &device, &context);
+        adapter->Release();
+        if (FAILED(hr)) {
+            LOG(this, LOG_LEVEL_WARN,
+                "D3D11CreateDevice on Skia's adapter failed (0x%lx); using the default adapter", hr);
+            safe_release(context);
+            safe_release(device);
         }
-        if (SUCCEEDED(hr)) break;
     }
+    if (!device) hr = create_d3d11_device(this, nullptr, &device, &context);
     if (FAILED(hr) || !device || !context) {
         LOG(this, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
         safe_release(context);
         safe_release(device);
         return false;
+    }
+    DXGI_ADAPTER_DESC adapter_desc{};
+    if (d3d11_adapter_desc(device, adapter_desc)) {
+        LOG(this, LOG_LEVEL_INFO, "D3D11 device on adapter '%s' (luid %08lx:%08lx)",
+            adapter_name(adapter_desc).c_str(),
+            adapter_desc.AdapterLuid.HighPart, adapter_desc.AdapterLuid.LowPart);
     }
 
     // The screenshot readback uses the immediate context from the JNI thread while the
@@ -218,6 +324,11 @@ bool mpv_handle_t::create_render_context() {
 
 bool mpv_handle_t::destroy_render_context() {
     cleanup_render_resources();
+    return true;
+}
+
+bool mpv_handle_t::set_consumer_device_hint(int64_t skiko_device_ptr) {
+    consumer_device_hint_ = skiko_device_ptr;
     return true;
 }
 
@@ -405,6 +516,23 @@ bool mpv_handle_t::apply_config_locked() {
         // device_ptr == 0 (headless) legitimately yields no D3D12 side; a non-zero
         // pointer failing the layout check was already logged. Either way the ring is
         // still allocated so playback and PNG readback keep working.
+        if (skia_device_) {
+            const LUID skia_luid = d3d12_adapter_luid(skia_device_);
+            const std::string skia_name = adapter_name_for_luid(this, skia_luid);
+            DXGI_ADAPTER_DESC producer_desc{};
+            if (d3d11_adapter_desc(d3d_device_, producer_desc) &&
+                !same_luid(producer_desc.AdapterLuid, skia_luid)) {
+                // Our device is fixed for the render context's lifetime (freeing it
+                // while video is active disables video), so a Skia device that moved to
+                // another adapter cannot be followed; OpenSharedHandle below will fail.
+                LOG(this, LOG_LEVEL_ERROR,
+                    "Skia's D3D12 device is on adapter '%s' but mpv's D3D11 device is on '%s'; "
+                    "shared video textures cannot be opened across adapters",
+                    skia_name.c_str(), adapter_name(producer_desc).c_str());
+            } else {
+                LOG(this, LOG_LEVEL_INFO, "Skia D3D12 device on adapter '%s'", skia_name.c_str());
+            }
+        }
     }
 
     bool ok = true;

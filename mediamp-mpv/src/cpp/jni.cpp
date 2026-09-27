@@ -127,6 +127,7 @@ extern "C" {
 #ifdef _WIN32
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetConsumerDeviceHintD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong skiko_device_ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
@@ -459,6 +460,11 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv * env, j
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
     auto *instance = get_instance(ptr);
     return instance ? instance->destroy_render_context() : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetConsumerDeviceHintD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jlong skiko_device_ptr) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->set_consumer_device_hint(skiko_device_ptr) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr) {

@@ -90,6 +90,9 @@ private fun MpvMediampPlayerSurfaceRing(
         SkiaLayerRedrawer(layer)
     }
     var interop: SkiaRenderDeviceInterop? by remember(player, layerRedrawer) { mutableStateOf(null) }
+    // Whether interop creation has finished (successfully or not). The first draws
+    // usually run before it, and a missing interop is only an error after that.
+    var interopSettled by remember(player, layerRedrawer) { mutableStateOf(layerRedrawer == null) }
     LaunchedEffect(player, layerRedrawer) {
         val liveLayer = layerRedrawer ?: return@LaunchedEffect
         // Composition can precede Skiko's first render. Wait for its actual choice,
@@ -98,6 +101,7 @@ private fun MpvMediampPlayerSurfaceRing(
         interop = runCatching { player.createSkiaInterop(liveLayer) }
             .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
+        interopSettled = true
     }
     val drawResolver: MpvSurfaceDrawResolver? = remember(player, interop) {
         interop?.let { player.renderContextLifecycle?.createDrawResolver(it) }
@@ -165,7 +169,11 @@ private fun MpvMediampPlayerSurfaceRing(
 
         if (player.isSurfaceTeardownStarted()) return@Canvas
         if (drawResolver == null) {
-            logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
+            if (interopSettled) {
+                logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
+            } else {
+                logOnce("skia interop not initialized yet")
+            }
             return@Canvas
         }
         val drawPass = drawResolver.resolveDrawPass(renderContextReady)

@@ -72,6 +72,13 @@ external fun nCreateRenderContextD3D11(ptr: Long): Boolean
 external fun nDestroyRenderContextD3D11(ptr: Long): Boolean
 
 /**
+ * Records Skiko's DirectXDevice pointer (see [nSetSurfaceConfigD3D11]) so the next
+ * [nCreateRenderContextD3D11] creates mpv's D3D11 device on the same adapter as Skia.
+ */
+@InternalMediampApi
+external fun nSetConsumerDeviceHintD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
+
+/**
  * Asks the render thread to (re)allocate the buffer ring at [width] x [height], opening
  * each texture on the ID3D12Device inside [skikoDevicePtr] (a pointer to Skiko's native
  * DirectXDevice struct; 0 = D3D11-only ring without a Skia side, used headless).
