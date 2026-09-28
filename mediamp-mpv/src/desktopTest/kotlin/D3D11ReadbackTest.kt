@@ -46,7 +46,12 @@ class D3D11ReadbackTest {
 
     private fun prepareOrSkip(): Boolean {
         val osName = System.getProperty("os.name")
-        if (!osName.contains("Windows")) return skip("D3D11 is Windows-only ($osName)")
+        if (!osName.contains("Windows")) {
+            // Not applicable here, as opposed to a missing environment: never subject to
+            // mediamp.mpv.test.required.
+            System.err.println("[D3D11ReadbackTest] not applicable: D3D11 is Windows-only ($osName)")
+            return false
+        }
         val dir = devNativeDir()
             ?: return skip(
                 "dev native dir not usable " +
