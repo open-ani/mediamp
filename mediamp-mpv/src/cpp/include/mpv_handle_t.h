@@ -46,6 +46,14 @@ public:
     }
     ~mpv_handle_t();
 
+    mpv_handle_t(const mpv_handle_t &) = delete;
+    mpv_handle_t &operator=(const mpv_handle_t &) = delete;
+
+    // Every thread the instance owns (event loop, render thread) calls this first, so
+    // the handle registry can tell when the last reference is dropped on one of them.
+    void bind_current_thread() const;
+    bool is_current_thread_owned() const;
+
     void create(JNIEnv *env, jobject app_context);
     bool initialize();
     bool set_event_listener(JNIEnv *env, jobject listener);

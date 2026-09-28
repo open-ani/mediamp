@@ -271,6 +271,7 @@ void mpv_handle_t::destroy_mpv_render_context_on_render_thread() {
 }
 
 void mpv_handle_t::render_thread_loop() {
+    bind_current_thread();
     JNIEnv *thread_env = nullptr;
     const bool attached = jvm_ &&
         jvm_->AttachCurrentThread(reinterpret_cast<void **>(&thread_env), nullptr) == JNI_OK;

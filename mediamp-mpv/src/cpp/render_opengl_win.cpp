@@ -271,6 +271,7 @@ void mpv_handle_t::signal_render_update_win_gl() {
 }
 
 void mpv_handle_t::render_thread_loop_win_gl() {
+    bind_current_thread();
     auto *s = win_gl_;
     // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
     // attach/detach pair.

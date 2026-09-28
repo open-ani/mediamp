@@ -7,6 +7,7 @@
 
 #include "method_cache.h"
 #include "jni_utils.h"
+#include "handle_registry.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -71,7 +72,7 @@ void dispatch(const void *instance_handle, int level, const char *prefix, const 
     if (jprefix && jtext) {
         env->CallStaticVoidMethod(jni_mediamp_clazz_MPVLogKt,
                                   jni_mediamp_method_MPVLogKt_onNativeLog,
-                                  static_cast<jlong>(reinterpret_cast<std::uintptr_t>(instance_handle)),
+                                  log_id_for(instance_handle),
                                   static_cast<jint>(level), jprefix, jtext);
     } else {
         log_to_stderr(level, prefix, text);

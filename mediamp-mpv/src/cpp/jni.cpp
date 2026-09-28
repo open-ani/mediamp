@@ -17,6 +17,7 @@
 #endif
 #include "mpv_handle_t.h"
 #include "method_cache.h"
+#include "handle_registry.h"
 
 #define FN(name) Java_org_openani_mediamp_mpv_MPVHandleKt_##name
 #define FN_ANDROID(name) Java_org_openani_mediamp_mpv_MPVHandleAndroid_##name
@@ -24,8 +25,10 @@
 
 namespace {
 
-mediampv::mpv_handle_t *get_instance(jlong ptr) {
-    return reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
+// `ptr` is the opaque id from nMake (see handle_registry.h). The returned reference keeps
+// the instance alive for the whole call; null once the player has been finalized.
+std::shared_ptr<mediampv::mpv_handle_t> get_instance(jlong ptr) {
+    return mediampv::find_handle(ptr);
 }
 
 #ifdef MEDIAMPV_DESKTOP
@@ -38,13 +41,13 @@ using read_surface_pixels_fn =
 jintArray read_surface_pixels_to_java(
     JNIEnv *env, jlong ptr, jintArray dims,
     read_surface_pixels_fn reader = &mediampv::mpv_handle_t::read_surface_pixels) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance || !dims || env->GetArrayLength(dims) < 2) {
         return nullptr;
     }
     std::vector<uint32_t> pixels;
     int width = 0, height = 0;
-    if (!(instance->*reader)(pixels, width, height) || pixels.empty()) {
+    if (!((*instance).*reader)(pixels, width, height) || pixels.empty()) {
         return nullptr;
     }
     jintArray result = env->NewIntArray(static_cast<jsize>(pixels.size()));
@@ -196,8 +199,7 @@ JNIEXPORT jboolean JNICALL FN(nGlobalInit)(JNIEnv *env, jclass clazz) {
 
 JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context) {
     try {
-        auto* handle = new mediampv::mpv_handle_t(env, app_context);
-        return reinterpret_cast<jlong>(handle);
+        return mediampv::register_handle(std::make_unique<mediampv::mpv_handle_t>(env, app_context));
     } catch (const std::exception &e) {
         // A C++ exception unwinding across the JNI boundary is undefined behavior. Translate
         // it into an IllegalStateException carrying the concrete reason (out of memory, mpv
@@ -212,7 +214,7 @@ JNIEXPORT jlong JNICALL FN(nMake)(JNIEnv *env, jclass clazz, jobject app_context
 }
 
 JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) {
         mediampv::throw_illegal_state(env, "cannot initialize: native mpv handle is not available");
         return JNI_FALSE;
@@ -221,32 +223,32 @@ JNIEXPORT jboolean JNICALL FN(nInitialize)(JNIEnv *env, jclass clazz, jlong ptr)
         return instance->initialize();
     } catch (const std::exception &e) {
         // initialize() throws on unrecoverable init failure; surface the concrete reason.
-        mediampv::throw_illegal_state(env, e.what(), instance);
+        mediampv::throw_illegal_state(env, e.what(), instance.get());
         return JNI_FALSE;
     }
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetEventListener)
         (JNIEnv *env, jclass clazz, jlong ptr, jobject listener) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_event_listener(env, listener) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetRenderUpdateListener)
         (JNIEnv *env, jclass clazz, jlong ptr, jobject listener) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_render_update_listener(env, listener) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN(nCommand)(JNIEnv *env, jclass clazz, jlong ptr, jobjectArray args) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance || !args) {
         return JNI_FALSE;
     }
 
     const jsize len = env->GetArrayLength(args);
     if (len >= 128) {
-        LOG(instance, mediampv::LOG_LEVEL_ERROR, "nCommand: too many arguments (%d >= 128)", len);
+        LOG(instance.get(), mediampv::LOG_LEVEL_ERROR, "nCommand: too many arguments (%d >= 128)", len);
         return JNI_FALSE;
     }
 
@@ -284,7 +286,7 @@ JNIEXPORT jboolean JNICALL FN(nCommand)(JNIEnv *env, jclass clazz, jlong ptr, jo
 }
 
 JNIEXPORT jboolean JNICALL FN(nOption)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jstring value) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars option_key(env, key);
     scoped_utf_chars option_value(env, value);
     if (!instance || !option_key.valid() || !option_value.valid()) {
@@ -297,7 +299,7 @@ JNIEXPORT jboolean JNICALL FN(nOption)(JNIEnv *env, jclass clazz, jlong ptr, jst
 // property set and get
 
 JNIEXPORT jint JNICALL FN(nGetPropertyInt)(JNIEnv *env, jclass clazz, jlong ptr, jstring key) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return 0;
@@ -318,7 +320,7 @@ JNIEXPORT jint JNICALL FN(nGetPropertyInt)(JNIEnv *env, jclass clazz, jlong ptr,
 }
 
 JNIEXPORT jdouble JNICALL FN(nGetPropertyDouble)(JNIEnv *env, jclass clazz, jlong ptr, jstring key) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return 0;
@@ -331,7 +333,7 @@ JNIEXPORT jdouble JNICALL FN(nGetPropertyDouble)(JNIEnv *env, jclass clazz, jlon
 }
 
 JNIEXPORT jboolean JNICALL FN(nGetPropertyBoolean)(JNIEnv *env, jclass clazz, jlong ptr, jstring key) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return JNI_FALSE;
@@ -344,7 +346,7 @@ JNIEXPORT jboolean JNICALL FN(nGetPropertyBoolean)(JNIEnv *env, jclass clazz, jl
 }
 
 JNIEXPORT jstring JNICALL FN(nGetPropertyString)(JNIEnv *env, jclass clazz, jlong ptr, jstring key) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return nullptr;
@@ -365,7 +367,7 @@ JNIEXPORT jstring JNICALL FN(nGetPropertyString)(JNIEnv *env, jclass clazz, jlon
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetPropertyString)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jstring value) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     scoped_utf_chars property_value(env, value);
     if (!instance || !property_key.valid() || !property_value.valid()) {
@@ -377,7 +379,7 @@ JNIEXPORT jboolean JNICALL FN(nSetPropertyString)(JNIEnv *env, jclass clazz, jlo
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetPropertyInt)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jint value) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return JNI_FALSE;
@@ -388,7 +390,7 @@ JNIEXPORT jboolean JNICALL FN(nSetPropertyInt)(JNIEnv *env, jclass clazz, jlong 
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetPropertyDouble)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jdouble value) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return JNI_FALSE;
@@ -398,7 +400,7 @@ JNIEXPORT jboolean JNICALL FN(nSetPropertyDouble)(JNIEnv *env, jclass clazz, jlo
 }
 
 JNIEXPORT jboolean JNICALL FN(nSetPropertyBoolean)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jboolean value) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return JNI_FALSE;
@@ -409,7 +411,7 @@ JNIEXPORT jboolean JNICALL FN(nSetPropertyBoolean)(JNIEnv *env, jclass clazz, jl
 }
 
 JNIEXPORT jboolean JNICALL FN(nObserveProperty)(JNIEnv *env, jclass clazz, jlong ptr, jstring key, jint format, jlong reply_data) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars property_key(env, key);
     if (!instance || !property_key.valid()) {
         return JNI_FALSE;
@@ -419,12 +421,12 @@ JNIEXPORT jboolean JNICALL FN(nObserveProperty)(JNIEnv *env, jclass clazz, jlong
 }
 
 JNIEXPORT jboolean JNICALL FN(nUnobserveProperty)(JNIEnv *env, jclass clazz, jlong ptr, jlong reply_data) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->unobserve_property(reply_data) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jobject input, jstring uri, jlong size) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars stream_uri(env, uri);
     if (!instance || !stream_uri.valid()) {
         return JNI_FALSE;
@@ -434,7 +436,7 @@ JNIEXPORT jboolean JNICALL FN(nRegisterSeekableInput)(JNIEnv *env, jclass clazz,
 }
 
 JNIEXPORT jboolean JNICALL FN(nUnregisterSeekableInput)(JNIEnv *env, jclass clazz, jlong ptr, jstring uri) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     scoped_utf_chars stream_uri(env, uri);
     if (!instance || !stream_uri.valid()) {
         return JNI_FALSE;
@@ -444,71 +446,71 @@ JNIEXPORT jboolean JNICALL FN(nUnregisterSeekableInput)(JNIEnv *env, jclass claz
 }
 
 JNIEXPORT jboolean JNICALL FN_ANDROID(nAttachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr, jobject surface) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->attach_android_surface(env, surface) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_ANDROID(nDetachAndroidSurface)(JNIEnv *env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->detach_android_surface(env) : JNI_FALSE;
 }
 
 #ifdef _WIN32
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->create_render_context() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->destroy_render_context() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetConsumerDeviceHintD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jlong skiko_device_ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_consumer_device_hint(skiko_device_ptr) : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_readback_surface_config(width, height) : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) return 0;
     return (jlong) instance->copy_latest_frame_d3d11(
         reinterpret_cast<void *>(static_cast<uintptr_t>(dest_addr)), width, height);
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_surface_config(width, height, skiko_device_ptr) : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? (jlong) instance->get_frame_state() : 0;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint index) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->get_buffer_texture(index) : 0;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->ack_retired_buffers() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->has_d3d11_surface() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) {
         return JNI_FALSE;
     }
@@ -526,32 +528,32 @@ JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv * env, jc
 // Windows OpenGL fallback render path (render_opengl_win.cpp).
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->create_render_context_win_gl() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->destroy_render_context_win_gl() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_surface_config_win_gl(width, height) : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? (jlong) instance->get_frame_state_win_gl() : 0;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasWindowsOpenGLSurface)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->has_win_gl_surface() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) {
         return JNI_FALSE;
     }
@@ -568,7 +570,7 @@ JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsWindowsOpenGL)(JNIEnv *
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameWindowsOpenGL)(JNIEnv * env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance || dest_addr == 0) {
         return 0;
     }
@@ -581,42 +583,42 @@ JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameWindowsOpenGL)(JNIEnv * env, 
 #ifdef __APPLE__
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->create_render_context() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->destroy_render_context() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigMacos)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->set_surface_config(width, height, mtl_device_ptr) : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? static_cast<jlong>(instance->get_frame_state()) : 0;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv * env, jclass clazz, jlong ptr, jint index) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? static_cast<jlong>(instance->get_buffer_texture(index)) : 0;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->ack_retired_buffers() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv * env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->has_metal_surface() : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePng)(JNIEnv * env, jclass clazz, jlong ptr, jstring path) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) {
         return JNI_FALSE;
     }
@@ -640,7 +642,7 @@ JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv * env, jc
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
         JNIEnv *env, jclass, jlong ptr, jobject component,
         jlong share_context, jlong drawable, jlong window) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance || !component || !share_context || !drawable) return JNI_FALSE;
 
     // Resolve JAWT lazily so the JNI wrapper does not acquire a deployment-time
@@ -693,44 +695,44 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance && instance->create_render_context() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *, jclass, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance && instance->destroy_render_context() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigOpenGL)(
         JNIEnv *, jclass, jlong ptr, jint width, jint height, jlong) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance && instance->set_surface_config(width, height) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateOpenGL)(JNIEnv *, jclass, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? static_cast<jlong>(instance->get_frame_state())
                     : static_cast<jlong>(0xFULL << 44);
 }
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *, jclass, jlong ptr, jint index) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? static_cast<jlong>(instance->get_buffer_texture(index)) : 0;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *, jclass, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance && instance->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *, jclass, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance && instance->has_opengl_surface() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass, jlong ptr, jstring path) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     if (!instance) return JNI_FALSE;
     scoped_utf_chars path_chars(env, path);
     return path_chars.valid() && instance->save_surface_png(path_chars.get()) ? JNI_TRUE : JNI_FALSE;
@@ -769,14 +771,10 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nDeleteOpenGLConsumerFbo)(JNIEnv *, jclass
 #endif
 
 JNIEXPORT jboolean JNICALL FN(nDestroy)(JNIEnv *env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
+    auto instance = get_instance(ptr);
     return instance ? instance->destroy(env) : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL FN(nFinalize)(JNIEnv *env, jclass clazz, jlong ptr) {
-    auto *instance = get_instance(ptr);
-    if (!instance) {
-        return;
-    }
-    delete instance;
+    mediampv::unregister_handle(ptr);
 }

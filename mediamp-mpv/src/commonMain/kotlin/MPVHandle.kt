@@ -17,10 +17,15 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
     private var renderUpdateListener: RenderUpdateListener? = null
-    // Atomic so close() can claim the pointer exactly once: concurrent close() calls
-    // must not both reach nFinalize (that would double-delete the native instance).
+    // Atomic so close() can claim the id exactly once. Native code tolerates stale ids
+    // (handle_registry.cpp), but only the first close() should report finalizing.
     private val nativePtr = AtomicLong(ptr)
 
+    /**
+     * Opaque id of the native player (handle_registry.cpp), not a memory address. Calls
+     * made with it after [close] find no player and return their "unavailable" value,
+     * and ids are never reused, so it is safe to capture (e.g. in render consumers).
+     */
     internal val ptr: Long
         get() = nativePtr.load().takeIf { it != 0L } ?: error("MPVHandle has already been closed")
 

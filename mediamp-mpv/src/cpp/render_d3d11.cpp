@@ -428,6 +428,7 @@ void mpv_handle_t::stop_render_thread() {
 }
 
 void mpv_handle_t::render_thread_loop() {
+    bind_current_thread();
     // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
     // attach/detach pair.
     JNIEnv *thread_env = nullptr;

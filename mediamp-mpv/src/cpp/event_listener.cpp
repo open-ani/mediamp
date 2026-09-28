@@ -78,6 +78,7 @@ static void emit_log_message(mpv_handle_t *instance, mpv_event_log_message *mess
 }
 
 void mpv_handle_t::event_loop() {
+    bind_current_thread();
     if (!jvm_ || !handle_) {
         LOG(this, LOG_LEVEL_ERROR,
             "[event_loop] jvm or mpv handle is not initialized; event loop will not start");

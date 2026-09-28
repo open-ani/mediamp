@@ -10,6 +10,7 @@
 #include "mpv_handle_t.h"
 #include "method_cache.h"
 #include "jni_utils.h"
+#include "handle_registry.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -301,8 +302,23 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
     mpv_set_option_string(handle_, "msg-level", "all=v");
 }
 
+namespace {
+// The instance whose event loop or render thread the calling thread is (see
+// bind_current_thread); lets the registry avoid destroying an instance on its own thread.
+thread_local const mpv_handle_t *current_thread_owner = nullptr;
+} // namespace
+
+void mpv_handle_t::bind_current_thread() const {
+    current_thread_owner = this;
+}
+
+bool mpv_handle_t::is_current_thread_owned() const {
+    return current_thread_owner == this;
+}
+
 mpv_handle_t::~mpv_handle_t() {
     destroy(nullptr);
+    forget_log_id(this);
 }
 
 bool mpv_handle_t::initialize() {
