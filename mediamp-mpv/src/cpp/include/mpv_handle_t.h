@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <jni.h>
@@ -30,8 +31,6 @@ struct ID3D12Device;
 struct ID3D12Resource;
 #endif
 #include "platform.h"
-#include "compatible_thread.h"
-#include "global_lock.h"
 #include "log.h"
 
 namespace mediampv {
@@ -213,15 +212,17 @@ private:
     // Serializes the simple hot methods (command/set_option/get/set/observe/unobserve
     // property) that read handle_ and call mpv_* against destroy()'s
     // mpv_terminate_destroy + handle_=nullptr, closing the TOCTOU/use-after-free window
-    // when teardown races an in-flight native call. Recursive (CREATE_LOCK), but never
+    // when teardown races an in-flight native call. Recursive, but never
     // nested with another lock in those methods to avoid lock-order inversions (the
     // seekable-stream methods intentionally do NOT take it — they are ordered under
     // stream_registry_lock instead).
-    CREATE_LOCK(handle_lock);
+    std::recursive_mutex handle_lock_;
 
     jobject event_listener_ = nullptr;
     jobject render_update_listener_ = nullptr;
-    CREATE_LOCK(render_update_listener_lock);
+    std::recursive_mutex render_update_listener_lock_;
+    // Serializes attach/detach_android_surface (Android wid option + Surface ref).
+    std::mutex surface_access_lock_;
 
 #ifdef __ANDROID__
     bool surface_attached_ = false;
@@ -453,13 +454,13 @@ private:
         std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
-    std::shared_ptr<mediampv::compatible_thread> event_thread_;
+    std::thread event_thread_;
     std::atomic_bool event_loop_request_exit{false};
     bool stream_protocol_registered_ = false;
-    CREATE_LOCK(stream_registry_lock);
+    std::recursive_mutex stream_registry_lock_;
     std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> seekable_streams_;
 
-    void *event_loop(void *arg);
+    void event_loop();
     bool ensure_stream_protocol_registered();
     int open_seekable_stream(const char *uri, mpv_stream_cb_info *info);
     static int open_seekable_stream(void *user_data, char *uri, mpv_stream_cb_info *info);

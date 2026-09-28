@@ -1,60 +1,8 @@
 #include "mpv_handle_t.h"
 #include "method_cache.h"
+#include "jni_utils.h"
 
 namespace mediampv {
-
-namespace {
-
-struct attached_jni_env final {
-    explicit attached_jni_env(JavaVM *vm) : vm(vm) {
-        if (!vm) {
-            return;
-        }
-        const jint get_env_result = vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-        if (get_env_result == JNI_OK) {
-            return;
-        }
-        if (get_env_result == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-            if (vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                attached = true;
-            }
-#else
-            if (vm->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) == JNI_OK) {
-                attached = true;
-            }
-#endif
-        }
-    }
-
-    ~attached_jni_env() {
-        if (attached && vm) {
-            vm->DetachCurrentThread();
-        }
-    }
-
-    JNIEnv *env = nullptr;
-
-private:
-    JavaVM *vm = nullptr;
-    bool attached = false;
-};
-
-bool clear_jni_exception(JNIEnv *env, const void *instance_handle, const char *context) {
-    if (!env || !env->ExceptionCheck()) {
-        return false;
-    }
-
-    // Describe + clear first, then log: logging goes through the JNI dispatcher, which
-    // cannot run while an exception is pending. This surfaces the failure to the Kotlin
-    // sink instead of silently swallowing it.
-    env->ExceptionDescribe();
-    env->ExceptionClear();
-    LOG(instance_handle, LOG_LEVEL_ERROR, "JNI exception in %s", context);
-    return true;
-}
-
-} // namespace
 
 static void emit_property_change(
         JNIEnv *env,
@@ -129,19 +77,19 @@ static void emit_log_message(mpv_handle_t *instance, mpv_event_log_message *mess
                 message->text ? message->text : "");
 }
 
-void *(mpv_handle_t::event_loop)(void *arg) {
+void mpv_handle_t::event_loop() {
     if (!jvm_ || !handle_) {
         LOG(this, LOG_LEVEL_ERROR,
             "[event_loop] jvm or mpv handle is not initialized; event loop will not start");
-        return nullptr;
+        return;
     }
 
-    attached_jni_env attached_env(jvm_);
+    scoped_jni_env attached_env(jvm_);
     JNIEnv *env = attached_env.env;
     if (!env) {
         LOG(this, LOG_LEVEL_ERROR,
             "[event_loop] failed to attach current thread; event loop will not start");
-        return nullptr;
+        return;
     }
     jni_cache_classes(env, this);
 
@@ -217,7 +165,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
             }
             case MPV_EVENT_SHUTDOWN:
                 LOG(this, LOG_LEVEL_V, "[event_loop] shutdown");
-                return nullptr;
+                return;
             default:
                 LOG(this, LOG_LEVEL_TRACE, "[event_loop] unhandled event: %d", event->event_id);
                 break;
@@ -225,7 +173,6 @@ void *(mpv_handle_t::event_loop)(void *arg) {
 
     }
     LOG(this, LOG_LEVEL_V, "[event_loop] stopped");
-    return nullptr;
 }
 
 } // namespace mediampv

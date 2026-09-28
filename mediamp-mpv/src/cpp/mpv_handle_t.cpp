@@ -5,11 +5,11 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <mpv/render_gl.h>
 #include "mpv_handle_t.h"
 #include "method_cache.h"
-#include "compatible_thread.h"
-#include "global_lock.h"
+#include "jni_utils.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -23,86 +23,19 @@ extern "C" {
     LOG(this, LOG_LEVEL_WARN, "mpv handle is not created when %s", __FUNCTION__); \
     return false; \
 }
-#define CHECK_HANDLE_RETURN_INT() if (!handle_) { \
-    LOG(this, LOG_LEVEL_WARN, "mpv handle is not created when %s", __FUNCTION__); \
-    return 0; \
-}
 
 namespace mediampv {
 
-CREATE_LOCK(global_guard);
-JavaVM *global_jvm = nullptr;
-
 namespace {
+
+// Serializes the one-time JavaVM capture and mpv_create (which needs LC_NUMERIC == "C").
+std::mutex global_guard;
 
 constexpr const char *kSeekableInputProtocol = "mediamp";
 
-struct stream_lock_guard final {
-#if defined(_WIN32) || defined(_WIN64)
-    explicit stream_lock_guard(CompatibleLock &lock) : guard(lock) {}
-    LockGuard guard;
-#else
-    explicit stream_lock_guard(std::recursive_mutex &lock) : guard(lock) {}
-    std::lock_guard<std::recursive_mutex> guard;
-#endif
-};
-
-struct attached_jni_env final {
-    explicit attached_jni_env(JavaVM *vm) : vm(vm) {
-        if (!vm) {
-            return;
-        }
-        const jint get_env_result = vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-        if (get_env_result == JNI_OK) {
-            return;
-        }
-        if (get_env_result == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-            if (vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                attached = true;
-            }
-#else
-            if (vm->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) == JNI_OK) {
-                attached = true;
-            }
-#endif
-        }
-    }
-
-    ~attached_jni_env() {
-        if (attached && vm) {
-            vm->DetachCurrentThread();
-        }
-    }
-
-    JNIEnv *env = nullptr;
-
-private:
-    JavaVM *vm = nullptr;
-    bool attached = false;
-};
-
-bool clear_jni_exception(JNIEnv *env, const void *instance_handle, const char *context) {
-    if (!env || !env->ExceptionCheck()) {
-        return false;
-    }
-
-    // Describe + clear before logging: the log dispatcher makes JNI calls, which must not
-    // run with an exception pending.
-    env->ExceptionDescribe();
-    env->ExceptionClear();
-    LOG(instance_handle, LOG_LEVEL_ERROR, "JNI exception in %s", context);
-    return true;
-}
-
-void delete_global_ref(JNIEnv *env, jobject &reference) {
-    if (env && reference) {
-        env->DeleteGlobalRef(reference);
-    }
-    reference = nullptr;
-}
-
 } // namespace
+
+JavaVM *global_jvm = nullptr;
 
 struct mpv_handle_t::seekable_stream_entry final {
     seekable_stream_entry(
@@ -126,14 +59,14 @@ struct mpv_handle_t::seekable_stream_entry final {
             return false;
         }
 
-        attached_jni_env attached_env(jvm);
+        scoped_jni_env attached_env(jvm);
         JNIEnv *env = attached_env.env;
         if (!env) {
             input = nullptr;
             return false;
         }
 
-        stream_lock_guard guard(io_lock);
+        std::lock_guard<std::recursive_mutex> guard(io_lock);
         if (input) {
             env->CallVoidMethod(input, mediampv::jni_mediamp_method_SeekableInput_close);
             clear_jni_exception(env, instance_handle, "SeekableInput.close");
@@ -152,7 +85,8 @@ struct mpv_handle_t::seekable_stream_entry final {
     std::atomic_bool opened{false};
     std::atomic_bool cancel_requested{false};
     std::atomic_bool released{false};
-    CREATE_LOCK(io_lock);
+    // Recursive: held while SeekableInput.read/seekTo/close run arbitrary Java code.
+    std::recursive_mutex io_lock;
 };
 
 struct mpv_handle_t::seekable_stream_cookie final {
@@ -202,7 +136,7 @@ int64_t seekable_stream_read(void *cookie_ptr, char *buf, uint64_t nbytes) {
         return -1;
     }
 
-    attached_jni_env attached_env(entry->jvm);
+    scoped_jni_env attached_env(entry->jvm);
     JNIEnv *env = attached_env.env;
     if (!env) {
         return -1;
@@ -214,7 +148,7 @@ int64_t seekable_stream_read(void *cookie_ptr, char *buf, uint64_t nbytes) {
         return 0;
     }
 
-    stream_lock_guard guard(entry->io_lock);
+    std::lock_guard<std::recursive_mutex> guard(entry->io_lock);
     if (entry->released.load(std::memory_order_acquire) || !entry->input) {
         return -1;
     }
@@ -256,13 +190,13 @@ int64_t seekable_stream_seek(void *cookie_ptr, int64_t offset) {
         return MPV_ERROR_GENERIC;
     }
 
-    attached_jni_env attached_env(entry->jvm);
+    scoped_jni_env attached_env(entry->jvm);
     JNIEnv *env = attached_env.env;
     if (!env) {
         return MPV_ERROR_GENERIC;
     }
 
-    stream_lock_guard guard(entry->io_lock);
+    std::lock_guard<std::recursive_mutex> guard(entry->io_lock);
     if (entry->released.load(std::memory_order_acquire) || !entry->input) {
         return MPV_ERROR_GENERIC;
     }
@@ -295,7 +229,7 @@ void seekable_stream_close(void *cookie_ptr) {
         return;
     }
 
-    attached_jni_env attached_env(cookie->entry ? cookie->entry->jvm : nullptr);
+    scoped_jni_env attached_env(cookie->entry ? cookie->entry->jvm : nullptr);
     if (attached_env.env && cookie->read_buffer) {
         attached_env.env->DeleteGlobalRef(cookie->read_buffer);
     }
@@ -326,7 +260,7 @@ void mpv_handle_t::create(JNIEnv *env, jobject app_context) {
         throw std::runtime_error("cannot create mpv handle: JNI env is null");
     }
 
-    LOCK(global_guard);
+    std::lock_guard<std::mutex> global_lock(global_guard);
 
     if (!global_jvm) {
         if (env->GetJavaVM(&global_jvm) != JNI_OK || !global_jvm) {
@@ -378,17 +312,17 @@ bool mpv_handle_t::initialize() {
     if (!handle_) {
         throw std::runtime_error("cannot initialize: the mpv handle has already been destroyed");
     }
-    if (event_thread_) return true;
+    if (event_thread_.joinable()) return true;
     const int rc = mpv_initialize(handle_);
     if (rc < 0) {
         throw std::runtime_error(std::string("mpv_initialize() failed: ") + mpv_error_string(rc));
     }
 
     event_loop_request_exit.store(false, std::memory_order_release);
-    event_thread_ = std::make_shared<mediampv::compatible_thread>([this] { event_loop(nullptr); });
-    if (!event_thread_->create()) {
-        event_thread_.reset();
-        throw std::runtime_error("failed to start the mpv event-loop thread");
+    try {
+        event_thread_ = std::thread([this] { event_loop(); });
+    } catch (const std::system_error &e) {
+        throw std::runtime_error(std::string("failed to start the mpv event-loop thread: ") + e.what());
     }
 
     return true;
@@ -444,7 +378,7 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
         return false;
     }
 
-    LOCK(render_update_listener_lock);
+    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
     clear_render_update_listener(env);
     if (!listener) {
         return true;
@@ -460,7 +394,7 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
 }
 
 bool mpv_handle_t::command(const char **args) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     if (!args) {
         return false;
@@ -474,7 +408,7 @@ bool mpv_handle_t::command(const char **args) {
 }
 
 bool mpv_handle_t::set_option(const char *key, const char *value) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     if (!key || !value) {
         return false;
@@ -488,13 +422,13 @@ bool mpv_handle_t::set_option(const char *key, const char *value) {
 }
 
 bool mpv_handle_t::get_property(const char *name, mpv_format format, void *out_result) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     return mpv_get_property(handle_, name, format, out_result) >= 0;
 }
 
 bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_value) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_set_property(handle_, name, format, in_value);
     if (rc < 0) {
@@ -505,7 +439,7 @@ bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_va
 }
 
 bool mpv_handle_t::observe_property(const char *property, mpv_format format, uint64_t reply_data) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_observe_property(handle_, reply_data, property, format);
     if (rc < 0) {
@@ -516,7 +450,7 @@ bool mpv_handle_t::observe_property(const char *property, mpv_format format, uin
 }
 
 bool mpv_handle_t::unobserve_property(uint64_t reply_data) {
-    LOCK(handle_lock);
+    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_unobserve_property(handle_, reply_data);
     if (rc < 0) {
@@ -571,7 +505,7 @@ bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, 
         return false;
     }
 
-    LOCK(stream_registry_lock);
+    std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
     if (!ensure_stream_protocol_registered()) {
         throw_illegal_state(
                 env,
@@ -611,7 +545,7 @@ bool mpv_handle_t::unregister_seekable_input(const char *uri) {
 
     std::shared_ptr<seekable_stream_entry> entry;
     {
-        LOCK(stream_registry_lock);
+        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
         auto iterator = seekable_streams_.find(uri);
         if (iterator == seekable_streams_.end()) {
             return false;
@@ -635,7 +569,7 @@ int mpv_handle_t::open_seekable_stream(const char *uri, mpv_stream_cb_info *info
 
     std::shared_ptr<seekable_stream_entry> entry;
     {
-        LOCK(stream_registry_lock);
+        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
         auto iterator = seekable_streams_.find(uri);
         if (iterator == seekable_streams_.end()) {
             LOG(this, LOG_LEVEL_ERROR, "no registered seekable stream for uri %s", uri);
@@ -673,10 +607,9 @@ int mpv_handle_t::open_seekable_stream(void *user_data, char *uri, mpv_stream_cb
     return instance ? instance->open_seekable_stream(uri, info) : MPV_ERROR_LOADING_FAILED;
 }
 
-CREATE_LOCK(surface_access_lock);
 
 bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
-    LOCK(surface_access_lock);
+    std::lock_guard<std::mutex> surface_guard(surface_access_lock_);
     CHECK_HANDLE()
 
 #ifdef __ANDROID__
@@ -713,7 +646,7 @@ bool mpv_handle_t::attach_android_surface(JNIEnv *env, jobject surface) {
 }
 
 bool mpv_handle_t::detach_android_surface(JNIEnv *env) {
-    LOCK(surface_access_lock);
+    std::lock_guard<std::mutex> surface_guard(surface_access_lock_);
     CHECK_HANDLE()
 
 #ifdef __ANDROID__
@@ -749,12 +682,11 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
         mpv_wakeup(handle_);
     }
 
-    if (event_thread_) {
-        event_thread_->join();
-        event_thread_.reset();
+    if (event_thread_.joinable()) {
+        event_thread_.join();
     }
 
-    attached_jni_env attached_env(env ? nullptr : jvm_);
+    scoped_jni_env attached_env(env ? nullptr : jvm_);
     JNIEnv *cleanup_env = env ? env : attached_env.env;
 #ifdef MEDIAMPV_DESKTOP
     // Stop the render thread FIRST: it calls notify_render_update() (which touches
@@ -778,7 +710,7 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     // Mutually exclusive with the hot methods' mpv_* calls (they hold handle_lock),
     // so a call either completes before the handle is torn down or sees handle_==null.
     {
-        LOCK(handle_lock);
+        std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
         if (handle_) {
             mpv_terminate_destroy(handle_);
             handle_ = nullptr;
@@ -790,7 +722,7 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
 }
 
 void mpv_handle_t::clear_event_listener(JNIEnv *env) {
-    attached_jni_env attached_env(env ? nullptr : jvm_);
+    scoped_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, event_listener_);
 }
 
@@ -798,8 +730,8 @@ void mpv_handle_t::clear_render_update_listener(JNIEnv *env) {
     // Serialize with notify_render_update(), which reads render_update_listener_ under
     // this same lock before CallVoidMethod; without it the render thread could invoke a
     // freed global ref during teardown.
-    LOCK(render_update_listener_lock);
-    attached_jni_env attached_env(env ? nullptr : jvm_);
+    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
+    scoped_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, render_update_listener_);
 }
 
@@ -808,13 +740,13 @@ void mpv_handle_t::notify_render_update() {
         return;
     }
 
-    attached_jni_env attached_env(jvm_);
+    scoped_jni_env attached_env(jvm_);
     JNIEnv *env = attached_env.env;
     if (!env || !mediampv::jni_mediamp_method_RenderUpdateListener_onRenderUpdate) {
         return;
     }
 
-    LOCK(render_update_listener_lock);
+    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
     if (!render_update_listener_) {
         return;
     }
@@ -826,7 +758,7 @@ void mpv_handle_t::notify_render_update() {
 void mpv_handle_t::clear_seekable_streams() {
     std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> remaining_streams;
     {
-        LOCK(stream_registry_lock);
+        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
         remaining_streams.swap(seekable_streams_);
     }
     for (auto &entry : remaining_streams) {
@@ -837,7 +769,7 @@ void mpv_handle_t::clear_seekable_streams() {
 
 #ifdef __ANDROID__
 void mpv_handle_t::clear_android_surface(JNIEnv *env) {
-    attached_jni_env attached_env(env ? nullptr : jvm_);
+    scoped_jni_env attached_env(env ? nullptr : jvm_);
     delete_global_ref(env ? env : attached_env.env, surface_);
     surface_attached_ = false;
 }

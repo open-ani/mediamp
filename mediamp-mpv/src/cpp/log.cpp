@@ -6,6 +6,7 @@
 #include <jni.h>
 
 #include "method_cache.h"
+#include "jni_utils.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -14,44 +15,6 @@
 namespace mediampv {
 
 namespace {
-
-// Attaches the calling thread to the JVM when needed and detaches on scope exit only if
-// this helper performed the attach, so a thread the JVM already owns (event loop, render
-// thread, a thread inside a JNI downcall) is never wrongly detached.
-struct scoped_env final {
-    explicit scoped_env(JavaVM *vm) : vm_(vm) {
-        if (!vm_) {
-            return;
-        }
-        const jint rc = vm_->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-        if (rc == JNI_OK) {
-            return;
-        }
-        if (rc == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-            if (vm_->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                attached_ = true;
-            }
-#else
-            if (vm_->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) == JNI_OK) {
-                attached_ = true;
-            }
-#endif
-        }
-    }
-
-    ~scoped_env() {
-        if (attached_ && vm_) {
-            vm_->DetachCurrentThread();
-        }
-    }
-
-    JNIEnv *env = nullptr;
-
-private:
-    JavaVM *vm_ = nullptr;
-    bool attached_ = false;
-};
 
 // Last-resort sink used when the log line cannot reach the Kotlin handler. Never silently
 // drops the line: startup errors (before the JVM/cache exist) and JNI-path failures still
@@ -87,7 +50,7 @@ void dispatch(const void *instance_handle, int level, const char *prefix, const 
         return;
     }
 
-    scoped_env scoped(vm);
+    scoped_jni_env scoped(vm);
     JNIEnv *env = scoped.env;
     if (!env) {
         log_to_stderr(level, prefix, text);
