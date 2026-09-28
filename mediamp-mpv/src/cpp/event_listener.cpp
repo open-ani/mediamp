@@ -105,18 +105,21 @@ void mpv_handle_t::event_loop() {
         mpv_event_property *event_property = nullptr;
         mpv_event_log_message *log_message = nullptr;
 
-        // 不处理 NONE 事件
+        // NONE is a timeout/wakeup, not an event.
         if ((event = mpv_wait_event(handle_, -1.0))->event_id == MPV_EVENT_NONE) {
             continue;
         }
+        // Snapshot per event and invoke outside listener_lock_ (see local_listener).
+        scoped_local_ref listener_ref(env, local_listener(env, event_listener_));
+        jobject listener = listener_ref.get();
 
-        if (event_listener_ &&
+        if (listener &&
             event->event_id != MPV_EVENT_PROPERTY_CHANGE &&
             event->event_id != MPV_EVENT_LOG_MESSAGE &&
             jni_mediamp_method_EventListener_onEvent
         ) {
             env->CallVoidMethod(
-                    event_listener_,
+                    listener,
                     jni_mediamp_method_EventListener_onEvent,
                     static_cast<jint>(event->event_id));
             clear_jni_exception(env, this, "EventListener.onEvent");
@@ -125,7 +128,7 @@ void mpv_handle_t::event_loop() {
         switch (event->event_id) {
             case MPV_EVENT_PROPERTY_CHANGE:
                 event_property = (mpv_event_property *) event->data;
-                emit_property_change(env, this, event_property, event_listener_);
+                emit_property_change(env, this, event_property, listener);
                 break;
             case MPV_EVENT_LOG_MESSAGE:
                 log_message = (mpv_event_log_message *) event->data;
@@ -137,9 +140,9 @@ void mpv_handle_t::event_loop() {
                 // playlist_entry_id exists since libmpv API 1.108 (mpv 0.33); data may be
                 // null on older cores — forward 0 ("unknown") then.
                 auto *start_file = (mpv_event_start_file *) event->data;
-                if (event_listener_ && jni_mediamp_method_EventListener_onStartFile) {
+                if (listener && jni_mediamp_method_EventListener_onStartFile) {
                     env->CallVoidMethod(
-                        event_listener_,
+                        listener,
                         jni_mediamp_method_EventListener_onStartFile,
                         static_cast<jlong>(start_file ? start_file->playlist_entry_id : 0));
                     clear_jni_exception(env, this, "EventListener.onStartFile");
@@ -153,9 +156,9 @@ void mpv_handle_t::event_loop() {
                 LOG(this, level, "[event_loop] end-file: reason=%d error=%s entry_id=%lld",
                     end_file->reason, mpv_error_string(end_file->error),
                     static_cast<long long>(end_file->playlist_entry_id));
-                if (event_listener_ && jni_mediamp_method_EventListener_onEndFile) {
+                if (listener && jni_mediamp_method_EventListener_onEndFile) {
                     env->CallVoidMethod(
-                        event_listener_,
+                        listener,
                         jni_mediamp_method_EventListener_onEndFile,
                         static_cast<jint>(end_file->reason),
                         static_cast<jint>(end_file->error),

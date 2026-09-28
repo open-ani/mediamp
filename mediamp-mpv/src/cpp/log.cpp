@@ -2,11 +2,15 @@
 
 #include <cstdarg>
 #include <cstdint>
+#include <condition_variable>
 #include <cstdio>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <jni.h>
 
 #include "method_cache.h"
-#include "jni_utils.h"
 #include "handle_registry.h"
 
 #if defined(__ANDROID__)
@@ -40,50 +44,117 @@ void log_to_stderr(int level, const char *prefix, const char *text) {
 #endif
 }
 
+struct log_line {
+    jlong handle;
+    int level;
+    std::string prefix;
+    std::string text;
+};
+
+// Delivers native log lines to the Kotlin sink from one dedicated thread. Callers only
+// format and enqueue, so logging never calls into the JVM on the logging thread: a
+// log statement made while holding a native lock (render_mutex_, handle_lock_, ...)
+// cannot deadlock against, or be re-entered by, whatever the Kotlin handler does.
+// FIFO order is preserved. Leaked on purpose (like its detached thread), so process
+// exit never destroys the queue under the running thread.
+class log_pump final {
+public:
+    void post(log_line line) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (queue_.size() >= kMaxQueuedLines) {
+                ++dropped_;
+                return;
+            }
+            queue_.push_back(std::move(line));
+            if (!started_) {
+                started_ = true;
+                std::thread([this] { run(); }).detach();
+            }
+        }
+        cv_.notify_one();
+    }
+
+private:
+    // Bounds memory if the Kotlin handler stalls; mpv at msg-level=v is chatty.
+    static constexpr size_t kMaxQueuedLines = 8192;
+
+    void run() {
+        JNIEnv *env = nullptr;
+        std::deque<log_line> batch;
+        for (;;) {
+            size_t dropped = 0;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [this] { return !queue_.empty() || dropped_ != 0; });
+                batch.swap(queue_);
+                std::swap(dropped, dropped_);
+            }
+            if (!env) env = attach_daemon();
+            for (const log_line &line : batch) deliver(env, line.handle, line.level, line.prefix, line.text);
+            batch.clear();
+            if (dropped != 0) {
+                const std::string text = std::to_string(dropped) + " log lines dropped: the log handler is too slow";
+                deliver(env, 0, LOG_LEVEL_WARN, "mediampv", text);
+            }
+        }
+    }
+
+    // Attached for the thread's lifetime as a daemon, so it never keeps the JVM alive.
+    static JNIEnv *attach_daemon() {
+        JavaVM *vm = global_jvm;
+        if (!vm) return nullptr;
+        JNIEnv *env = nullptr;
+#if defined(__ANDROID__)
+        if (vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK) return nullptr;
+#else
+        if (vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void **>(&env), nullptr) != JNI_OK) return nullptr;
+#endif
+        return env;
+    }
+
+    static void deliver(JNIEnv *env, jlong handle, int level, const std::string &prefix, const std::string &text) {
+        if (!env || !jni_mediamp_clazz_MPVLogKt || !jni_mediamp_method_MPVLogKt_onNativeLog) {
+            log_to_stderr(level, prefix.c_str(), text.c_str());
+            return;
+        }
+        jstring jprefix = env->NewStringUTF(prefix.c_str());
+        jstring jtext = env->NewStringUTF(text.c_str());
+        if (jprefix && jtext) {
+            env->CallStaticVoidMethod(jni_mediamp_clazz_MPVLogKt,
+                                      jni_mediamp_method_MPVLogKt_onNativeLog,
+                                      handle, static_cast<jint>(level), jprefix, jtext);
+        } else {
+            log_to_stderr(level, prefix.c_str(), text.c_str());
+        }
+        // Never let a failure of the logging path itself linger on this thread.
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (jprefix) env->DeleteLocalRef(jprefix);
+        if (jtext) env->DeleteLocalRef(jtext);
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<log_line> queue_;
+    size_t dropped_ = 0;
+    bool started_ = false;
+};
+
+log_pump &pump() {
+    static log_pump *const instance = new log_pump();
+    return *instance;
+}
+
 void dispatch(const void *instance_handle, int level, const char *prefix, const char *text) {
     if (!prefix) prefix = "mediampv";
     if (!text) text = "";
-
-    JavaVM *vm = global_jvm;
-    if (!vm || !jni_mediamp_clazz_MPVLogKt || !jni_mediamp_method_MPVLogKt_onNativeLog) {
-        // JVM not attached yet, or the log method has not been cached: don't lose the line.
+    if (!global_jvm) {
+        // No JVM yet (before the first player exists): nothing could ever deliver it.
         log_to_stderr(level, prefix, text);
         return;
     }
-
-    scoped_jni_env scoped(vm);
-    JNIEnv *env = scoped.env;
-    if (!env) {
-        log_to_stderr(level, prefix, text);
-        return;
-    }
-
-    // Any JNI call made while an exception is pending is undefined behaviour. This path is
-    // reached from clear_jni_exception() and from error handlers that run right after a
-    // failed JNI call, so fall back to stderr and leave the pending exception untouched for
-    // the caller to describe/clear.
-    if (env->ExceptionCheck()) {
-        log_to_stderr(level, prefix, text);
-        return;
-    }
-
-    jstring jprefix = env->NewStringUTF(prefix);
-    jstring jtext = env->NewStringUTF(text);
-    if (jprefix && jtext) {
-        env->CallStaticVoidMethod(jni_mediamp_clazz_MPVLogKt,
-                                  jni_mediamp_method_MPVLogKt_onNativeLog,
-                                  log_id_for(instance_handle),
-                                  static_cast<jint>(level), jprefix, jtext);
-    } else {
-        log_to_stderr(level, prefix, text);
-    }
-
-    // Never propagate a failure of the logging path itself back to the caller.
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-    }
-    if (jprefix) env->DeleteLocalRef(jprefix);
-    if (jtext) env->DeleteLocalRef(jtext);
+    // Resolve the id now, while the instance is certainly alive.
+    pump().post(log_line{log_id_for(instance_handle), level, prefix, text});
 }
 
 void log_vprint(const void *instance_handle, int level, const char *format, va_list args) {

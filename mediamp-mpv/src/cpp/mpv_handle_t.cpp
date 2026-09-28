@@ -372,13 +372,11 @@ bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
         return false;
     }
 
-    clear_event_listener(env);
-    event_listener_ = env->NewGlobalRef(listener);
-    if (!event_listener_ || clear_jni_exception(env, this, "NewGlobalRef(EventListener)")) {
-        event_listener_ = nullptr;
+    jobject global = env->NewGlobalRef(listener);
+    if (!global || clear_jni_exception(env, this, "NewGlobalRef(EventListener)")) {
         return false;
     }
-
+    replace_listener(env, event_listener_, global);
     return true;
 }
 
@@ -394,23 +392,41 @@ bool mpv_handle_t::set_render_update_listener(JNIEnv *env, jobject listener) {
         return false;
     }
 
-    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
-    clear_render_update_listener(env);
-    if (!listener) {
-        return true;
+    jobject global = nullptr;
+    if (listener) {
+        global = env->NewGlobalRef(listener);
+        if (!global || clear_jni_exception(env, this, "NewGlobalRef(RenderUpdateListener)")) {
+            return false;
+        }
     }
-
-    render_update_listener_ = env->NewGlobalRef(listener);
-    if (!render_update_listener_ || clear_jni_exception(env, this, "NewGlobalRef(RenderUpdateListener)")) {
-        render_update_listener_ = nullptr;
-        return false;
-    }
-
+    replace_listener(env, render_update_listener_, global);
     return true;
 }
 
+void mpv_handle_t::replace_listener(JNIEnv *env, jobject &slot, jobject global) {
+    jobject previous;
+    {
+        std::lock_guard<std::mutex> guard(listener_lock_);
+        previous = slot;
+        slot = global;
+    }
+    // A caller that snapshotted the previous listener holds its own local reference.
+    if (previous) {
+        scoped_jni_env attached_env(env ? nullptr : jvm_);
+        JNIEnv *cleanup_env = env ? env : attached_env.env;
+        if (cleanup_env) cleanup_env->DeleteGlobalRef(previous);
+    }
+}
+
+jobject mpv_handle_t::local_listener(JNIEnv *env, const jobject &slot) {
+    // Listeners are invoked through this local reference, after listener_lock_ is
+    // released: Kotlin code never runs under a native lock.
+    std::lock_guard<std::mutex> guard(listener_lock_);
+    return slot ? env->NewLocalRef(slot) : nullptr;
+}
+
 bool mpv_handle_t::command(const char **args) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     if (!args) {
         return false;
@@ -424,7 +440,7 @@ bool mpv_handle_t::command(const char **args) {
 }
 
 bool mpv_handle_t::set_option(const char *key, const char *value) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     if (!key || !value) {
         return false;
@@ -438,13 +454,13 @@ bool mpv_handle_t::set_option(const char *key, const char *value) {
 }
 
 bool mpv_handle_t::get_property(const char *name, mpv_format format, void *out_result) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     return mpv_get_property(handle_, name, format, out_result) >= 0;
 }
 
 bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_value) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_set_property(handle_, name, format, in_value);
     if (rc < 0) {
@@ -455,7 +471,7 @@ bool mpv_handle_t::set_property(const char *name, mpv_format format, void *in_va
 }
 
 bool mpv_handle_t::observe_property(const char *property, mpv_format format, uint64_t reply_data) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_observe_property(handle_, reply_data, property, format);
     if (rc < 0) {
@@ -466,7 +482,7 @@ bool mpv_handle_t::observe_property(const char *property, mpv_format format, uin
 }
 
 bool mpv_handle_t::unobserve_property(uint64_t reply_data) {
-    std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+    std::lock_guard<std::mutex> handle_guard(handle_lock_);
     CHECK_HANDLE()
     const int rc = mpv_unobserve_property(handle_, reply_data);
     if (rc < 0) {
@@ -521,7 +537,7 @@ bool mpv_handle_t::register_seekable_input(JNIEnv *env, jobject seekable_input, 
         return false;
     }
 
-    std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
+    std::lock_guard<std::mutex> registry_guard(stream_registry_lock_);
     if (!ensure_stream_protocol_registered()) {
         throw_illegal_state(
                 env,
@@ -561,7 +577,7 @@ bool mpv_handle_t::unregister_seekable_input(const char *uri) {
 
     std::shared_ptr<seekable_stream_entry> entry;
     {
-        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
+        std::lock_guard<std::mutex> registry_guard(stream_registry_lock_);
         auto iterator = seekable_streams_.find(uri);
         if (iterator == seekable_streams_.end()) {
             return false;
@@ -585,7 +601,7 @@ int mpv_handle_t::open_seekable_stream(const char *uri, mpv_stream_cb_info *info
 
     std::shared_ptr<seekable_stream_entry> entry;
     {
-        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
+        std::lock_guard<std::mutex> registry_guard(stream_registry_lock_);
         auto iterator = seekable_streams_.find(uri);
         if (iterator == seekable_streams_.end()) {
             LOG(this, LOG_LEVEL_ERROR, "no registered seekable stream for uri %s", uri);
@@ -726,7 +742,7 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     // Mutually exclusive with the hot methods' mpv_* calls (they hold handle_lock),
     // so a call either completes before the handle is torn down or sees handle_==null.
     {
-        std::lock_guard<std::recursive_mutex> handle_guard(handle_lock_);
+        std::lock_guard<std::mutex> handle_guard(handle_lock_);
         if (handle_) {
             mpv_terminate_destroy(handle_);
             handle_ = nullptr;
@@ -738,17 +754,11 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
 }
 
 void mpv_handle_t::clear_event_listener(JNIEnv *env) {
-    scoped_jni_env attached_env(env ? nullptr : jvm_);
-    delete_global_ref(env ? env : attached_env.env, event_listener_);
+    replace_listener(env, event_listener_, nullptr);
 }
 
 void mpv_handle_t::clear_render_update_listener(JNIEnv *env) {
-    // Serialize with notify_render_update(), which reads render_update_listener_ under
-    // this same lock before CallVoidMethod; without it the render thread could invoke a
-    // freed global ref during teardown.
-    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
-    scoped_jni_env attached_env(env ? nullptr : jvm_);
-    delete_global_ref(env ? env : attached_env.env, render_update_listener_);
+    replace_listener(env, render_update_listener_, nullptr);
 }
 
 void mpv_handle_t::notify_render_update() {
@@ -762,19 +772,18 @@ void mpv_handle_t::notify_render_update() {
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> listener_guard(render_update_listener_lock_);
-    if (!render_update_listener_) {
+    scoped_local_ref listener(env, local_listener(env, render_update_listener_));
+    if (!listener) {
         return;
     }
-
-    env->CallVoidMethod(render_update_listener_, mediampv::jni_mediamp_method_RenderUpdateListener_onRenderUpdate);
+    env->CallVoidMethod(listener.get(), mediampv::jni_mediamp_method_RenderUpdateListener_onRenderUpdate);
     clear_jni_exception(env, this, "RenderUpdateListener.onRenderUpdate");
 }
 
 void mpv_handle_t::clear_seekable_streams() {
     std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> remaining_streams;
     {
-        std::lock_guard<std::recursive_mutex> registry_guard(stream_registry_lock_);
+        std::lock_guard<std::mutex> registry_guard(stream_registry_lock_);
         remaining_streams.swap(seekable_streams_);
     }
     for (auto &entry : remaining_streams) {

@@ -29,6 +29,25 @@ private:
 // run with an exception pending.
 bool clear_jni_exception(JNIEnv *env, const void *instance_handle, const char *context);
 
+// Owns a JNI local reference for the current scope.
+class scoped_local_ref final {
+public:
+    scoped_local_ref(JNIEnv *env, jobject object) : env_(env), object_(object) {}
+    ~scoped_local_ref() {
+        if (env_ && object_) env_->DeleteLocalRef(object_);
+    }
+
+    scoped_local_ref(const scoped_local_ref &) = delete;
+    scoped_local_ref &operator=(const scoped_local_ref &) = delete;
+
+    jobject get() const { return object_; }
+    explicit operator bool() const { return object_ != nullptr; }
+
+private:
+    JNIEnv *env_;
+    jobject object_;
+};
+
 // Deletes a global reference (if any) and nulls it.
 template <typename T>
 void delete_global_ref(JNIEnv *env, T &reference) {

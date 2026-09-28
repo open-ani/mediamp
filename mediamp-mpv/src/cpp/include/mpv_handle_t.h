@@ -220,15 +220,17 @@ private:
     // Serializes the simple hot methods (command/set_option/get/set/observe/unobserve
     // property) that read handle_ and call mpv_* against destroy()'s
     // mpv_terminate_destroy + handle_=nullptr, closing the TOCTOU/use-after-free window
-    // when teardown races an in-flight native call. Recursive, but never
-    // nested with another lock in those methods to avoid lock-order inversions (the
+    // when teardown races an in-flight native call. Never nested with another lock in
+    // those methods to avoid lock-order inversions (the
     // seekable-stream methods intentionally do NOT take it — they are ordered under
     // stream_registry_lock instead).
-    std::recursive_mutex handle_lock_;
+    std::mutex handle_lock_;
 
     jobject event_listener_ = nullptr;
     jobject render_update_listener_ = nullptr;
-    std::recursive_mutex render_update_listener_lock_;
+    // Guards both listener slots. Held only to swap a slot or take a local reference;
+    // listeners are invoked after it is released (local_listener).
+    std::mutex listener_lock_;
     // Serializes attach/detach_android_surface (Android wid option + Surface ref).
     std::mutex surface_access_lock_;
 
@@ -465,7 +467,7 @@ private:
     std::thread event_thread_;
     std::atomic_bool event_loop_request_exit{false};
     bool stream_protocol_registered_ = false;
-    std::recursive_mutex stream_registry_lock_;
+    std::mutex stream_registry_lock_;
     std::unordered_map<std::string, std::shared_ptr<seekable_stream_entry>> seekable_streams_;
 
     void event_loop();
@@ -475,6 +477,10 @@ private:
     static void on_render_update(void *context);
     void clear_event_listener(JNIEnv *env);
     void clear_render_update_listener(JNIEnv *env);
+    // Swaps a listener slot to `global` (null clears it) and deletes the previous ref.
+    void replace_listener(JNIEnv *env, jobject &slot, jobject global);
+    // A local reference to the listener in `slot`, or null; see listener_lock_.
+    jobject local_listener(JNIEnv *env, const jobject &slot);
     void notify_render_update();
     void clear_seekable_streams();
 #ifdef __ANDROID__
