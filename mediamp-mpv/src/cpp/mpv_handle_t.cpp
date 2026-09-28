@@ -397,7 +397,7 @@ bool mpv_handle_t::initialize() {
 void mpv_handle_t::on_render_update(void *context) {
     auto *instance = static_cast<mpv_handle_t *>(context);
     if (!instance) return;
-#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
+#ifdef MEDIAMPV_DESKTOP
     // The render thread consumes the update and calls notify_render_update() only
     // after the frame is actually in a shared buffer, so consumers never wake up to
     // a stale buffer.
@@ -756,7 +756,7 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
 
     attached_jni_env attached_env(env ? nullptr : jvm_);
     JNIEnv *cleanup_env = env ? env : attached_env.env;
-#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
+#ifdef MEDIAMPV_DESKTOP
     // Stop the render thread FIRST: it calls notify_render_update() (which touches
     // render_update_listener_) on every frame, so no callback may still be running
     // when we delete that global ref below.

@@ -29,13 +29,14 @@ struct ID3D11Texture2D;
 struct ID3D12Device;
 struct ID3D12Resource;
 #endif
+#include "platform.h"
 #include "compatible_thread.h"
 #include "global_lock.h"
 #include "log.h"
 
 namespace mediampv {
 
-#ifdef __linux__
+#ifdef MEDIAMPV_LINUX_DESKTOP
 class glx_context_provider;
 #endif
 
@@ -187,7 +188,7 @@ public:
     bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 #endif
 
-#ifdef __linux__
+#ifdef MEDIAMPV_LINUX_DESKTOP
     // Context A is Skiko-owned. These borrowed GLX inputs create producer context B
     // in A's share group; a new identity rebuilds the complete native GL environment.
     bool attach_opengl_render_environment(
@@ -389,7 +390,7 @@ private:
     void drain_one_frame();
 #endif
 
-#ifdef __linux__
+#ifdef MEDIAMPV_LINUX_DESKTOP
     mpv_render_context *render_context_ = nullptr;
     glx_context_provider *glx_provider_ = nullptr;
 
@@ -476,7 +477,7 @@ private:
 #ifdef __APPLE__
     void cleanup_render_resources();
 #endif
-#ifdef __linux__
+#ifdef MEDIAMPV_LINUX_DESKTOP
     void cleanup_render_resources();
 #endif
 };

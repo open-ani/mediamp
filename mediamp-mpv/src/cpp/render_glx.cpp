@@ -6,7 +6,8 @@
  * created here.
  */
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#include "platform.h"
+#ifdef MEDIAMPV_LINUX_DESKTOP
 
 #define GL_GLEXT_PROTOTYPES 1
 #include <GL/gl.h>
@@ -594,4 +595,4 @@ void mpv_handle_t::cleanup_render_resources() {
 
 } // namespace mediampv
 
-#endif // defined(__linux__) && !defined(__ANDROID__)
+#endif // MEDIAMPV_LINUX_DESKTOP

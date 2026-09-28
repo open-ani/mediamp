@@ -1,10 +1,11 @@
+#include "platform.h"
 #include <iostream>
 #include <cstdint>
 #include <limits>
 #include <vector>
 #include <jni.h>
 #include <cstdio>
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef MEDIAMPV_LINUX_DESKTOP
 #define GL_GLEXT_PROTOTYPES 1
 #include <dlfcn.h>
 #include <GL/gl.h>
@@ -27,7 +28,7 @@ mediampv::mpv_handle_t *get_instance(jlong ptr) {
     return reinterpret_cast<mediampv::mpv_handle_t *>(static_cast<uintptr_t>(ptr));
 }
 
-#if defined(_WIN32) || defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+#ifdef MEDIAMPV_DESKTOP
 // Shared body of nReadSurfacePixels{D3D11,Macos,OpenGL,WindowsOpenGL}: returns the
 // latest frame of [reader] (the platform readback member) as an ARGB jintArray and
 // writes [width, height] into dims, or null when no frame is available.
@@ -162,7 +163,7 @@ extern "C" {
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef MEDIAMPV_LINUX_DESKTOP
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jobject component, jlong share_context, jlong drawable, jlong window);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
@@ -634,7 +635,7 @@ JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv * env, jc
 
 #endif
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#ifdef MEDIAMPV_LINUX_DESKTOP
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nAttachRenderEnvironmentOpenGL)(
         JNIEnv *env, jclass, jlong ptr, jobject component,
