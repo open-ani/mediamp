@@ -14,15 +14,8 @@ scoped_jni_env::scoped_jni_env(JavaVM *vm) : vm_(vm) {
     }
     env = nullptr;
     if (rc == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-        if (vm_->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-#else
-        if (vm_->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) == JNI_OK) {
-#endif
-            attached_ = true;
-        } else {
-            env = nullptr;
-        }
+        attached_ = attach_current_thread(vm_, &env);
+        if (!attached_) env = nullptr;
     }
 }
 

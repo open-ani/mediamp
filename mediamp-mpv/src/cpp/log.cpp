@@ -12,6 +12,7 @@
 
 #include "method_cache.h"
 #include "handle_registry.h"
+#include "jni_utils.h"
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -105,12 +106,7 @@ private:
         JavaVM *vm = global_jvm;
         if (!vm) return nullptr;
         JNIEnv *env = nullptr;
-#if defined(__ANDROID__)
-        if (vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK) return nullptr;
-#else
-        if (vm->AttachCurrentThreadAsDaemon(reinterpret_cast<void **>(&env), nullptr) != JNI_OK) return nullptr;
-#endif
-        return env;
+        return attach_current_thread(vm, &env, /* daemon = */ true) ? env : nullptr;
     }
 
     static void deliver(JNIEnv *env, jlong handle, int level, const std::string &prefix, const std::string &text) {

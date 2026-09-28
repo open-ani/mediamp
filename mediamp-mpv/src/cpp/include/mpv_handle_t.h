@@ -16,28 +16,13 @@
 #include <vector>
 #include <jni.h>
 #include <mpv/client.h>
-#include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
 
-#ifdef _WIN32
-#include <windows.h>
-// COM interfaces used by the D3D11 render path (render_d3d11.cpp); forward-declared so
-// this header does not pull d3d11.h/d3d12.h into every translation unit.
-struct ID3D11Device;
-struct ID3D11DeviceContext;
-struct ID3D11Query;
-struct ID3D11Texture2D;
-struct ID3D12Device;
-struct ID3D12Resource;
-#endif
 #include "platform.h"
 #include "log.h"
+#include "desktop_renderer.h"
 
 namespace mediampv {
-
-#ifdef MEDIAMPV_LINUX_DESKTOP
-class glx_context_provider;
-#endif
 
 class mpv_handle_t final {
 public:
@@ -77,139 +62,46 @@ public:
     bool detach_window_surface();
 #endif
 
+#ifdef MEDIAMPV_DESKTOP
+    // The native render path (desktop_renderer.h): at most one per player, null before
+    // it is created and after destroy_renderer(). Callers hold the returned reference
+    // for the duration of a call; a renderer that was shut down meanwhile answers with
+    // its "unavailable" values.
+    std::shared_ptr<desktop_renderer> renderer();
+    // Shuts the renderer down synchronously (render thread joined, GPU resources freed).
+    bool destroy_renderer();
+    // Packed frame state of the current renderer (kNoFrameState without one).
+    uint64_t frame_state();
+
 #ifdef _WIN32
-    // Render API (Windows): a dedicated native render thread drives mpv through the
-    // libmpv D3D11 render API (our own ID3D11Device) into a ring of shared textures;
-    // each texture is also opened on the consumer-provided D3D12 device (Skia's device)
-    // as an ID3D12Resource via NT shared handles. Consumers never render; they read the
-    // packed frame state and sample the latest buffer. Implemented in render_d3d11.cpp.
-    bool create_render_context();
-    bool destroy_render_context();
-
-    // Skiko's DirectXDevice pointer (see set_surface_config), recorded before
-    // create_render_context so our ID3D11Device is created on the same adapter as
-    // Skia's ID3D12Device: NT-handle textures cannot be opened across adapters, which
-    // on hybrid-GPU machines would otherwise leave the video black. 0 = no preference.
+    // Skiko's DirectXDevice pointer, recorded before create_d3d11_renderer so our
+    // ID3D11Device is created on Skia's adapter (0 = no preference).
     bool set_consumer_device_hint(int64_t skiko_device_ptr);
-
-    // Requests the render thread to (re)allocate the buffer ring at width x height,
-    // opening each texture on the ID3D12Device extracted from skiko_device_ptr (a
-    // pointer to Skiko's native DirectXDevice struct; 0 = D3D11-only, no D3D12 side —
-    // used headless). width/height <= 0 deactivates the surface (frames are then
-    // drained without rendering). Asynchronous: returns immediately, the swap happens
-    // between frames on the render thread.
-    bool set_surface_config(int width, int height, int64_t skiko_device_ptr);
-
-    // CPU-readback variant of set_surface_config for consumers without a D3D12 device
-    // (Skiko's software and ANGLE redrawers): the render thread additionally copies
-    // each rendered frame into system memory, and consumers take it with
-    // copy_latest_frame_d3d11 instead of sampling ring textures. They never hold ring
-    // textures, so reconfiguration frees the old ring without waiting for an ack.
-    bool set_readback_surface_config(int width, int height);
-    // Copies the latest read-back frame (RGBA8, top-down rows, width*4 stride) into
-    // dest if it is exactly width x height. Returns the frame state describing the
-    // copied frame, or 0 when no frame of that size is available.
-    uint64_t copy_latest_frame_d3d11(void *dest, int width, int height);
-
-    // Packed frame state: generation(16) | latest_index(4, 0xF = none) | width(14) |
-    // height(14) | serial(16). Any change means there is something new to consume; a
-    // generation change means the buffer ring was reallocated (re-wrap textures, then
-    // call ack_retired_buffers()).
-    uint64_t get_frame_state();
-    // ID3D12Resource* of ring buffer `index` for the current generation (0 if the ring
-    // has no D3D12 side). The pointer stays valid until the generation is retired and
-    // acked, or the surface is deactivated.
-    int64_t get_buffer_texture(int index);
-    // Consumer no longer references the previous generation; its buffers may be freed.
-    bool ack_retired_buffers();
-
-    bool has_d3d11_surface();
-    bool save_surface_png(const char *path);
-    // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
-    // top-down) with alpha forced opaque. Returns false when no frame is available.
-    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
-
-    // OpenGL fallback render path (render_opengl_win.cpp), used instead of the D3D11
-    // path above when Compose renders with Skiko's OpenGL backend
-    // (SKIKO_RENDER_API=OPENGL) — Skia then has no D3D12 device for the shared-texture
-    // ring to open its buffers on. A dedicated render thread drives mpv through the
-    // libmpv OpenGL render API on a private offscreen WGL context (no sharing with
-    // Skiko) into one FBO, and reads every frame back to CPU memory; the consumer
-    // copies the latest frame into a Skia bitmap during draw. One GPU->CPU->GPU round
-    // trip per frame by design: this is the compatibility path, robustness over
-    // zero-copy. Per player exactly one of the two Windows paths is ever created;
-    // which one is decided in Kotlin from Skiko's configured render API.
-    bool create_render_context_win_gl();
-    bool destroy_render_context_win_gl();
-    // Same request protocol as the D3D11 set_surface_config, but there is no
-    // consumer device: width/height <= 0 deactivates the surface (frames are then
-    // drained without rendering). Resizes are asynchronous; deactivation waits
-    // (bounded by a 1s timeout) until the render thread has dropped its FBO and
-    // parked, so the consumer can destroy its Skia GPU objects without racing this
-    // path's GL.
-    bool set_surface_config_win_gl(int width, int height);
-    // Packed frame state, same layout as the D3D11 path: generation(16) |
-    // latest_index(4, 0xF = none; always 0 when a frame exists) | width(14) |
-    // height(14) | serial(16).
-    uint64_t get_frame_state_win_gl();
-    bool has_win_gl_surface();
-    bool save_surface_png_win_gl(const char *path);
-    bool read_surface_pixels_win_gl(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
-    // Copies the latest frame as tightly packed RGBA8 rows (top-down) into dest,
-    // provided the frame is exactly width x height (dest must hold width*height*4
-    // bytes). Returns the packed frame state the copy corresponds to, or 0 when no
-    // matching frame is available. Called from the consumer (UI) thread; the copy is
-    // serialized against the render thread's buffer swap, never against rendering.
-    uint64_t copy_latest_frame_win_gl(void *dest, int width, int height);
+    // D3D11 shared-texture ring (render_d3d11.cpp), also serving CPU readback consumers.
+    bool create_d3d11_renderer();
+    // OpenGL readback fallback (render_opengl_win.cpp), for Skiko's OpenGL redrawer.
+    bool create_win_gl_renderer();
 #endif
-
 #ifdef __APPLE__
-    // Render API (macOS): a dedicated native render thread drives mpv through OpenGL
-    // (offscreen CGL context) into a ring of IOSurface-backed FBOs; each IOSurface is
-    // also wrapped as an MTLTexture on the consumer-provided MTLDevice (Skia's device).
-    // Consumers never render; they read the packed frame state and sample the latest
-    // buffer. Implemented in render_macos.mm.
-    bool create_render_context();
-    bool destroy_render_context();
-
-    // Requests the render thread to (re)allocate the buffer ring at width x height with
-    // MTLTextures on mtl_device_ptr (0 = system default device). width/height <= 0
-    // deactivates the surface (frames are then drained without rendering). Asynchronous:
-    // returns immediately, the swap happens between frames on the render thread.
-    bool set_surface_config(int width, int height, int64_t mtl_device_ptr);
-
-    // Packed frame state: generation(16) | latest_index(4, 0xF = none) | width(14) |
-    // height(14) | serial(16). Any change means there is something new to consume; a
-    // generation change means the buffer ring was reallocated (re-wrap textures, then
-    // call ack_retired_buffers()).
-    uint64_t get_frame_state();
-    // Retained id<MTLTexture> pointer of ring buffer `index` for the current generation.
-    int64_t get_buffer_texture(int index);
-    // Consumer no longer references the previous generation; its buffers may be freed.
-    bool ack_retired_buffers();
-
-    bool has_metal_surface();
-    bool save_surface_png(const char *path);
-    // Copies the latest rendered frame as ARGB_8888 ints (0xAARRGGBB, row-major,
-    // top-down) with alpha forced opaque. Returns false when no frame is available.
-    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    // IOSurface/Metal ring (render_macos.mm).
+    bool create_macos_renderer();
 #endif
-
 #ifdef MEDIAMPV_LINUX_DESKTOP
-    // Context A is Skiko-owned. These borrowed GLX inputs create producer context B
-    // in A's share group; a new identity rebuilds the complete native GL environment.
+    // Context A is Skiko-owned. These borrowed GLX inputs create producer context B in
+    // A's share group; a new identity rebuilds the complete native GL environment.
     bool attach_opengl_render_environment(
         int64_t display_ptr, int64_t share_context_ptr, int screen, uint64_t identity);
-    bool create_render_context();
-    bool destroy_render_context();
-    bool set_surface_config(int width, int height, int64_t ignored_device_ptr = 0);
-    uint64_t get_frame_state();
-    int64_t get_buffer_texture(int index); // GLuint texture name, not an FBO.
-    bool ack_retired_buffers();
-    bool has_opengl_surface();
-    bool save_surface_png(const char *path);
-    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    // Shared-texture GLX ring (render_glx.cpp); requires an attached environment.
+    bool create_glx_renderer();
 #endif
+
+#endif
+
+    // For renderers and callbacks.
+    mpv_handle *mpv() const { return handle_; }
+    JavaVM *jvm() const { return jvm_; }
+    // Calls the Kotlin RenderUpdateListener (outside any native lock).
+    void notify_render_update();
 
     struct seekable_stream_entry;
     struct seekable_stream_cookie;
@@ -239,229 +131,20 @@ private:
     jobject surface_ = nullptr;
 #endif
 
+#ifdef MEDIAMPV_DESKTOP
+    // renderer_lock_ guards the pointer only (held briefly by every consumer call);
+    // renderer_setup_lock_ serializes creation and teardown, which take much longer.
+    std::mutex renderer_lock_;
+    std::mutex renderer_setup_lock_;
+    std::shared_ptr<desktop_renderer> renderer_;
+    void set_renderer(std::shared_ptr<desktop_renderer> renderer);
 #ifdef _WIN32
-    mpv_render_context *render_context_ = nullptr;
-    // mpv renders on our own D3D11 device; the device's immediate context is put in
-    // multithread-protected mode so save_surface_png (JNI thread) can copy/map while
-    // the render thread is inside mpv_render_context_render.
-    ID3D11Device *d3d_device_ = nullptr;
-    ID3D11DeviceContext *d3d_context_ = nullptr;
-    ID3D11Query *flush_query_ = nullptr;  // D3D11_QUERY_EVENT, the glFinish equivalent
-
-    // Triple-buffered shared-texture ring. All D3D11 work and all buffer mutation
-    // happens on the render thread; consumers only read the packed frame_state_ and the
-    // ID3D12Resource pointers. Rationale for 3 buffers: the render thread writes
-    // (latest+1)%3 while Skia may still have sampling of both the published latest and
-    // the previous frame in flight on its own GPU timeline.
-    static constexpr int kD3D11BufferCount = 3;
-    struct d3d11_buffer {
-        ID3D11Texture2D *texture = nullptr;    // render target on d3d_device_
-        HANDLE shared_handle = nullptr;        // NT handle from CreateSharedHandle
-        ID3D12Resource *d3d12_resource = nullptr;  // opened on the consumer's device, may be null
-    };
-    d3d11_buffer buffers_[kD3D11BufferCount];
-    // Previous generation, kept alive until the consumer re-wrapped and acked, so a
-    // consumer that observed the old generation can still sample it during the swap.
-    d3d11_buffer retired_buffers_[kD3D11BufferCount];
-    // Consumer-side D3D12 device (owned reference), extracted from Skiko's native
-    // DirectXDevice struct; null while the ring is headless (device ptr 0).
-    ID3D12Device *skia_device_ = nullptr;
     int64_t consumer_device_hint_ = 0;
-    bool has_retired_buffers_ = false;
-    bool buffers_allocated_ = false;
-    int buffer_width_ = 0, buffer_height_ = 0;
-    int64_t buffer_device_ptr_ = 0;
-    uint32_t buffer_generation_ = 0;
-    uint64_t frame_serial_ = 0;
-    int latest_index_ = -1;
-    std::atomic<uint64_t> frame_state_{0xFull << 44};  // "no buffer" sentinel
-
-    // CPU readback (set_readback_surface_config). The render thread owns the staging
-    // texture and readback_scratch_; readback_latest_ is swapped in and copied out
-    // under render_mutex_.
-    bool cpu_readback_ = false;
-    ID3D11Texture2D *readback_staging_ = nullptr;
-    std::vector<uint8_t> readback_scratch_, readback_latest_;
-
-    // Requests to the render thread; guarded by render_mutex_.
-    bool config_pending_ = false;
-    int pending_width_ = 0, pending_height_ = 0;
-    int64_t pending_device_ptr_ = 0;
-    bool pending_cpu_readback_ = false;
-    bool retire_ack_pending_ = false;
-    bool render_pending_ = false;
-    bool render_quit_ = false;
-    std::mutex render_mutex_;
-    std::condition_variable render_cv_;
-    void *render_thread_ = nullptr;  // std::thread*, owned (render_d3d11.cpp)
-
-    void signal_render_update();
-    void start_render_thread();
-    void stop_render_thread();
-    void render_thread_loop();
-    // The helpers below assume render_mutex_ is held (except render_into and
-    // drain_one_frame, which run unlocked on the render thread).
-    bool apply_config_locked();
-    bool allocate_buffer(d3d11_buffer &buffer, int width, int height);
-    void destroy_buffer_ring(d3d11_buffer *ring);
-    void publish_state_locked();
-    bool render_into(const d3d11_buffer &buffer);
-    // Copies buffer into readback_scratch_ through readback_staging_; render thread
-    // only, unlocked.
-    bool read_back_into_scratch(const d3d11_buffer &buffer);
-    void destroy_readback_resources_locked();
-    void drain_one_frame();
-    bool wait_for_gpu();  // End(flush_query_) + poll; render thread only
-    // Staging-texture readback of the latest frame; shared by save_surface_png and
-    // read_surface_pixels. Assumes render_mutex_ is held.
-    bool read_frame_argb_locked(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
-
-    // OpenGL fallback state (render_opengl_win.cpp). Behind a pointer so the D3D11
-    // members above keep their names and this header stays free of GL types; the
-    // struct is defined next to its implementation. Null until
-    // create_render_context_win_gl() and after cleanup_render_resources_win_gl().
-    struct win_gl_state;
-    win_gl_state *win_gl_ = nullptr;
-    static void on_render_update_win_gl(void *context);
-    void signal_render_update_win_gl();
-    void render_thread_loop_win_gl();
-    void cleanup_render_resources_win_gl();
-    // Frees win_gl_ itself (destructor only; the struct is incomplete in this header,
-    // so a plain `delete win_gl_` outside render_opengl_win.cpp would not destruct it).
-    void free_win_gl_state();
-    // The helpers below run on the render thread; *_locked ones assume the state
-    // mutex is held.
-    bool apply_config_win_gl_locked();
-    bool allocate_target_win_gl_locked(int width, int height);
-    void destroy_target_win_gl_locked();
-    void publish_state_win_gl_locked();
-    void publish_collected_frame_win_gl_locked(int width, int height);
-    // Renders mpv into the FBO and starts the readback: asynchronously into the next
-    // PBO when available, else synchronously into scratch.
-    bool render_frame_win_gl(int width, int height);
-    // Moves the oldest completed readback into scratch; false when none is ready.
-    // include_pbos=false only collects a synchronous-path frame (used right after a
-    // render, where mapping the just-queued PBO would defeat the asynchrony).
-    bool collect_ready_frame_win_gl(int *out_width, int *out_height, bool include_pbos);
-    void drain_one_frame_win_gl();
 #endif
-
-#ifdef __APPLE__
-    mpv_render_context *render_context_ = nullptr;
-    void *cgl_context_ = nullptr;  // CGLContextObj
-
-    // Triple-buffered IOSurface ring. All GL work and all buffer mutation happens on
-    // the render thread (which keeps the CGL context current for its whole lifetime);
-    // consumers only read the packed frame_state_ and the retained MTLTexture pointers.
-    // Rationale for 3 buffers: the render thread writes (latest+1)%3 while Skia may
-    // still have sampling of both the published latest and the previous frame in
-    // flight on its own GPU timeline.
-    static constexpr int kMacosBufferCount = 3;
-    struct macos_buffer {
-        void *io_surface = nullptr;   // IOSurfaceRef
-        void *mtl_texture = nullptr;  // retained id<MTLTexture>
-        uint32_t texture = 0;         // GL_TEXTURE_RECTANGLE bound to the IOSurface
-        uint32_t fbo = 0;
-    };
-    macos_buffer buffers_[kMacosBufferCount];
-    // Previous generation, kept alive until the consumer re-wrapped and acked, so a
-    // consumer that observed the old generation can still sample it during the swap.
-    macos_buffer retired_buffers_[kMacosBufferCount];
-    bool has_retired_buffers_ = false;
-    bool buffers_allocated_ = false;
-    int buffer_width_ = 0, buffer_height_ = 0;
-    int64_t buffer_device_ptr_ = 0;
-    uint32_t buffer_generation_ = 0;
-    uint64_t frame_serial_ = 0;
-    int latest_index_ = -1;
-    std::atomic<uint64_t> frame_state_{0xFull << 44};  // "no buffer" sentinel
-
-    // Requests to the render thread; guarded by render_mutex_.
-    bool config_pending_ = false;
-    int pending_width_ = 0, pending_height_ = 0;
-    int64_t pending_device_ptr_ = 0;
-    bool retire_ack_pending_ = false;
-    bool render_pending_ = false;
-    bool render_quit_ = false;
-    std::mutex render_mutex_;
-    std::condition_variable render_cv_;
-    void *render_thread_ = nullptr;  // std::thread*, owned (render_macos.mm)
-
-    void signal_render_update();
-    void start_render_thread();
-    void stop_render_thread();
-    void render_thread_loop();
-    // The helpers below assume the CGL context is current on the calling thread and
-    // render_mutex_ is held (except render_into/drain_one_frame, which run unlocked).
-    bool apply_config_locked();
-    bool allocate_buffer(macos_buffer &buffer, int width, int height, void *mtl_device);
-    void destroy_buffer_ring(macos_buffer *ring);
-    void publish_state_locked();
-    bool render_into(const macos_buffer &buffer);
-    void drain_one_frame();
-#endif
-
 #ifdef MEDIAMPV_LINUX_DESKTOP
-    mpv_render_context *render_context_ = nullptr;
-    glx_context_provider *glx_provider_ = nullptr;
-
-    // Textures are share-group objects; these FBOs are context-B-local producer targets.
-    static constexpr int kOpenGLBufferCount = 3;
-    struct opengl_buffer {
-        uint32_t texture = 0; // GL_TEXTURE_2D / GL_RGBA8
-        uint32_t fbo = 0;
-    };
-    opengl_buffer buffers_[kOpenGLBufferCount];
-    opengl_buffer retired_buffers_[kOpenGLBufferCount];
-    bool has_retired_buffers_ = false;
-    bool buffers_allocated_ = false;
-    int buffer_width_ = 0, buffer_height_ = 0;
-    uint32_t buffer_generation_ = 0;
-    uint64_t frame_serial_ = 0;
-    int latest_index_ = -1;
-    std::atomic<uint64_t> frame_state_{0xFull << 44};
-
-    int64_t pending_display_ptr_ = 0;
-    int64_t pending_share_context_ptr_ = 0;
-    int pending_screen_ = 0;
-    uint64_t pending_environment_identity_ = 0;
-    bool environment_attached_ = false;
-    bool config_pending_ = false;
-    int pending_width_ = 0, pending_height_ = 0;
-    bool retire_ack_pending_ = false;
-    bool render_pending_ = false;
-    bool render_quit_ = false;
-    bool render_initialized_ = false;
-    bool render_initialize_ok_ = false;
-    std::string screenshot_path_;
-    bool screenshot_pending_ = false;
-    bool screenshot_finished_ = false;
-    bool screenshot_ok_ = false;
-    bool readback_pending_ = false;
-    bool readback_finished_ = false;
-    bool readback_ok_ = false;
-    std::vector<uint32_t> readback_pixels_;
-    int readback_width_ = 0;
-    int readback_height_ = 0;
-    std::mutex render_mutex_;
-    std::condition_variable render_cv_;
-    void *render_thread_ = nullptr; // std::thread*, owned by render_glx.cpp
-
-    void signal_render_update();
-    void start_render_thread();
-    void stop_render_thread();
-    void render_thread_loop();
-    bool create_mpv_render_context_on_render_thread();
-    void destroy_mpv_render_context_on_render_thread();
-    bool apply_config_locked();
-    bool allocate_buffer(opengl_buffer &buffer, int width, int height);
-    void destroy_buffer_ring(opengl_buffer *ring);
-    void publish_state_locked();
-    bool render_into(const opengl_buffer &buffer);
-    void drain_one_frame();
-    bool write_surface_png_on_render_thread(const char *path);
-    bool read_surface_pixels_on_render_thread(
-        std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
+    glx_environment_ref glx_environment_;
+    bool glx_environment_attached_ = false;
+#endif
 #endif
 
     std::thread event_thread_;
@@ -474,26 +157,15 @@ private:
     bool ensure_stream_protocol_registered();
     int open_seekable_stream(const char *uri, mpv_stream_cb_info *info);
     static int open_seekable_stream(void *user_data, char *uri, mpv_stream_cb_info *info);
-    static void on_render_update(void *context);
     void clear_event_listener(JNIEnv *env);
     void clear_render_update_listener(JNIEnv *env);
     // Swaps a listener slot to `global` (null clears it) and deletes the previous ref.
     void replace_listener(JNIEnv *env, jobject &slot, jobject global);
     // A local reference to the listener in `slot`, or null; see listener_lock_.
     jobject local_listener(JNIEnv *env, const jobject &slot);
-    void notify_render_update();
     void clear_seekable_streams();
 #ifdef __ANDROID__
     void clear_android_surface(JNIEnv *env);
-#endif
-#ifdef _WIN32
-    void cleanup_render_resources();
-#endif
-#ifdef __APPLE__
-    void cleanup_render_resources();
-#endif
-#ifdef MEDIAMPV_LINUX_DESKTOP
-    void cleanup_render_resources();
 #endif
 };
 

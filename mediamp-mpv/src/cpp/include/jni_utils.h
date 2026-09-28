@@ -24,6 +24,18 @@ private:
     bool attached_ = false;
 };
 
+// AttachCurrentThread(AsDaemon) with the env parameter type of either JNI flavor
+// (Android's jni.h takes JNIEnv **, the JDK's takes void **).
+inline bool attach_current_thread(JavaVM *vm, JNIEnv **env, bool daemon = false) {
+    if (!vm) return false;
+#if defined(__ANDROID__)
+    return (daemon ? vm->AttachCurrentThreadAsDaemon(env, nullptr) : vm->AttachCurrentThread(env, nullptr)) == JNI_OK;
+#else
+    void **raw = reinterpret_cast<void **>(env);
+    return (daemon ? vm->AttachCurrentThreadAsDaemon(raw, nullptr) : vm->AttachCurrentThread(raw, nullptr)) == JNI_OK;
+#endif
+}
+
 // Describes and clears a pending Java exception, then logs `context`. Returns whether
 // one was pending. Clears before logging: the log path makes JNI calls, which must not
 // run with an exception pending.

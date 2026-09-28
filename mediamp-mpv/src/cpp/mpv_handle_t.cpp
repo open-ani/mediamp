@@ -344,19 +344,6 @@ bool mpv_handle_t::initialize() {
     return true;
 }
 
-void mpv_handle_t::on_render_update(void *context) {
-    auto *instance = static_cast<mpv_handle_t *>(context);
-    if (!instance) return;
-#ifdef MEDIAMPV_DESKTOP
-    // The render thread consumes the update and calls notify_render_update() only
-    // after the frame is actually in a shared buffer, so consumers never wake up to
-    // a stale buffer.
-    instance->signal_render_update();
-#else
-    instance->notify_render_update();
-#endif
-}
-
 bool mpv_handle_t::set_event_listener(JNIEnv *env, jobject listener) {
     if (!env || !listener) {
         return false;
@@ -721,16 +708,9 @@ bool mpv_handle_t::destroy(JNIEnv *env) {
     scoped_jni_env attached_env(env ? nullptr : jvm_);
     JNIEnv *cleanup_env = env ? env : attached_env.env;
 #ifdef MEDIAMPV_DESKTOP
-    // Stop the render thread FIRST: it calls notify_render_update() (which touches
-    // render_update_listener_) on every frame, so no callback may still be running
-    // when we delete that global ref below.
-    cleanup_render_resources();
-#endif
-#ifdef _WIN32
-    // Same reasoning for the OpenGL fallback render thread; at most one of the two
-    // Windows paths ever ran, the other call is a no-op.
-    cleanup_render_resources_win_gl();
-    free_win_gl_state();
+    // Stop the render thread before mpv_terminate_destroy below: its render context
+    // belongs to this mpv handle.
+    destroy_renderer();
 #endif
     clear_event_listener(cleanup_env);
     clear_render_update_listener(cleanup_env);
@@ -800,4 +780,119 @@ void mpv_handle_t::clear_android_surface(JNIEnv *env) {
 }
 #endif
 
+
+#ifdef MEDIAMPV_DESKTOP
+
+std::shared_ptr<desktop_renderer> mpv_handle_t::renderer() {
+    std::lock_guard<std::mutex> guard(renderer_lock_);
+    return renderer_;
+}
+
+void mpv_handle_t::set_renderer(std::shared_ptr<desktop_renderer> renderer) {
+    std::lock_guard<std::mutex> guard(renderer_lock_);
+    renderer_ = std::move(renderer);
+}
+
+uint64_t mpv_handle_t::frame_state() {
+    const auto current = renderer();
+    return current ? current->frame_state() : kNoFrameState;
+}
+
+bool mpv_handle_t::destroy_renderer() {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    std::shared_ptr<desktop_renderer> previous;
+    {
+        std::lock_guard<std::mutex> guard(renderer_lock_);
+        previous.swap(renderer_);
+    }
+    // Synchronous even while consumers still hold references: they then see a stopped
+    // renderer, never a half-destroyed one.
+    if (previous) previous->shutdown();
+    return true;
+}
+
+#ifdef _WIN32
+bool mpv_handle_t::set_consumer_device_hint(int64_t skiko_device_ptr) {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    consumer_device_hint_ = skiko_device_ptr;
+    return true;
+}
+
+bool mpv_handle_t::create_d3d11_renderer() {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    if (renderer()) return true;
+    if (!handle_) return false;
+    auto created = mediampv::create_d3d11_renderer(*this, consumer_device_hint_);
+    if (!created) return false;
+    set_renderer(std::move(created));
+    return true;
+}
+
+bool mpv_handle_t::create_win_gl_renderer() {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    if (renderer()) return true;
+    if (!handle_) return false;
+    auto created = mediampv::create_win_gl_renderer(*this);
+    if (!created) return false;
+    set_renderer(std::move(created));
+    return true;
+}
+#endif
+
+#ifdef __APPLE__
+bool mpv_handle_t::create_macos_renderer() {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    if (renderer()) return true;
+    if (!handle_) return false;
+    auto created = mediampv::create_macos_renderer(*this);
+    if (!created) return false;
+    set_renderer(std::move(created));
+    return true;
+}
+#endif
+
+#ifdef MEDIAMPV_LINUX_DESKTOP
+bool mpv_handle_t::attach_opengl_render_environment(
+    int64_t display_ptr, int64_t share_context_ptr, int screen, uint64_t identity) {
+    if (!display_ptr || !share_context_ptr || identity == 0) {
+        LOG(this, LOG_LEVEL_ERROR,
+            "attach_opengl_render_environment requires non-zero display, GLX context, and identity");
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+        if (glx_environment_attached_ &&
+            glx_environment_.display == display_ptr &&
+            glx_environment_.share_context == share_context_ptr &&
+            glx_environment_.screen == screen && glx_environment_.identity == identity) {
+            return true;
+        }
+    }
+    // A texture name from an old share group is invalid in the new Skiko context: stop
+    // the producer before replacing its borrowed context-A pointers.
+    destroy_renderer();
+    {
+        std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+        glx_environment_ = glx_environment_ref{display_ptr, share_context_ptr, screen, identity};
+        glx_environment_attached_ = true;
+    }
+    return create_glx_renderer();
+}
+
+bool mpv_handle_t::create_glx_renderer() {
+    std::lock_guard<std::mutex> setup_guard(renderer_setup_lock_);
+    if (renderer()) return true;
+    if (!handle_) return false;
+    if (!glx_environment_attached_) {
+        LOG(this, LOG_LEVEL_ERROR, "create_glx_renderer requires a live Skiko GLX environment attachment");
+        return false;
+    }
+    auto created = mediampv::create_glx_renderer(*this, glx_environment_);
+    if (!created) return false;
+    set_renderer(std::move(created));
+    return true;
+}
+#endif
+
+#endif // MEDIAMPV_DESKTOP
 } // namespace mediampv
