@@ -21,9 +21,10 @@
 // so the screenshot readback (JNI thread) can CopyResource/Map while the render thread
 // is inside mpv_render_context_render.
 //
-// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm); the
-// consumer ignores it by wrapping the texture with an opaque color type (RGB_888X), and
-// the CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
+// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm). Its
+// d3d11 renderer writes alpha=1 in practice, so the consumer wraps the texture as
+// RGBA_8888 (Skia's D3D backend rejects the opaque RGB_888x for render targets), and the
+// CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
 
 #ifdef _WIN32
 

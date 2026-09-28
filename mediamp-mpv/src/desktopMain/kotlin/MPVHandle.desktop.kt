@@ -51,7 +51,7 @@ external fun nHasMetalSurface(ptr: Long): Boolean
 
 /** Saves the latest rendered frame (IOSurface contents) as PNG. */
 @InternalMediampApi
-external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
+external fun nSaveSurfacePngMacos(ptr: Long, path: String): Boolean
 
 /**
  * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,

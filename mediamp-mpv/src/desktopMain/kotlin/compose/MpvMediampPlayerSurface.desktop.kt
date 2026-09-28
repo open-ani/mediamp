@@ -203,13 +203,10 @@ private fun MpvMediampPlayerSurfaceRing(
         }
 
         logOnce("rendering ${width}x${height} via ${drawResolver.rendererName} surface", MPVLog.INFO)
-        // Draw through Compose so the op survives RenderNode display-list recording
-        // (raw skiaCanvas draws are dropped there). The image is a Skia-owned texture:
-        // snapshots of the BRT-wrapped surface itself do not render. The frame normally
-        // matches the composable size; during a resize settle it is the old size, so fit
-        // it preserving aspect (letterbox) instead of stretching.
-        // Draw the GPU-backed frame image straight onto the Compose canvas via the Skia
-        // skiaCanvas — a zero-copy GPU->GPU draw on the current DirectContext. This
+        // Draw the frame image straight onto the Compose canvas via drawIntoCanvas +
+        // skiaCanvas; for the GPU rings a zero-copy GPU->GPU draw on the current
+        // DirectContext (the image is a Skia-owned texture, since snapshots of the
+        // BRT-wrapped surface itself do not render). This
         // deliberately does NOT go through toComposeImageBitmap()/drawImage(ImageBitmap):
         // that reads the GPU image back to a CPU bitmap every frame, which stalls the
         // whole Compose scene (~20ms at 4K, dragging any overlay such as danmaku down to

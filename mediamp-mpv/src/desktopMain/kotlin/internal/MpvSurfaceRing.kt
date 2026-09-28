@@ -45,7 +45,7 @@ import org.openani.mediamp.mpv.nHasOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePng
+import org.openani.mediamp.mpv.nSaveSurfacePngMacos
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
 import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
 import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
@@ -200,7 +200,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureMacos(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
+    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngMacos(ptr, path)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
@@ -430,7 +430,7 @@ internal class MpvSurfaceRing(
         // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
         // texture), so blit into a Skia-owned GPU surface and snapshot that. The snapshot
         // is a GPU image on the current DirectContext; the caller draws it straight onto
-        // the Compose canvas with nativeCanvas.drawImage (see MpvMediampPlayerSurface),
+        // the Compose canvas with skiaCanvas.drawImageRect (see MpvMediampPlayerSurface),
         // a zero-copy GPU->GPU draw. Do NOT convert it with toComposeImageBitmap(): that
         // reads the GPU image back to a CPU bitmap every frame, which both costs a full
         // GPU->CPU transfer (a ~20ms stall at 4K that pins the whole Compose scene, and

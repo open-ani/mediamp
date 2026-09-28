@@ -14,7 +14,6 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 @OptIn(ExperimentalStdlibApi::class, ExperimentalAtomicApi::class)
 class MPVHandle private constructor(ptr: Long) : AutoCloseable {
-    // private val cleanable = cleaner.register(this, ReferenceHolder(ptr))
     private var eventListener: EventListener? = null
     private var renderUpdateListener: RenderUpdateListener? = null
     // Atomic so close() can claim the id exactly once. Native code tolerates stale ids
@@ -55,16 +54,40 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
         return nOption(ptr, key, value)
     }
 
+    /**
+     * The property as an Int, clamped to the Int range; 0 when mpv cannot provide it.
+     * Use [getPropertyLongOrNull] where "unavailable" must not read as 0.
+     */
     fun getPropertyInt(name: String): Int {
         return nGetPropertyInt(ptr, name)
     }
 
+    /** The property as a Boolean; false when unavailable (see [getPropertyBooleanOrNull]). */
     fun getPropertyBoolean(name: String): Boolean {
         return nGetPropertyBoolean(ptr, name)
     }
 
+    /** The property as a Double; 0.0 when unavailable (see [getPropertyDoubleOrNull]). */
     fun getPropertyDouble(name: String): Double {
         return nGetPropertyDouble(ptr, name)
+    }
+
+    /** The property as a 64-bit integer, or null when mpv cannot provide it. */
+    fun getPropertyLongOrNull(name: String): Long? {
+        val out = LongArray(1)
+        return if (nTryGetPropertyLong(ptr, name, out)) out[0] else null
+    }
+
+    /** The property as a Double, or null when mpv cannot provide it. */
+    fun getPropertyDoubleOrNull(name: String): Double? {
+        val out = DoubleArray(1)
+        return if (nTryGetPropertyDouble(ptr, name, out)) out[0] else null
+    }
+
+    /** The property as a Boolean, or null when mpv cannot provide it. */
+    fun getPropertyBooleanOrNull(name: String): Boolean? {
+        val out = BooleanArray(1)
+        return if (nTryGetPropertyBoolean(ptr, name, out)) out[0] else null
     }
 
     fun getPropertyString(name: String): String? {
@@ -88,7 +111,7 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
     }
 
     fun observeProperty(name: String, format: MPVFormat, replyData: Long = 0L): Boolean {
-        return nObserveProperty(ptr, name, format.ordinal, replyData)
+        return nObserveProperty(ptr, name, format.nativeValue, replyData)
     }
 
     fun unobserveProperty(replyData: Long): Boolean {
@@ -150,30 +173,23 @@ class MPVHandle private constructor(ptr: Long) : AutoCloseable {
             MPVLog.setHandler(handler)
         }
     }
-
-    /*companion object {
-        init { LibraryLoader.loadLibraries() }
-        
-        private val cleaner = Cleaner.create()
-        
-        private class ReferenceHolder(private val nativePtr: Long) : Runnable {
-            override fun run() {  }
-        }
-    }*/
 }
 
 @Suppress("unused")
-enum class MPVFormat {
-    MPV_FORMAT_NONE,
-    MPV_FORMAT_STRING,
-    MPV_FORMAT_OSD_STRING,
-    MPV_FORMAT_FLAG,
-    MPV_FORMAT_INT64,
-    MPV_FORMAT_DOUBLE,
-    MPV_FORMAT_NODE,
-    MPV_FORMAT_NODE_ARRAY,
-    MPV_FORMAT_NODE_MAP,
-    MPV_FORMAT_BYTE_ARRAY,
+enum class MPVFormat(
+    /** The `mpv_format` value from mpv/client.h, passed to native code as is. */
+    val nativeValue: Int,
+) {
+    MPV_FORMAT_NONE(0),
+    MPV_FORMAT_STRING(1),
+    MPV_FORMAT_OSD_STRING(2),
+    MPV_FORMAT_FLAG(3),
+    MPV_FORMAT_INT64(4),
+    MPV_FORMAT_DOUBLE(5),
+    MPV_FORMAT_NODE(6),
+    MPV_FORMAT_NODE_ARRAY(7),
+    MPV_FORMAT_NODE_MAP(8),
+    MPV_FORMAT_BYTE_ARRAY(9),
 }
 
 @Suppress("unused")
@@ -195,7 +211,6 @@ object MPVEvent {
     const val HOOK: Int = 25
 }
 
-private external fun nGlobalInit(): Boolean
 private external fun nMake(context: Any): Long
 private external fun nInitialize(ptr: Long): Boolean
 private external fun nSetEventListener(ptr: Long, eventListener: EventListener): Boolean
@@ -206,6 +221,9 @@ private external fun nGetPropertyInt(ptr: Long, name: String): Int
 private external fun nGetPropertyBoolean(ptr: Long, name: String): Boolean
 private external fun nGetPropertyDouble(ptr: Long, name: String): Double
 private external fun nGetPropertyString(ptr: Long, name: String): String?
+private external fun nTryGetPropertyLong(ptr: Long, name: String, out: LongArray): Boolean
+private external fun nTryGetPropertyDouble(ptr: Long, name: String, out: DoubleArray): Boolean
+private external fun nTryGetPropertyBoolean(ptr: Long, name: String, out: BooleanArray): Boolean
 private external fun nSetPropertyInt(ptr: Long, name: String, value: Int): Boolean
 private external fun nSetPropertyBoolean(ptr: Long, name: String, value: Boolean): Boolean
 private external fun nSetPropertyDouble(ptr: Long, name: String, value: Double): Boolean

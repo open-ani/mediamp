@@ -145,7 +145,8 @@ log_pump &pump() {
     return *instance;
 }
 
-void dispatch(const void *instance_handle, int level, const char *prefix, const char *text) {
+// noexcept: logging runs in error paths and exception handlers, so it must never throw.
+void dispatch(const void *instance_handle, int level, const char *prefix, const char *text) noexcept {
     if (!prefix) prefix = "mediampv";
     if (!text) text = "";
     if (!global_jvm) {
@@ -153,8 +154,13 @@ void dispatch(const void *instance_handle, int level, const char *prefix, const 
         log_to_stderr(level, prefix, text);
         return;
     }
-    // Resolve the id now, while the instance is certainly alive.
-    pump().post(log_line{log_id_for(instance_handle), level, prefix, text});
+    try {
+        // Resolve the id now, while the instance is certainly alive.
+        pump().post(log_line{log_id_for(instance_handle), level, prefix, text});
+    } catch (...) {
+        // Out of memory, or the pump thread could not start.
+        log_to_stderr(level, prefix, text);
+    }
 }
 
 void log_vprint(const void *instance_handle, int level, const char *format, va_list args) {
