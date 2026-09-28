@@ -65,7 +65,9 @@ actual fun MpvMediampPlayerSurface(
  * render API). The video becomes a regular draw call in the Compose scene graph, zero
  * extra CPU copies end to end, and this thread never renders or blocks. The Windows
  * OpenGL fallback (Compose on `SKIKO_RENDER_API=OPENGL`) publishes CPU frames instead,
- * which the consumer uploads during draw — same protocol, one extra copy by design.
+ * which the consumer uploads during draw — same protocol, one extra copy by design; so
+ * does the D3D11 readback path for Skiko's software and ANGLE redrawers, which have no
+ * device to share textures with.
  *
  * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
  * render-context lifecycle; this composable contains no host checks.
@@ -188,11 +190,9 @@ private fun MpvMediampPlayerSurfaceRing(
             logOnce("render context not ready")
             return@Canvas
         }
+        // Null before Skia's first GPU frame, and always on Skiko's software redrawers:
+        // the GPU ring consumers wait for it, the readback consumers never need it.
         val directContext = drawPass.directContext
-        if (directContext == null) {
-            logOnce("DirectContext not initialized yet")
-            return@Canvas
-        }
         val width = size.width.toInt()
         val height = size.height.toInt()
         if (width <= 0 || height <= 0) return@Canvas
@@ -216,25 +216,28 @@ private fun MpvMediampPlayerSurfaceRing(
         // ~40fps) and crashes on resize. The frame normally matches the composable size;
         // during a resize settle it is the old size, so fit it preserving aspect
         // (letterbox) instead of stretching.
-        player.currentFrameImage(directContext)?.let { frame ->
-            val scale = minOf(
-                size.width / frame.width.toFloat(),
-                size.height / frame.height.toFloat(),
+        val frame = player.currentFrameImage(directContext)
+        if (frame == null) {
+            if (directContext == null) logOnce("DirectContext not initialized yet")
+            return@Canvas
+        }
+        val scale = minOf(
+            size.width / frame.width.toFloat(),
+            size.height / frame.height.toFloat(),
+        )
+        val dstWidth = frame.width * scale
+        val dstHeight = frame.height * scale
+        val dx = (size.width - dstWidth) / 2f
+        val dy = (size.height - dstHeight) / 2f
+        drawIntoCanvas { canvas ->
+            canvas.skiaCanvas.drawImageRect(
+                image = frame,
+                src = Rect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
+                dst = Rect.makeXYWH(dx, dy, dstWidth, dstHeight),
+                samplingMode = SamplingMode.LINEAR,
+                paint = null,
+                strict = true,
             )
-            val dstWidth = frame.width * scale
-            val dstHeight = frame.height * scale
-            val dx = (size.width - dstWidth) / 2f
-            val dy = (size.height - dstHeight) / 2f
-            drawIntoCanvas { canvas ->
-                canvas.skiaCanvas.drawImageRect(
-                    image = frame,
-                    src = Rect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
-                    dst = Rect.makeXYWH(dx, dy, dstWidth, dstHeight),
-                    samplingMode = SamplingMode.LINEAR,
-                    paint = null,
-                    strict = true,
-                )
-            }
         }
     }
 }

@@ -39,9 +39,11 @@ internal interface MpvSurfaceConsumer {
      * Returns the latest video frame as a Skia image (safe to draw through Compose,
      * including RenderNode recordings; a GPU texture for the ring backends, an
      * immutable raster image for the readback fallback), or null when no frame exists
-     * yet. Do NOT close the returned image — it is owned by this consumer.
+     * yet. [directContext] is null before Skia's first GPU frame and always for Skiko's
+     * software redrawers; only the GPU ring consumers need it. Do NOT close the
+     * returned image — it is owned by this consumer.
      */
-    fun currentFrameImage(directContext: DirectContext): Image?
+    fun currentFrameImage(directContext: DirectContext?): Image?
 
     /** Releases all consumer resources and deactivates the native surface. */
     fun release()

@@ -339,10 +339,39 @@ bool mpv_handle_t::set_surface_config(int width, int height, int64_t skiko_devic
         pending_width_ = width;
         pending_height_ = height;
         pending_device_ptr_ = skiko_device_ptr;
+        pending_cpu_readback_ = false;
         config_pending_ = true;
     }
     render_cv_.notify_all();
     return true;
+}
+
+bool mpv_handle_t::set_readback_surface_config(int width, int height) {
+    if (!render_thread_) return false;
+    {
+        std::lock_guard<std::mutex> guard(render_mutex_);
+        pending_width_ = width;
+        pending_height_ = height;
+        pending_device_ptr_ = 0;
+        pending_cpu_readback_ = true;
+        config_pending_ = true;
+    }
+    render_cv_.notify_all();
+    return true;
+}
+
+uint64_t mpv_handle_t::copy_latest_frame_d3d11(void *dest, int width, int height) {
+    if (!dest || width <= 0 || height <= 0) return 0;
+    std::lock_guard<std::mutex> guard(render_mutex_);
+    // latest_index_ is reset on every reconfig and set again only after a frame of
+    // the new size was read back, so a published frame always has the buffer size.
+    if (!cpu_readback_ || latest_index_ < 0 || width != buffer_width_ || height != buffer_height_) {
+        return 0;
+    }
+    const size_t size = static_cast<size_t>(width) * height * 4;
+    if (readback_latest_.size() < size) return 0;
+    std::memcpy(dest, readback_latest_.data(), size);
+    return frame_state_.load(std::memory_order_relaxed);
 }
 
 uint64_t mpv_handle_t::get_frame_state() {
@@ -457,8 +486,11 @@ void mpv_handle_t::render_thread_loop() {
         d3d11_buffer target = buffers_[next];
         lock.unlock();
         bool rendered = render_into(target);
+        // cpu_readback_ and the staging texture only change on this thread.
+        if (rendered && cpu_readback_) rendered = read_back_into_scratch(target);
         lock.lock();
         if (rendered) {
+            if (cpu_readback_) readback_scratch_.swap(readback_latest_);
             latest_index_ = next;
             ++frame_serial_;
             publish_state_locked();
@@ -476,10 +508,13 @@ void mpv_handle_t::render_thread_loop() {
 bool mpv_handle_t::apply_config_locked() {
     const int width = pending_width_, height = pending_height_;
     const int64_t device_ptr = pending_device_ptr_;
+    const bool cpu_readback = pending_cpu_readback_;
 
     if (width <= 0 || height <= 0) {
         // Deactivate. The consumer drops all texture references before requesting
         // this, so both generations can be freed immediately.
+        destroy_readback_resources_locked();
+        cpu_readback_ = false;
         if (has_retired_buffers_) {
             destroy_buffer_ring(retired_buffers_);
             has_retired_buffers_ = false;
@@ -497,11 +532,16 @@ bool mpv_handle_t::apply_config_locked() {
         return false;
     }
     if (buffers_allocated_ && width == buffer_width_ && height == buffer_height_ &&
-        device_ptr == buffer_device_ptr_) {
+        device_ptr == buffer_device_ptr_ && cpu_readback == cpu_readback_) {
         return false;
     }
 
-    if (buffers_allocated_) {
+    if (buffers_allocated_ && cpu_readback_) {
+        // A readback consumer never references ring textures (and never acks), so
+        // the old ring goes away now; it keeps drawing its last CPU copy meanwhile.
+        destroy_buffer_ring(buffers_);
+        buffers_allocated_ = false;
+    } else if (buffers_allocated_) {
         for (int i = 0; i < kD3D11BufferCount; ++i) {
             retired_buffers_[i] = buffers_[i];
             buffers_[i] = d3d11_buffer{};
@@ -539,6 +579,22 @@ bool mpv_handle_t::apply_config_locked() {
     for (int i = 0; i < kD3D11BufferCount && ok; ++i) {
         ok = allocate_buffer(buffers_[i], width, height);
     }
+    destroy_readback_resources_locked();
+    if (ok && cpu_readback) {
+        D3D11_TEXTURE2D_DESC desc{};
+        buffers_[0].texture->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        desc.MiscFlags = 0;
+        const HRESULT hr = d3d_device_->CreateTexture2D(&desc, nullptr, &readback_staging_);
+        if (FAILED(hr) || !readback_staging_) {
+            LOG(this, LOG_LEVEL_ERROR, "readback staging texture creation failed: 0x%lx", hr);
+            readback_staging_ = nullptr;
+            ok = false;
+        }
+    }
+    cpu_readback_ = ok && cpu_readback;
     if (!ok) {
         LOG(this, LOG_LEVEL_ERROR, "buffer ring allocation failed (%dx%d)", width, height);
         destroy_buffer_ring(buffers_);
@@ -557,8 +613,38 @@ bool mpv_handle_t::apply_config_locked() {
     latest_index_ = -1;
     ++buffer_generation_;
     publish_state_locked();
-    LOG(this, LOG_LEVEL_INFO, "buffer ring allocated %dx%d gen=%u d3d12=%d",
-        width, height, buffer_generation_, skia_device_ ? 1 : 0);
+    LOG(this, LOG_LEVEL_INFO, "buffer ring allocated %dx%d gen=%u d3d12=%d readback=%d",
+        width, height, buffer_generation_, skia_device_ ? 1 : 0, cpu_readback_ ? 1 : 0);
+    return true;
+}
+
+void mpv_handle_t::destroy_readback_resources_locked() {
+    safe_release(readback_staging_);
+    std::vector<uint8_t>().swap(readback_scratch_);
+    std::vector<uint8_t>().swap(readback_latest_);
+}
+
+bool mpv_handle_t::read_back_into_scratch(const d3d11_buffer &buffer) {
+    if (!readback_staging_ || !buffer.texture) return false;
+    d3d_context_->CopyResource(readback_staging_, buffer.texture);
+    // Blocks this render thread only until the copy retires; the frame itself is
+    // already complete (render_into waited for it).
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hr = d3d_context_->Map(readback_staging_, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) {
+        LOG(this, LOG_LEVEL_ERROR, "Map(readback staging) failed: 0x%lx", hr);
+        return false;
+    }
+    // RGBA8 top-down, like the render target; the consumer ignores alpha (opaque).
+    const size_t stride = static_cast<size_t>(buffer_width_) * 4;
+    readback_scratch_.resize(stride * buffer_height_);
+    for (int y = 0; y < buffer_height_; ++y) {
+        std::memcpy(
+            readback_scratch_.data() + static_cast<size_t>(y) * stride,
+            static_cast<const uint8_t *>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch,
+            stride);
+    }
+    d3d_context_->Unmap(readback_staging_, 0);
     return true;
 }
 
@@ -721,6 +807,8 @@ void mpv_handle_t::cleanup_render_resources() {
             buffers_allocated_ = false;
         }
         safe_release(skia_device_);
+        destroy_readback_resources_locked();
+        cpu_readback_ = false;
         latest_index_ = -1;
         buffer_width_ = buffer_height_ = 0;
         buffer_device_ptr_ = 0;

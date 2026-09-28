@@ -79,6 +79,17 @@ external fun nDestroyRenderContextD3D11(ptr: Long): Boolean
 external fun nSetConsumerDeviceHintD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
 
 /**
+ * [nSetSurfaceConfigD3D11] for consumers without a D3D12 device: the render thread
+ * also copies every frame to system memory, taken with [nCopyLatestFrameD3D11].
+ */
+@InternalMediampApi
+external fun nSetReadbackSurfaceConfigD3D11(ptr: Long, width: Int, height: Int): Boolean
+
+/** D3D11 readback equivalent of [nCopyLatestFrameWindowsOpenGL]. */
+@InternalMediampApi
+external fun nCopyLatestFrameD3D11(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
+/**
  * Asks the render thread to (re)allocate the buffer ring at [width] x [height], opening
  * each texture on the ID3D12Device inside [skikoDevicePtr] (a pointer to Skiko's native
  * DirectXDevice struct; 0 = D3D11-only ring without a Skia side, used headless).

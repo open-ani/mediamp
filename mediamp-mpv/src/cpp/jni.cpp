@@ -128,6 +128,8 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetConsumerDeviceHintD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong skiko_device_ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
@@ -465,6 +467,18 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextD3D11)(JNIEnv * env, 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetConsumerDeviceHintD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jlong skiko_device_ptr) {
     auto *instance = get_instance(ptr);
     return instance ? instance->set_consumer_device_hint(skiko_device_ptr) : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height) {
+    auto *instance = get_instance(ptr);
+    return instance ? instance->set_readback_surface_config(width, height) : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height) {
+    auto *instance = get_instance(ptr);
+    if (!instance) return 0;
+    return (jlong) instance->copy_latest_frame_d3d11(
+        reinterpret_cast<void *>(static_cast<uintptr_t>(dest_addr)), width, height);
 }
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv * env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr) {

@@ -92,6 +92,17 @@ public:
     // between frames on the render thread.
     bool set_surface_config(int width, int height, int64_t skiko_device_ptr);
 
+    // CPU-readback variant of set_surface_config for consumers without a D3D12 device
+    // (Skiko's software and ANGLE redrawers): the render thread additionally copies
+    // each rendered frame into system memory, and consumers take it with
+    // copy_latest_frame_d3d11 instead of sampling ring textures. They never hold ring
+    // textures, so reconfiguration frees the old ring without waiting for an ack.
+    bool set_readback_surface_config(int width, int height);
+    // Copies the latest read-back frame (RGBA8, top-down rows, width*4 stride) into
+    // dest if it is exactly width x height. Returns the frame state describing the
+    // copied frame, or 0 when no frame of that size is available.
+    uint64_t copy_latest_frame_d3d11(void *dest, int width, int height);
+
     // Packed frame state: generation(16) | latest_index(4, 0xF = none) | width(14) |
     // height(14) | serial(16). Any change means there is something new to consume; a
     // generation change means the buffer ring was reallocated (re-wrap textures, then
@@ -253,10 +264,18 @@ private:
     int latest_index_ = -1;
     std::atomic<uint64_t> frame_state_{0xFull << 44};  // "no buffer" sentinel
 
+    // CPU readback (set_readback_surface_config). The render thread owns the staging
+    // texture and readback_scratch_; readback_latest_ is swapped in and copied out
+    // under render_mutex_.
+    bool cpu_readback_ = false;
+    ID3D11Texture2D *readback_staging_ = nullptr;
+    std::vector<uint8_t> readback_scratch_, readback_latest_;
+
     // Requests to the render thread; guarded by render_mutex_.
     bool config_pending_ = false;
     int pending_width_ = 0, pending_height_ = 0;
     int64_t pending_device_ptr_ = 0;
+    bool pending_cpu_readback_ = false;
     bool retire_ack_pending_ = false;
     bool render_pending_ = false;
     bool render_quit_ = false;
@@ -275,6 +294,10 @@ private:
     void destroy_buffer_ring(d3d11_buffer *ring);
     void publish_state_locked();
     bool render_into(const d3d11_buffer &buffer);
+    // Copies buffer into readback_scratch_ through readback_staging_; render thread
+    // only, unlocked.
+    bool read_back_into_scratch(const d3d11_buffer &buffer);
+    void destroy_readback_resources_locked();
     void drain_one_frame();
     bool wait_for_gpu();  // End(flush_query_) + poll; render thread only
     // Staging-texture readback of the latest frame; shared by save_surface_png and

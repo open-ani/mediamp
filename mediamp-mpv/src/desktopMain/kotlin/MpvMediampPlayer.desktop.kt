@@ -136,7 +136,7 @@ actual class MpvMediampPlayer(
     }
 
     /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
-    internal fun currentFrameImage(directContext: DirectContext): Image? =
+    internal fun currentFrameImage(directContext: DirectContext?): Image? =
         if (surfaceTeardownStarted) null else surfaceRing?.currentFrameImage(directContext)
 
     /** See [MpvSurfaceConsumer.release]. */

@@ -36,7 +36,7 @@ import org.openani.mediamp.mpv.utils.SkiaWindowsOpenGLInterop
  * context freely.
  */
 @OptIn(InternalMediampApi::class)
-internal object WindowsOpenGLSurfaceBackend : MpvSurfaceBackend {
+internal object WindowsOpenGLSurfaceBackend : MpvReadbackBackend {
     override fun createRenderContext(ptr: Long) = nCreateRenderContextWindowsOpenGL(ptr)
     override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextWindowsOpenGL(ptr)
 
@@ -49,12 +49,8 @@ internal object WindowsOpenGLSurfaceBackend : MpvSurfaceBackend {
     override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngWindowsOpenGL(ptr, path)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsWindowsOpenGL(ptr, dims)
 
-    /** See [nCopyLatestFrameWindowsOpenGL]. */
-    fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =
+    override fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =
         nCopyLatestFrameWindowsOpenGL(ptr, destAddr, width, height)
-
-    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer =
-        MpvReadbackSurface(handlePtr, this)
 
     override val rendererName: String get() = "OpenGL/WGL readback"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop =

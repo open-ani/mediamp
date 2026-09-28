@@ -110,10 +110,9 @@ internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend?
     null -> null
     "org.jetbrains.skiko.redrawer.Direct3DRedrawer" -> D3D11SurfaceRingBackend
     "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer" -> WindowsOpenGLSurfaceBackend
-    else -> error(
-        "Unsupported Skiko redrawer ${redrawerClass.name}. The mpv Windows render path " +
-            "requires Direct3DRedrawer or WindowsOpenGLRedrawer.",
-    )
+    // Software (WindowsSoftwareRedrawer, SoftwareRedrawer), ANGLE and any future
+    // redrawer: the readback path needs nothing from Skiko's renderer.
+    else -> D3D11ReadbackSurfaceBackend
 }
 
 /**
@@ -400,7 +399,9 @@ internal class MpvSurfaceRing(
      * returned until the new ring has content, so resizes never flash black. Do NOT
      * close the returned image — it is owned by this ring.
      */
-    override fun currentFrameImage(directContext: DirectContext): Image? {
+    override fun currentFrameImage(directContext: DirectContext?): Image? {
+        // The ring textures can only be wrapped on Skia's GPU context.
+        if (directContext == null) return null
         val state = backend.getFrameState(handlePtr)
         if (state == cachedState && surfaceContext === directContext) {
             cachedFrame?.let { return it }
