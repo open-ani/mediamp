@@ -468,7 +468,15 @@ internal class MpvSurfaceRing(
                 closeWraps()
                 return false
             }
-            val consumerTarget = backend.makeConsumerRenderTarget(width, height, texture)
+            // This runs inside the Compose draw pass: a failure (e.g. the Linux consumer
+            // FBO cannot be created) must not propagate into the UI as an exception.
+            val consumerTarget = runCatching { backend.makeConsumerRenderTarget(width, height, texture) }
+                .onFailure { logOnce("creating the consumer render target for buffer $i failed", MPVLog.ERROR, it) }
+                .getOrNull()
+            if (consumerTarget == null) {
+                closeWraps()
+                return false
+            }
             val surface = runCatching {
                 Surface.makeFromBackendRenderTarget(
                     context = directContext,
@@ -480,7 +488,7 @@ internal class MpvSurfaceRing(
             }.onFailure { logOnce("wrapping buffer $i as Skia surface failed", MPVLog.ERROR, it) }.getOrNull()
             if (surface == null) {
                 logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})", MPVLog.ERROR)
-                consumerTarget.close()
+                closeConsumerTarget(consumerTarget)
                 closeWraps()
                 return false
             }
@@ -522,6 +530,13 @@ internal class MpvSurfaceRing(
         clearWraps(abandonOwnedResources = true)
     }
 
+    // Also reached from the draw pass: a failed release (e.g. deleting the Linux consumer
+    // FBO) is logged rather than thrown into Compose.
+    private fun closeConsumerTarget(target: MpvConsumerRenderTarget) {
+        runCatching { target.close() }
+            .onFailure { logOnce("releasing a consumer render target failed", MPVLog.ERROR, it) }
+    }
+
     private fun clearWraps(abandonOwnedResources: Boolean) {
         for (i in 0 until SURFACE_RING_BUFFER_COUNT) {
             wrappedSurfaces[i]?.close()
@@ -529,7 +544,7 @@ internal class MpvSurfaceRing(
             if (abandonOwnedResources) {
                 consumerTargets[i]?.abandon()
             } else {
-                consumerTargets[i]?.close()
+                consumerTargets[i]?.let(::closeConsumerTarget)
             }
             consumerTargets[i] = null
         }
