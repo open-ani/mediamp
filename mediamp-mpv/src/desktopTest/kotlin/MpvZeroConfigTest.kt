@@ -77,37 +77,26 @@ class MpvZeroConfigTest {
                 val player = MpvMediampPlayer(Any(), coroutineContext, mainDispatcher = main)
                 try {
                     val uri = "http://127.0.0.1:${server.address.port}/video.mp4"
-                    if (System.getProperty("os.name").contains("Linux", ignoreCase = true)) {
-                        // Linux public playback intentionally holds setMediaData in Opening
-                        // until a live Skiko GLX environment exists (degraded
-                        // surface-independent-open, spec §6). This zero-config case only
-                        // probes the bundled runtime's HTTP/header support against an
-                        // intentional 404; the real public playback path is covered by the
-                        // GLX validation lane.
-                        assertTrue(player.handle.option("http-header-fields", "X-Mediamp-Test: present"))
-                        assertTrue(player.handle.command("loadfile", uri, "replace"))
-                    } else {
-                        // Windows needs a selected backend before loadfile. The HTTP/404
-                        // probe can run even when an accelerated render context is unavailable.
-                        player.createRenderContext()
-                        // v2 open contract: the 404 must fail fast INSIDE setMediaData.
-                        val result = withTimeout(30_000) {
-                            runCatching {
-                                player.setMediaData(
-                                    UriMediaData(
-                                        uri = uri,
-                                        headers = mapOf("X-Mediamp-Test" to "present"),
-                                        extraFiles = MediaExtraFiles.EMPTY,
-                                    ),
-                                )
-                            }
+                    // No surface is attached: on Windows and Linux the render context does not
+                    // exist yet, and the open must still reach loadfile (spec §6,
+                    // surface-independent-open). v2 open contract: the 404 must fail fast
+                    // INSIDE setMediaData.
+                    val result = withTimeout(30_000) {
+                        runCatching {
+                            player.setMediaData(
+                                UriMediaData(
+                                    uri = uri,
+                                    headers = mapOf("X-Mediamp-Test" to "present"),
+                                    extraFiles = MediaExtraFiles.EMPTY,
+                                ),
+                            )
                         }
-                        assertTrue(
-                            result.exceptionOrNull() is PlaybackException,
-                            "opening a 404 must throw PlaybackException from setMediaData, " +
-                                    "got ${result.exceptionOrNull()}",
-                        )
                     }
+                    assertTrue(
+                        result.exceptionOrNull() is PlaybackException,
+                        "opening a 404 must throw PlaybackException from setMediaData, " +
+                                "got ${result.exceptionOrNull()}",
+                    )
 
                     val didOpenHttpStream = withContext(Dispatchers.IO) {
                         requestSeen.await(10, TimeUnit.SECONDS)

@@ -10,12 +10,12 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.openani.mediamp.AbstractMediampPlayer
 import org.openani.mediamp.InternalForInheritanceMediampApi
 import org.openani.mediamp.InternalMediampApi
@@ -83,8 +83,8 @@ private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
  * Capability notes (spec §6): mpv cannot measure data starvation while user-paused
  * (`paused-for-cache` does not engage at pause) — the `paused-stall` capability is degraded;
  * `isStalled` is authoritative only while the native transport is playing. On Linux and Windows the
- * `surface-independent-open` capability is degraded: [openImpl] suspends until the selected render
- * context exists (see [ensureRenderContextForLoad]).
+ * render context needs an attached surface: a file opened before it exists plays with `vo=null`
+ * and gets its video output when the surface attaches (see [ensureRenderContextForLoad]).
  *
  * @param configureOptions optional hook invoked once during construction, after Mediamp's
  *   default mpv options are set and right before `mpv_initialize`, so options set here win and
@@ -145,8 +145,18 @@ abstract class JvmMpvMediampPlayer(
      */
     private val inputAwaitParent = SupervisorJob(parentCoroutineContext[Job])
 
-    /** Bumped by [renderContextBecameReady]; [awaitRenderContextForLoad] waits on it. */
-    private val renderContextReadySignal = MutableStateFlow(0L)
+    /**
+     * Runs [restoreDeferredVideoOutput] on the machine thread, ordered with [openImpl]:
+     * [renderContextBecameReady] is called from UI and render threads.
+     */
+    private val videoOutputScope =
+        CoroutineScope(SupervisorJob(parentCoroutineContext[Job]) + mainDispatcher)
+
+    /**
+     * The configured `vo` that `vo=null` replaces while the render context does not exist, or
+     * `null` when the configured output is in place. Machine-thread confined.
+     */
+    private var deferredVideoOutput: String? = null
 
     private val audioLevelController = MpvAudioLevelController(handle)
     private val buffering = MpvBuffering(state)
@@ -505,8 +515,8 @@ abstract class JvmMpvMediampPlayer(
     /**
      * Whether the producer render context may exist for `loadfile` right now. Platform
      * subclasses whose render context is unavailable until an external render environment is
-     * attached (Linux/GLX or Windows redrawer selection) return `false`; [openImpl] then suspends (holding the machine in
-     * Opening — spec §6, degraded `surface-independent-open`) until [renderContextBecameReady].
+     * attached (Linux/GLX or Windows redrawer selection) return `false`; [openImpl] then loads
+     * with `vo=null` until [renderContextBecameReady] (spec §6, `surface-independent-open`).
      */
     protected open fun ensureRenderContextForLoad(): Boolean = true
 
@@ -516,19 +526,41 @@ abstract class JvmMpvMediampPlayer(
      */
     protected fun hasActivePlaybackSession(): Boolean = sessionAdapter != null
 
-    /** Wakes an [openImpl] suspended waiting for the render context. */
+    /** Restores the video output of a file opened before the render context existed. Any thread. */
     protected fun renderContextBecameReady() {
-        renderContextReadySignal.update { it + 1 }
+        videoOutputScope.launch { restoreDeferredVideoOutput() }
     }
 
-    /** Receives the physical video surface size from the desktop render backend. */
-    private suspend fun awaitRenderContextForLoad() {
-        while (true) {
-            // Capture the signal before probing so a callback firing between the probe and
-            // the wait cannot be missed.
-            val seen = renderContextReadySignal.value
-            if (ensureRenderContextForLoad()) return
-            renderContextReadySignal.first { it != seen }
+    /**
+     * With `vo=libmpv`, `loadfile` before the render context exists disables the video track
+     * for the whole file (spec §6), yet opening must not wait for a surface: audio-only players
+     * never attach one. Such a file plays with `vo=null` instead. Machine thread.
+     */
+    private fun prepareVideoOutputForLoad() {
+        if (ensureRenderContextForLoad()) {
+            restoreDeferredVideoOutput()
+            return
+        }
+        if (deferredVideoOutput != null) return
+        val configured = handle.getPropertyString("vo") ?: return
+        if (handle.setPropertyString("vo", "null")) {
+            deferredVideoOutput = configured
+            MPVLog.info(
+                handle.ptr,
+                "No render context before loadfile; using vo=null until a surface attaches.",
+            )
+        }
+    }
+
+    /** Machine thread. */
+    private fun restoreDeferredVideoOutput() {
+        val configured = deferredVideoOutput ?: return
+        if (nativeTeardownStarted || !ensureRenderContextForLoad()) return
+        // On a runtime `vo` change mpv rebuilds the loaded file's video chain and refreshes it
+        // with an exact seek to the current position.
+        if (handle.setPropertyString("vo", configured)) {
+            deferredVideoOutput = null
+            MPVLog.info(handle.ptr, "Render context ready; restored vo=$configured.")
         }
     }
 
@@ -540,12 +572,10 @@ abstract class JvmMpvMediampPlayer(
         playWhenReady: Boolean,
         startPositionMillis: Long,
     ): OpenResult {
-        // Linux/GLX (spec §6): with vo=libmpv, `loadfile` before the render context exists
-        // permanently disables the video track, and the producer context can only join
-        // Skiko's live GLX share group. Suspend here (machine stays in Opening) until the
-        // surface attach provides it. Eager platforms (macOS Metal, Windows D3D11) and
-        // headless modes proceed immediately.
-        awaitRenderContextForLoad()
+        // Linux/GLX and Windows cannot create the producer render context before the first
+        // surface attach. The file then opens with vo=null; eager platforms (macOS Metal) and
+        // headless modes load with the configured video output.
+        prepareVideoOutputForLoad()
 
         buffering.reset()
         networkStats.reset()
@@ -732,6 +762,7 @@ abstract class JvmMpvMediampPlayer(
         // Unblock reads still parked in a session await context before the teardown thread
         // joins mpv's demux threads (a blocked read holds the native stream lock).
         inputAwaitParent.cancel()
+        videoOutputScope.cancel()
         sessionAdapter = null
         (framePreview as? AutoCloseable)?.close()
         mediaMetadata.clear()

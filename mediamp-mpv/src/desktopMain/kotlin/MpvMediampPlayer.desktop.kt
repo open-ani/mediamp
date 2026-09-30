@@ -112,7 +112,10 @@ actual class MpvMediampPlayer(
     override fun ensureRenderContextForLoad(): Boolean =
         !surfaceTeardownStarted && (renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend())
 
-    /** Returns null until Skiko has chosen its redrawer; loading waits for that selection. */
+    /**
+     * Returns null until Skiko has chosen its redrawer; files loaded before that play with
+     * `vo=null`.
+     */
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
         if (surfaceTeardownStarted) return null
         val backend = currentSurfaceBackend(layerRedrawer) ?: return null

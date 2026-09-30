@@ -15,8 +15,8 @@ import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 
 /**
  * Linux GLX lifecycle: the producer context must join Skiko's live GLX share group, so it
- * can only be created after [attachRenderEnvironment], and `loadfile` is gated on that
- * (`vo=libmpv` requires the render context to exist first).
+ * can only be created after [attachRenderEnvironment]. `vo=libmpv` requires the render context
+ * before `loadfile`, so files loaded earlier play with `vo=null` until the attach.
  */
 internal class OpenGLRenderContextLifecycle(
     private val backend: OpenGLSurfaceRingBackend,
@@ -30,9 +30,8 @@ internal class OpenGLRenderContextLifecycle(
         // frames on-GPU through CUDA/OpenGL, while Intel/AMD use stable VAAPI
         // decode with a system-memory copy. Only then try mpv's safe auto list.
         check(host.handle.setPropertyString("hwdec", "nvdec,vaapi-copy,auto-safe"))
-        // No producer context yet: the live Skiko GLX environment must be attached
-        // first, otherwise `vo=libmpv` would be asked to load before its required
-        // render context can exist.
+        // No producer context yet: it can only join the live Skiko GLX environment,
+        // which is attached from the first draw pass.
     }
 
     override fun createEagerly(): Boolean = false
