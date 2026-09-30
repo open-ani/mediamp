@@ -106,9 +106,8 @@ private fun MpvMediampPlayerSurfaceRing(
     val canvasSize = remember { mutableStateOf(IntSize.Zero) }
     // Whether the player's producer render context exists. Eager backends decide this
     // when the surface enters composition; deferred-readiness backends (Linux GLX)
-    // intentionally wait for the live redrawer so `vo=libmpv` never sees loadfile
-    // before its render environment has been attached — they become ready from the
-    // first successful draw pass instead.
+    // wait for the live redrawer, whose GLX share group the producer context must
+    // join — they become ready from the first successful draw pass instead.
     var renderContextReady by remember(player) { mutableStateOf(false) }
     val loggedStates = remember(player) { mutableSetOf<String>() }
     fun logOnce(state: String, level: Int = MPVLog.DEBUG) {

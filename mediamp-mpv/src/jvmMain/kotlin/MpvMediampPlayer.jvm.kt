@@ -556,9 +556,16 @@ abstract class JvmMpvMediampPlayer(
     private fun restoreDeferredVideoOutput() {
         val configured = deferredVideoOutput ?: return
         if (nativeTeardownStarted || !ensureRenderContextForLoad()) return
-        // On a runtime `vo` change mpv rebuilds the loaded file's video chain and refreshes it
-        // with an exact seek to the current position.
-        if (handle.setPropertyString("vo", configured)) {
+        // Changing `vo` under a loaded file makes mpv restart the decoder at the demuxer's
+        // current position, mid-GOP: hardware decoding fails on the missing references and mpv
+        // decodes the rest of the file in software. The video track is deselected around the
+        // change instead; reselecting it refreshes the demuxer, so decoding restarts at a
+        // keyframe. Writing back `options/vid` keeps the selection mode (`auto` or a track id).
+        val videoTrack = handle.getPropertyString("options/vid")?.takeIf { it != "no" }
+        if (videoTrack != null) handle.setPropertyString("vid", "no")
+        val restored = handle.setPropertyString("vo", configured)
+        if (videoTrack != null) handle.setPropertyString("vid", videoTrack)
+        if (restored) {
             deferredVideoOutput = null
             MPVLog.info(handle.ptr, "Render context ready; restored vo=$configured.")
         }

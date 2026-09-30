@@ -20,7 +20,9 @@ import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
 import org.openani.mediamp.mpv.utils.MpvTestMedia
 import org.openani.mediamp.playUri
+import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -62,6 +64,32 @@ class MpvDeferredVideoOutputTest {
         }
     }
 
+    /**
+     * An A/V clip whose only keyframe is its first frame, so an attach during playback always
+     * lands mid-GOP. H.264 so the platform hardware decoder takes it; `null` when this ffmpeg
+     * has no H.264 encoder (e.g. the LGPL runtime build), and the MPEG-4 fixture is used instead.
+     */
+    private fun generateSingleGopH264Clip(): File? {
+        val tmp = System.getProperty("java.io.tmpdir")
+        val target = File(tmp, "mediamp-mpv-test-h264-single-gop.mp4")
+        if (target.isFile && target.length() > 0) return target
+        val ffmpeg = MpvTestMedia.findFfmpeg() ?: return null
+        for (encoder in listOf("libx264", "h264_videotoolbox", "h264_mf")) {
+            val process = ProcessBuilder(
+                ffmpeg, "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+                "-t", "8", "-c:v", encoder, "-g", "1000", "-sc_threshold", "0",
+                "-pix_fmt", "yuv420p", "-c:a", "aac",
+                target.absolutePath,
+            ).redirectErrorStream(true).start()
+            process.inputStream.readAllBytes()
+            if (process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0) return target
+        }
+        target.delete()
+        return null
+    }
+
     private suspend fun awaitProperty(handle: MPVHandle, name: String, expected: String) {
         withTimeout(10_000) {
             while (handle.getPropertyString(name) != expected) delay(20)
@@ -72,7 +100,8 @@ class MpvDeferredVideoOutputTest {
     @Test
     fun `open before the render context exists plays and gains video on attach`() {
         if (!MpvTestMedia.prepareOrSkip(TAG)) return
-        val clip = MpvTestMedia.generateClip(seconds = 8)
+        val clip = generateSingleGopH264Clip()
+            ?: MpvTestMedia.generateClip(seconds = 8)
             ?: run {
                 MpvTestMedia.skip(TAG, "ffmpeg unavailable or clip generation failed")
                 return
@@ -102,6 +131,7 @@ class MpvDeferredVideoOutputTest {
                         "the video track must stay selected",
                     )
                     assertEquals(null, player.publishedFrameSerial())
+                    val hwdecBeforeAttach = handle.getPropertyString("hwdec-current")
 
                     player.attach()
                     awaitProperty(handle, "current-vo", "libmpv")
@@ -130,6 +160,15 @@ class MpvDeferredVideoOutputTest {
                         player.state.value.isPlaying,
                         "playback must continue after the vo switch",
                     )
+                    // A decoder restarted mid-GOP fails in hardware, and mpv then decodes the
+                    // rest of the file in software.
+                    if (hwdecBeforeAttach != null && hwdecBeforeAttach != "no") {
+                        assertNotEquals(
+                            "no",
+                            handle.getPropertyString("hwdec-current"),
+                            "the attach must keep hardware decoding (was $hwdecBeforeAttach)",
+                        )
+                    }
 
                     val dims = IntArray(2)
                     val pixels = checkNotNull(player.backend.readSurfacePixels(handle.ptr, dims)) {

@@ -391,14 +391,16 @@ for a saved-position-at-end resume).
   replaced mid-session (`mpv_render_context_free` while video is active force-disables
   video). On Linux and Windows, `setMediaData` before the first surface attach therefore
   loads with `vo=null`: audio plays and the open reaches Ready without a surface. When the
-  render context becomes available the backend restores `vo=libmpv`; mpv rebuilds the video
-  chain of the loaded file on a runtime `vo` change and refreshes it with an exact seek to
-  the current position, so video appears mid-session. (Upgrade path for Linux: EGL/dmabuf
-  interop.) Windows headless capture tests explicitly create a windowless D3D11 context with
-  `createRenderContext()` before loading media. They cannot later attach an OpenGL consumer
-  to that player. Other headless CI uses a declared video-disabled mode (`vo=null`). v1's
-  defer-loadfile-to-resume (deferral to `play()`) is abolished everywhere — deferral, where
-  unavoidable, lives inside Opening, never after Ready.
+  render context becomes available the backend restores `vo=libmpv` with the video track
+  deselected and then reselects it: a plain runtime `vo` change would restart the decoder
+  mid-GOP, where hardware decoding fails and mpv decodes the rest of the file in software,
+  while track selection refreshes the demuxer from a keyframe. Video then appears
+  mid-session. (Upgrade path for Linux: EGL/dmabuf interop.) Windows headless capture tests
+  explicitly create a windowless D3D11 context with `createRenderContext()` before loading
+  media. They cannot later attach an OpenGL consumer to that player. Other headless CI uses a
+  declared video-disabled mode (`vo=null`). v1's defer-loadfile-to-resume (deferral to
+  `play()`) is abolished everywhere — deferral, where unavoidable, lives inside Opening,
+  never after Ready.
 - **Speed**: `setRateImpl` is part of the SPI. Feature `PlaybackSpeed.set` goes through the
   machine: while not playing it only stores the rate (fixes avkit `setRate`-starts-playback);
   the machine (re)applies the stored rate on every transition to playing and after an accepted
