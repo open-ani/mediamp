@@ -45,9 +45,10 @@ import org.openani.mediamp.mpv.nHasOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePng
+import org.openani.mediamp.mpv.nSaveSurfacePngMacos
 import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
 import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
+import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
@@ -109,10 +110,9 @@ internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend?
     null -> null
     "org.jetbrains.skiko.redrawer.Direct3DRedrawer" -> D3D11SurfaceRingBackend
     "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer" -> WindowsOpenGLSurfaceBackend
-    else -> error(
-        "Unsupported Skiko redrawer ${redrawerClass.name}. The mpv Windows render path " +
-            "requires Direct3DRedrawer or WindowsOpenGLRedrawer.",
-    )
+    // Software (WindowsSoftwareRedrawer, SoftwareRedrawer), ANGLE and any future
+    // redrawer: the readback path needs nothing from Skiko's renderer.
+    else -> D3D11ReadbackSurfaceBackend
 }
 
 /**
@@ -138,6 +138,13 @@ internal interface MpvSurfaceBackend {
      */
     fun createRenderContextLifecycle(host: MpvRenderContextHost): MpvRenderContextLifecycle =
         EagerRenderContextLifecycle(this, host)
+
+    /**
+     * Passes the consumer render device ([setSurfaceConfig]'s `devicePtr`) before the
+     * producer context is created, for backends whose producer device must live on the
+     * same GPU. No-op by default.
+     */
+    fun hintConsumerDevice(ptr: Long, devicePtr: Long) {}
 
     /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
@@ -193,7 +200,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureMacos(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
+    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngMacos(ptr, path)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
@@ -210,6 +217,12 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
 
     override fun createRenderContext(ptr: Long) = nCreateRenderContextD3D11(ptr)
     override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextD3D11(ptr)
+
+    // NT-handle textures cannot be opened on another adapter's D3D12 device.
+    override fun hintConsumerDevice(ptr: Long, devicePtr: Long) {
+        nSetConsumerDeviceHintD3D11(ptr, devicePtr)
+    }
+
     override fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long) =
         nSetSurfaceConfigD3D11(ptr, width, height, devicePtr)
 
@@ -386,7 +399,9 @@ internal class MpvSurfaceRing(
      * returned until the new ring has content, so resizes never flash black. Do NOT
      * close the returned image — it is owned by this ring.
      */
-    override fun currentFrameImage(directContext: DirectContext): Image? {
+    override fun currentFrameImage(directContext: DirectContext?): Image? {
+        // The ring textures can only be wrapped on Skia's GPU context.
+        if (directContext == null) return null
         val state = backend.getFrameState(handlePtr)
         if (state == cachedState && surfaceContext === directContext) {
             cachedFrame?.let { return it }
@@ -415,7 +430,7 @@ internal class MpvSurfaceRing(
         // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
         // texture), so blit into a Skia-owned GPU surface and snapshot that. The snapshot
         // is a GPU image on the current DirectContext; the caller draws it straight onto
-        // the Compose canvas with nativeCanvas.drawImage (see MpvMediampPlayerSurface),
+        // the Compose canvas with skiaCanvas.drawImageRect (see MpvMediampPlayerSurface),
         // a zero-copy GPU->GPU draw. Do NOT convert it with toComposeImageBitmap(): that
         // reads the GPU image back to a CPU bitmap every frame, which both costs a full
         // GPU->CPU transfer (a ~20ms stall at 4K that pins the whole Compose scene, and
@@ -453,7 +468,15 @@ internal class MpvSurfaceRing(
                 closeWraps()
                 return false
             }
-            val consumerTarget = backend.makeConsumerRenderTarget(width, height, texture)
+            // This runs inside the Compose draw pass: a failure (e.g. the Linux consumer
+            // FBO cannot be created) must not propagate into the UI as an exception.
+            val consumerTarget = runCatching { backend.makeConsumerRenderTarget(width, height, texture) }
+                .onFailure { logOnce("creating the consumer render target for buffer $i failed", MPVLog.ERROR, it) }
+                .getOrNull()
+            if (consumerTarget == null) {
+                closeWraps()
+                return false
+            }
             val surface = runCatching {
                 Surface.makeFromBackendRenderTarget(
                     context = directContext,
@@ -465,7 +488,7 @@ internal class MpvSurfaceRing(
             }.onFailure { logOnce("wrapping buffer $i as Skia surface failed", MPVLog.ERROR, it) }.getOrNull()
             if (surface == null) {
                 logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})", MPVLog.ERROR)
-                consumerTarget.close()
+                closeConsumerTarget(consumerTarget)
                 closeWraps()
                 return false
             }
@@ -507,6 +530,13 @@ internal class MpvSurfaceRing(
         clearWraps(abandonOwnedResources = true)
     }
 
+    // Also reached from the draw pass: a failed release (e.g. deleting the Linux consumer
+    // FBO) is logged rather than thrown into Compose.
+    private fun closeConsumerTarget(target: MpvConsumerRenderTarget) {
+        runCatching { target.close() }
+            .onFailure { logOnce("releasing a consumer render target failed", MPVLog.ERROR, it) }
+    }
+
     private fun clearWraps(abandonOwnedResources: Boolean) {
         for (i in 0 until SURFACE_RING_BUFFER_COUNT) {
             wrappedSurfaces[i]?.close()
@@ -514,7 +544,7 @@ internal class MpvSurfaceRing(
             if (abandonOwnedResources) {
                 consumerTargets[i]?.abandon()
             } else {
-                consumerTargets[i]?.close()
+                consumerTargets[i]?.let(::closeConsumerTarget)
             }
             consumerTargets[i] = null
         }

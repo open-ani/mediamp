@@ -5,7 +5,8 @@
  * https://github.com/open-ani/mediamp/blob/main/LICENSE
  */
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#include "platform.h"
+#ifdef MEDIAMPV_LINUX_DESKTOP
 
 #include <dlfcn.h>
 
@@ -239,4 +240,4 @@ void glx_context_provider::set_error_locked(const char *message) {
 
 } // namespace mediampv
 
-#endif // defined(__linux__) && !defined(__ANDROID__)
+#endif // MEDIAMPV_LINUX_DESKTOP

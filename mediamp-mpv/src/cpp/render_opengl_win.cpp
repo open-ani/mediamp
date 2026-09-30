@@ -52,6 +52,7 @@
 #include "gl_functions_win.h"
 #include "log.h"
 #include "mpv_handle_t.h"
+#include "jni_utils.h"
 #include "png_writer_win.h"
 #include "wgl_offscreen_context.h"
 
@@ -118,7 +119,9 @@ void drain_gl_errors() {
 
 namespace mediampv {
 
-struct mpv_handle_t::win_gl_state final {
+namespace {
+
+struct win_gl_state final {
     // Owned by the render thread between initialization and thread exit.
     mpv_render_context *render_context = nullptr;
     wgl_offscreen_context *gl = nullptr;
@@ -163,62 +166,100 @@ struct mpv_handle_t::win_gl_state final {
     std::thread *thread = nullptr;
 };
 
-bool mpv_handle_t::create_render_context_win_gl() {
-    if (!handle_) {
-        LOGE("create_render_context_win_gl: mpv handle is null");
+
+class win_gl_renderer final : public desktop_renderer {
+public:
+    explicit win_gl_renderer(mpv_handle_t &owner) : owner_(owner) {}
+    ~win_gl_renderer() override { shutdown(); }
+
+    win_gl_renderer(const win_gl_renderer &) = delete;
+    win_gl_renderer &operator=(const win_gl_renderer &) = delete;
+
+    // Starts the render thread and waits until its WGL context and mpv render context
+    // exist; false (thread joined) when either failed.
+    bool create();
+
+    void shutdown() override;
+    // No consumer device: consumer_device is ignored.
+    bool set_surface_config(int width, int height, int64_t consumer_device) override;
+    uint64_t frame_state() override;
+    bool has_surface() override;
+    bool save_surface_png(const char *path) override;
+    bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) override;
+    // Copies the latest frame as tightly packed RGBA8 rows (top-down) into dest,
+    // provided the frame is exactly width x height (dest must hold width*height*4
+    // bytes). Called from the consumer (UI) thread; the copy is serialized against the
+    // render thread's buffer swap, never against rendering.
+    uint64_t copy_latest_frame(void *dest, int width, int height) override;
+
+private:
+    static void on_mpv_update(void *context);
+    void render_thread_loop();
+    // The helpers below run on the render thread; *_locked ones assume the state
+    // mutex is held.
+    bool apply_config_locked();
+    bool allocate_target_locked(int width, int height);
+    void destroy_target_locked();
+    void publish_state_locked();
+    void publish_collected_frame_locked(int width, int height);
+    // Renders mpv into the FBO and starts the readback: asynchronously into the next
+    // PBO when available, else synchronously into scratch.
+    bool render_frame(int width, int height);
+    // Moves the oldest completed readback into scratch; false when none is ready.
+    // include_pbos=false only collects a synchronous-path frame (used right after a
+    // render, where mapping the just-queued PBO would defeat the asynchrony).
+    bool collect_ready_frame(int *out_width, int *out_height, bool include_pbos);
+    void drain_one_frame();
+
+    mpv_handle_t &owner_;
+    win_gl_state state_;
+};
+
+bool win_gl_renderer::create() {
+    if (!owner_.mpv()) {
+        LOGE("create_win_gl_renderer: mpv handle is null");
         return false;
     }
-    if (win_gl_ && win_gl_->thread) return true;
-    if (!win_gl_) win_gl_ = new win_gl_state();
-    auto *s = win_gl_;
+    auto *s = &state_;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         s->quit = false;
         s->initialized = false;
         s->initialize_ok = false;
     }
-    s->thread = new std::thread([this] { render_thread_loop_win_gl(); });
+    s->thread = new std::thread([this] { render_thread_loop(); });
     std::unique_lock<std::mutex> lock(s->mutex);
     s->cv.wait(lock, [s] { return s->initialized; });
     const bool initialized = s->initialize_ok;
     lock.unlock();
-    if (!initialized) cleanup_render_resources_win_gl();
+    if (!initialized) shutdown();
     return initialized;
 }
 
-bool mpv_handle_t::destroy_render_context_win_gl() {
-    cleanup_render_resources_win_gl();
-    return true;
-}
-
-void mpv_handle_t::free_win_gl_state() {
-    delete win_gl_;
-    win_gl_ = nullptr;
-}
-
-void mpv_handle_t::cleanup_render_resources_win_gl() {
-    auto *s = win_gl_;
-    if (!s || !s->thread) return;
+void win_gl_renderer::shutdown() {
+    auto *s = &state_;
+    std::thread *thread;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
+        thread = s->thread;
+        s->thread = nullptr;
         s->quit = true;
     }
+    if (!thread) return;
     s->cv.notify_all();
-    if (s->thread->joinable()) s->thread->join();
-    delete s->thread;
-    s->thread = nullptr;
-    // The state struct itself stays alive for the handle's lifetime (freed in the
-    // destructor): consumers may still be polling get_frame_state_win_gl or
-    // copy_latest_frame_win_gl concurrently with this teardown, and they check
+    if (thread->joinable()) thread->join();
+    delete thread;
+    // The state itself stays alive with this object: consumers may still be polling
+    // frame_state or copy_latest_frame concurrently with this teardown, and they check
     // has_frame/thread under the mutex.
 }
 
-bool mpv_handle_t::set_surface_config_win_gl(int width, int height) {
-    auto *s = win_gl_;
-    if (!s || !s->thread) return false;
+bool win_gl_renderer::set_surface_config(int width, int height, int64_t) {
+    auto *s = &state_;
     uint64_t request;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
+        if (!s->thread) return false;
         s->pending_width = width;
         s->pending_height = height;
         s->config_pending = true; // newest request replaces an unprocessed resize
@@ -243,26 +284,18 @@ bool mpv_handle_t::set_surface_config_win_gl(int width, int height) {
     return true;
 }
 
-uint64_t mpv_handle_t::get_frame_state_win_gl() {
-    auto *s = win_gl_;
-    return s ? s->frame_state.load(std::memory_order_acquire) : (0xFull << 44);
+uint64_t win_gl_renderer::frame_state() {
+    return state_.frame_state.load(std::memory_order_acquire);
 }
 
-bool mpv_handle_t::has_win_gl_surface() {
-    auto *s = win_gl_;
-    if (!s) return false;
+bool win_gl_renderer::has_surface() {
+    auto *s = &state_;
     std::lock_guard<std::mutex> lock(s->mutex);
     return s->width > 0;
 }
 
-void mpv_handle_t::on_render_update_win_gl(void *context) {
-    auto *instance = static_cast<mpv_handle_t *>(context);
-    if (instance) instance->signal_render_update_win_gl();
-}
-
-void mpv_handle_t::signal_render_update_win_gl() {
-    auto *s = win_gl_;
-    if (!s) return;
+void win_gl_renderer::on_mpv_update(void *context) {
+    auto *s = &static_cast<win_gl_renderer *>(context)->state_;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         s->render_pending = true;
@@ -270,13 +303,13 @@ void mpv_handle_t::signal_render_update_win_gl() {
     s->cv.notify_all();
 }
 
-void mpv_handle_t::render_thread_loop_win_gl() {
-    auto *s = win_gl_;
+void win_gl_renderer::render_thread_loop() {
+    owner_.bind_current_thread();
+    auto *s = &state_;
     // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
     // attach/detach pair.
     JNIEnv *thread_env = nullptr;
-    const bool attached = jvm_ &&
-        jvm_->AttachCurrentThread(reinterpret_cast<void **>(&thread_env), nullptr) == JNI_OK;
+    const bool attached = attach_current_thread(owner_.jvm(), &thread_env);
 
     std::string error;
     s->gl = wgl_offscreen_context::create(&error);
@@ -292,14 +325,14 @@ void mpv_handle_t::render_thread_loop_win_gl() {
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
-        const int result = mpv_render_context_create(&s->render_context, handle_, params);
+        const int result = mpv_render_context_create(&s->render_context, owner_.mpv(), params);
         if (result < 0) {
             s->render_context = nullptr;
             LOGE("mpv_render_context_create(OpenGL fallback) failed: %s", mpv_error_string(result));
             initialized = false;
         } else {
             mpv_render_context_set_update_callback(
-                s->render_context, &mpv_handle_t::on_render_update_win_gl, this);
+                s->render_context, &win_gl_renderer::on_mpv_update, this);
         }
     }
     {
@@ -314,7 +347,7 @@ void mpv_handle_t::render_thread_loop_win_gl() {
             delete s->gl;
             s->gl = nullptr;
         }
-        if (attached) jvm_->DetachCurrentThread();
+        if (attached) owner_.jvm()->DetachCurrentThread();
         return;
     }
 
@@ -331,12 +364,12 @@ void mpv_handle_t::render_thread_loop_win_gl() {
             if (!s->quit && !s->render_pending && !s->config_pending) {
                 lock.unlock();
                 int ready_width = 0, ready_height = 0;
-                const bool ready = collect_ready_frame_win_gl(&ready_width, &ready_height, true);
+                const bool ready = collect_ready_frame(&ready_width, &ready_height, true);
                 lock.lock();
                 if (ready) {
-                    publish_collected_frame_win_gl_locked(ready_width, ready_height);
+                    publish_collected_frame_locked(ready_width, ready_height);
                     lock.unlock();
-                    notify_render_update();
+                    owner_.notify_render_update();
                     lock.lock();
                 }
                 continue;
@@ -352,7 +385,7 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         // this mutex, possibly under mpv-internal locks).
         lock.unlock();
         int video_width = 0, video_height = 0;
-        query_video_display_size(handle_, &video_width, &video_height);
+        query_video_display_size(owner_.mpv(), &video_width, &video_height);
         lock.lock();
         s->video_width = video_width;
         s->video_height = video_height;
@@ -360,7 +393,7 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         bool configured = false;
         if (s->config_pending) {
             s->config_pending = false;
-            configured = apply_config_win_gl_locked();
+            configured = apply_config_locked();
             // Acknowledges every request posted so far (requests coalesce; the apply
             // above used the latest values). Deactivation waits on this.
             s->config_applied_serial = s->config_request_serial;
@@ -371,7 +404,7 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         if (s->fbo == 0) {
             if (want_render) {
                 lock.unlock();
-                drain_one_frame_win_gl();
+                drain_one_frame();
                 lock.lock();
             }
             continue;
@@ -391,7 +424,7 @@ void mpv_handle_t::render_thread_loop_win_gl() {
                 s->requested_width, s->requested_height,
                 s->video_width, s->video_height, &target_width, &target_height);
             if (target_width > 0 && (target_width != s->width || target_height != s->height)) {
-                if (!allocate_target_win_gl_locked(target_width, target_height)) continue;
+                if (!allocate_target_locked(target_width, target_height)) continue;
                 configured = true;
             }
         }
@@ -402,28 +435,28 @@ void mpv_handle_t::render_thread_loop_win_gl() {
         // the previous iteration, so its DMA has had a full frame time — the map does
         // not stall. Collecting after would map the buffer glReadPixels just wrote,
         // which is the synchronous behavior the PBOs exist to avoid.
-        bool ready = collect_ready_frame_win_gl(&ready_width, &ready_height, true);
-        const bool rendered = render_frame_win_gl(width, height);
+        bool ready = collect_ready_frame(&ready_width, &ready_height, true);
+        const bool rendered = render_frame(width, height);
         if (!ready && rendered) {
             // Zero-latency delivery for the synchronous fallback; a no-op in PBO mode
             // (the frame just queued stays pending until the next iteration).
-            ready = collect_ready_frame_win_gl(&ready_width, &ready_height, false);
+            ready = collect_ready_frame(&ready_width, &ready_height, false);
         }
         lock.lock();
         // The surface cannot have been reconfigured meanwhile: only this thread
         // applies config changes.
         if (ready) {
-            publish_collected_frame_win_gl_locked(ready_width, ready_height);
+            publish_collected_frame_locked(ready_width, ready_height);
             lock.unlock();
-            notify_render_update(); // release-store has completed before this JNI callback
+            owner_.notify_render_update(); // release-store has completed before this JNI callback
             lock.lock();
         }
     }
     // Teardown in the owner thread while the WGL context is current.
-    destroy_target_win_gl_locked();
+    destroy_target_locked();
     s->requested_width = s->requested_height = 0;
     ++s->generation;
-    publish_state_win_gl_locked();
+    publish_state_locked();
     lock.unlock();
     // Outside the lock: freeing the render context synchronizes with an in-flight
     // update callback, and that callback takes the state mutex.
@@ -435,22 +468,22 @@ void mpv_handle_t::render_thread_loop_win_gl() {
     s->gl->destroy();
     delete s->gl;
     s->gl = nullptr;
-    if (attached) jvm_->DetachCurrentThread();
+    if (attached) owner_.jvm()->DetachCurrentThread();
 }
 
-bool mpv_handle_t::apply_config_win_gl_locked() {
-    auto *s = win_gl_;
+bool win_gl_renderer::apply_config_locked() {
+    auto *s = &state_;
     s->requested_width = s->pending_width;
     s->requested_height = s->pending_height;
     if (s->requested_width <= 0 || s->requested_height <= 0) {
         s->requested_width = s->requested_height = 0;
-        destroy_target_win_gl_locked();
+        destroy_target_locked();
         // An inactive surface holds no frame; actually return the buffer memory
         // (clear() would keep the capacity).
         std::vector<uint8_t>().swap(s->scratch);
         std::vector<uint8_t>().swap(s->latest);
         ++s->generation;
-        publish_state_win_gl_locked();
+        publish_state_locked();
         return false;
     }
     int target_width = 0, target_height = 0;
@@ -458,12 +491,12 @@ bool mpv_handle_t::apply_config_win_gl_locked() {
         s->requested_width, s->requested_height,
         s->video_width, s->video_height, &target_width, &target_height);
     if (s->fbo && target_width == s->width && target_height == s->height) return false;
-    return allocate_target_win_gl_locked(target_width, target_height);
+    return allocate_target_locked(target_width, target_height);
 }
 
 // Frees the FBO, its texture, and the readback PBOs; resets the published frame.
-void mpv_handle_t::destroy_target_win_gl_locked() {
-    auto *s = win_gl_;
+void win_gl_renderer::destroy_target_locked() {
+    auto *s = &state_;
     if (s->fbo) gl::delete_framebuffers(1, &s->fbo);
     if (s->texture) glDeleteTextures(1, &s->texture);
     s->fbo = 0;
@@ -479,9 +512,9 @@ void mpv_handle_t::destroy_target_win_gl_locked() {
     s->latest_width = s->latest_height = 0;
 }
 
-bool mpv_handle_t::allocate_target_win_gl_locked(int width, int height) {
-    auto *s = win_gl_;
-    destroy_target_win_gl_locked();
+bool win_gl_renderer::allocate_target_locked(int width, int height) {
+    auto *s = &state_;
+    destroy_target_locked();
 
     drain_gl_errors();
     glGenTextures(1, &s->texture);
@@ -499,9 +532,9 @@ bool mpv_handle_t::allocate_target_win_gl_locked(int width, int height) {
     gl::bind_framebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE || glGetError() != GL_NO_ERROR) {
         LOGE("OpenGL fallback FBO incomplete (%dx%d): 0x%x", width, height, status);
-        destroy_target_win_gl_locked();
+        destroy_target_locked();
         ++s->generation;
-        publish_state_win_gl_locked();
+        publish_state_locked();
         return false;
     }
 
@@ -533,7 +566,7 @@ bool mpv_handle_t::allocate_target_win_gl_locked(int width, int height) {
     // (the previous size, letterboxed) until the render below publishes one.
     s->has_frame = false;
     ++s->generation;
-    publish_state_win_gl_locked();
+    publish_state_locked();
     LOGI("OpenGL fallback target allocated %dx%d (requested %dx%d, video %dx%d, %s) generation=%u",
          width, height, s->requested_width, s->requested_height,
          s->video_width, s->video_height,
@@ -541,8 +574,8 @@ bool mpv_handle_t::allocate_target_win_gl_locked(int width, int height) {
     return true;
 }
 
-void mpv_handle_t::publish_state_win_gl_locked() {
-    auto *s = win_gl_;
+void win_gl_renderer::publish_state_locked() {
+    auto *s = &state_;
     const uint64_t index = s->has_frame ? 0ull : 0xFull;
     s->frame_state.store(
         (static_cast<uint64_t>(s->generation & 0xFFFFu) << 48) |
@@ -553,18 +586,18 @@ void mpv_handle_t::publish_state_win_gl_locked() {
 }
 
 // scratch holds a collected frame of the given size; make it the published latest.
-void mpv_handle_t::publish_collected_frame_win_gl_locked(int width, int height) {
-    auto *s = win_gl_;
+void win_gl_renderer::publish_collected_frame_locked(int width, int height) {
+    auto *s = &state_;
     std::swap(s->scratch, s->latest);
     s->latest_width = width;
     s->latest_height = height;
     s->has_frame = true;
     ++s->serial;
-    publish_state_win_gl_locked();
+    publish_state_locked();
 }
 
-bool mpv_handle_t::render_frame_win_gl(int width, int height) {
-    auto *s = win_gl_;
+bool win_gl_renderer::render_frame(int width, int height) {
+    auto *s = &state_;
     if (!s->render_context || !s->fbo) return false;
     mpv_opengl_fbo fbo{static_cast<int>(s->fbo), width, height, 0};
     // Same orientation contract as the GLX path: flip_y=1, and the readback flips row
@@ -610,8 +643,8 @@ bool mpv_handle_t::render_frame_win_gl(int width, int height) {
     return result >= 0 && glGetError() == GL_NO_ERROR;
 }
 
-bool mpv_handle_t::collect_ready_frame_win_gl(int *out_width, int *out_height, bool include_pbos) {
-    auto *s = win_gl_;
+bool win_gl_renderer::collect_ready_frame(int *out_width, int *out_height, bool include_pbos) {
+    auto *s = &state_;
     if (s->sync_frame_ready) {
         s->sync_frame_ready = false;
         *out_width = s->sync_frame_width;
@@ -645,8 +678,8 @@ bool mpv_handle_t::collect_ready_frame_win_gl(int *out_width, int *out_height, b
     return false;
 }
 
-void mpv_handle_t::drain_one_frame_win_gl() {
-    auto *s = win_gl_;
+void win_gl_renderer::drain_one_frame() {
+    auto *s = &state_;
     if (!s->render_context) return;
     mpv_render_context_update(s->render_context);
     int skip = 1;
@@ -657,8 +690,8 @@ void mpv_handle_t::drain_one_frame_win_gl() {
     mpv_render_context_render(s->render_context, params);
 }
 
-uint64_t mpv_handle_t::copy_latest_frame_win_gl(void *dest, int width, int height) {
-    auto *s = win_gl_;
+uint64_t win_gl_renderer::copy_latest_frame(void *dest, int width, int height) {
+    auto *s = &state_;
     if (!s || !dest || width <= 0 || height <= 0) return 0;
     std::lock_guard<std::mutex> lock(s->mutex);
     if (!s->has_frame || s->latest_width != width || s->latest_height != height) return 0;
@@ -674,9 +707,9 @@ uint64_t mpv_handle_t::copy_latest_frame_win_gl(void *dest, int width, int heigh
     return s->frame_state.load(std::memory_order_relaxed);
 }
 
-bool mpv_handle_t::read_surface_pixels_win_gl(
+bool win_gl_renderer::read_surface_pixels(
     std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
-    auto *s = win_gl_;
+    auto *s = &state_;
     if (!s) return false;
     std::lock_guard<std::mutex> lock(s->mutex);
     if (!s->has_frame) return false;
@@ -700,14 +733,22 @@ bool mpv_handle_t::read_surface_pixels_win_gl(
     return true;
 }
 
-bool mpv_handle_t::save_surface_png_win_gl(const char *path) {
+bool win_gl_renderer::save_surface_png(const char *path) {
     if (!path) return false;
     std::vector<uint32_t> pixels;
     int width = 0, height = 0;
-    if (!read_surface_pixels_win_gl(pixels, width, height)) return false;
+    if (!read_surface_pixels(pixels, width, height)) return false;
     const bool ok = write_argb_png_wic(path, width, height, pixels);
     if (!ok) LOGE("save_surface_png(OpenGL fallback) failed for %s", path);
     return ok;
+}
+
+} // namespace
+
+std::shared_ptr<desktop_renderer> create_win_gl_renderer(mpv_handle_t &owner) {
+    auto renderer = std::make_shared<win_gl_renderer>(owner);
+    if (!renderer->create()) return nullptr;  // the destructor cleans up
+    return renderer;
 }
 
 } // namespace mediampv

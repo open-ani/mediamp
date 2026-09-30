@@ -18,10 +18,25 @@ import org.jetbrains.skia.Pixmap
 import org.openani.mediamp.mpv.MPVLog
 
 /**
- * Consumer side of the Windows OpenGL fallback: the native render thread publishes CPU
- * frames; this class copies the latest one into a fresh immutable Skia bitmap's native
- * pixel storage (no JNI arrays, no Java-heap staging) and wraps it zero-copy as a
- * raster [Image]. Drawing that image on the Compose canvas uploads it into Skia's
+ * A [MpvSurfaceBackend] whose producer publishes frames in system memory: the Windows
+ * OpenGL fallback and the D3D11 readback path.
+ */
+internal interface MpvReadbackBackend : MpvSurfaceBackend {
+    /**
+     * Copies the latest frame (RGBA_8888, top-down) into [destAddr] if it is exactly
+     * [width] x [height]; returns the frame state it corresponds to, or 0.
+     */
+    fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer =
+        MpvReadbackSurface(handlePtr, this)
+}
+
+/**
+ * Consumer side of the CPU readback paths ([MpvReadbackBackend]): the native render
+ * thread publishes CPU frames; this class copies the latest one into a fresh immutable
+ * Skia bitmap's native pixel storage (no JNI arrays, no Java-heap staging) and wraps it
+ * zero-copy as a raster [Image]. Drawing that image on the Compose canvas uploads it into Skia's
  * bitmap-texture cache once per unique frame; overlay-driven redraws without a new
  * frame re-draw the cached image and hit the same cached texture.
  *
@@ -38,7 +53,7 @@ import org.openani.mediamp.mpv.MPVLog
  */
 internal class MpvReadbackSurface(
     private val handlePtr: Long,
-    private val backend: WindowsOpenGLSurfaceBackend,
+    private val backend: MpvReadbackBackend,
 ) : MpvSurfaceConsumer {
     // The bitmap of the current frame stays referenced (and unclosed) while its image
     // is cached: the image shares the immutable bitmap's pixels instead of copying.
@@ -70,7 +85,8 @@ internal class MpvReadbackSurface(
         dropConsumerResources()
     }
 
-    override fun currentFrameImage(directContext: DirectContext): Image? {
+    // Raster images need no DirectContext: Skiko's software redrawers have none.
+    override fun currentFrameImage(directContext: DirectContext?): Image? {
         val state = backend.getFrameState(handlePtr)
         if (state == cachedState) {
             cachedFrame?.let { return it }

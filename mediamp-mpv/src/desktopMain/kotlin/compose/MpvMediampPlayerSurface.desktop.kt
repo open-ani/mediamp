@@ -65,7 +65,9 @@ actual fun MpvMediampPlayerSurface(
  * render API). The video becomes a regular draw call in the Compose scene graph, zero
  * extra CPU copies end to end, and this thread never renders or blocks. The Windows
  * OpenGL fallback (Compose on `SKIKO_RENDER_API=OPENGL`) publishes CPU frames instead,
- * which the consumer uploads during draw — same protocol, one extra copy by design.
+ * which the consumer uploads during draw — same protocol, one extra copy by design; so
+ * does the D3D11 readback path for Skiko's software and ANGLE redrawers, which have no
+ * device to share textures with.
  *
  * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
  * render-context lifecycle; this composable contains no host checks.
@@ -90,6 +92,9 @@ private fun MpvMediampPlayerSurfaceRing(
         SkiaLayerRedrawer(layer)
     }
     var interop: SkiaRenderDeviceInterop? by remember(player, layerRedrawer) { mutableStateOf(null) }
+    // Whether interop creation has finished (successfully or not). The first draws
+    // usually run before it, and a missing interop is only an error after that.
+    var interopSettled by remember(player, layerRedrawer) { mutableStateOf(layerRedrawer == null) }
     LaunchedEffect(player, layerRedrawer) {
         val liveLayer = layerRedrawer ?: return@LaunchedEffect
         // Composition can precede Skiko's first render. Wait for its actual choice,
@@ -98,6 +103,7 @@ private fun MpvMediampPlayerSurfaceRing(
         interop = runCatching { player.createSkiaInterop(liveLayer) }
             .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
             .getOrNull()
+        interopSettled = true
     }
     val drawResolver: MpvSurfaceDrawResolver? = remember(player, interop) {
         interop?.let { player.renderContextLifecycle?.createDrawResolver(it) }
@@ -165,7 +171,11 @@ private fun MpvMediampPlayerSurfaceRing(
 
         if (player.isSurfaceTeardownStarted()) return@Canvas
         if (drawResolver == null) {
-            logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
+            if (interopSettled) {
+                logOnce("skia interop unavailable; video stays black (frames are drained)", MPVLog.ERROR)
+            } else {
+                logOnce("skia interop not initialized yet")
+            }
             return@Canvas
         }
         val drawPass = drawResolver.resolveDrawPass(renderContextReady)
@@ -180,11 +190,9 @@ private fun MpvMediampPlayerSurfaceRing(
             logOnce("render context not ready")
             return@Canvas
         }
+        // Null before Skia's first GPU frame, and always on Skiko's software redrawers:
+        // the GPU ring consumers wait for it, the readback consumers never need it.
         val directContext = drawPass.directContext
-        if (directContext == null) {
-            logOnce("DirectContext not initialized yet")
-            return@Canvas
-        }
         val width = size.width.toInt()
         val height = size.height.toInt()
         if (width <= 0 || height <= 0) return@Canvas
@@ -195,38 +203,38 @@ private fun MpvMediampPlayerSurfaceRing(
         }
 
         logOnce("rendering ${width}x${height} via ${drawResolver.rendererName} surface", MPVLog.INFO)
-        // Draw through Compose so the op survives RenderNode display-list recording
-        // (raw skiaCanvas draws are dropped there). The image is a Skia-owned texture:
-        // snapshots of the BRT-wrapped surface itself do not render. The frame normally
-        // matches the composable size; during a resize settle it is the old size, so fit
-        // it preserving aspect (letterbox) instead of stretching.
-        // Draw the GPU-backed frame image straight onto the Compose canvas via the Skia
-        // skiaCanvas — a zero-copy GPU->GPU draw on the current DirectContext. This
+        // Draw the frame image straight onto the Compose canvas via drawIntoCanvas +
+        // skiaCanvas; for the GPU rings a zero-copy GPU->GPU draw on the current
+        // DirectContext (the image is a Skia-owned texture, since snapshots of the
+        // BRT-wrapped surface itself do not render). This
         // deliberately does NOT go through toComposeImageBitmap()/drawImage(ImageBitmap):
         // that reads the GPU image back to a CPU bitmap every frame, which stalls the
         // whole Compose scene (~20ms at 4K, dragging any overlay such as danmaku down to
         // ~40fps) and crashes on resize. The frame normally matches the composable size;
         // during a resize settle it is the old size, so fit it preserving aspect
         // (letterbox) instead of stretching.
-        player.currentFrameImage(directContext)?.let { frame ->
-            val scale = minOf(
-                size.width / frame.width.toFloat(),
-                size.height / frame.height.toFloat(),
+        val frame = player.currentFrameImage(directContext)
+        if (frame == null) {
+            if (directContext == null) logOnce("DirectContext not initialized yet")
+            return@Canvas
+        }
+        val scale = minOf(
+            size.width / frame.width.toFloat(),
+            size.height / frame.height.toFloat(),
+        )
+        val dstWidth = frame.width * scale
+        val dstHeight = frame.height * scale
+        val dx = (size.width - dstWidth) / 2f
+        val dy = (size.height - dstHeight) / 2f
+        drawIntoCanvas { canvas ->
+            canvas.skiaCanvas.drawImageRect(
+                image = frame,
+                src = Rect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
+                dst = Rect.makeXYWH(dx, dy, dstWidth, dstHeight),
+                samplingMode = SamplingMode.LINEAR,
+                paint = null,
+                strict = true,
             )
-            val dstWidth = frame.width * scale
-            val dstHeight = frame.height * scale
-            val dx = (size.width - dstWidth) / 2f
-            val dy = (size.height - dstHeight) / 2f
-            drawIntoCanvas { canvas ->
-                canvas.skiaCanvas.drawImageRect(
-                    image = frame,
-                    src = Rect.makeWH(frame.width.toFloat(), frame.height.toFloat()),
-                    dst = Rect.makeXYWH(dx, dy, dstWidth, dstHeight),
-                    samplingMode = SamplingMode.LINEAR,
-                    paint = null,
-                    strict = true,
-                )
-            }
         }
     }
 }

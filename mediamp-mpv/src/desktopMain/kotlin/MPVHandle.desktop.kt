@@ -51,7 +51,7 @@ external fun nHasMetalSurface(ptr: Long): Boolean
 
 /** Saves the latest rendered frame (IOSurface contents) as PNG. */
 @InternalMediampApi
-external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
+external fun nSaveSurfacePngMacos(ptr: Long, path: String): Boolean
 
 /**
  * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
@@ -70,6 +70,24 @@ external fun nCreateRenderContextD3D11(ptr: Long): Boolean
 
 @InternalMediampApi
 external fun nDestroyRenderContextD3D11(ptr: Long): Boolean
+
+/**
+ * Records Skiko's DirectXDevice pointer (see [nSetSurfaceConfigD3D11]) so the next
+ * [nCreateRenderContextD3D11] creates mpv's D3D11 device on the same adapter as Skia.
+ */
+@InternalMediampApi
+external fun nSetConsumerDeviceHintD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
+
+/**
+ * [nSetSurfaceConfigD3D11] for consumers without a D3D12 device: the render thread
+ * also copies every frame to system memory, taken with [nCopyLatestFrameD3D11].
+ */
+@InternalMediampApi
+external fun nSetReadbackSurfaceConfigD3D11(ptr: Long, width: Int, height: Int): Boolean
+
+/** D3D11 readback equivalent of [nCopyLatestFrameWindowsOpenGL]. */
+@InternalMediampApi
+external fun nCopyLatestFrameD3D11(ptr: Long, destAddr: Long, width: Int, height: Int): Long
 
 /**
  * Asks the render thread to (re)allocate the buffer ring at [width] x [height], opening

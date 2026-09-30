@@ -3,6 +3,7 @@
 #define UTIL_EXTERN
 #include "method_cache.h"
 #include "log.h"
+#include "jni_utils.h"
 
 namespace mediampv {
 
@@ -10,19 +11,6 @@ namespace {
 
 std::mutex jni_cache_mutex;
 bool jni_class_cached = false;
-
-bool clear_jni_exception(JNIEnv *env, const void *instance_handle, const char *context) {
-    if (!env || !env->ExceptionCheck()) {
-        return false;
-    }
-
-    // Describe + clear before logging: the log dispatcher makes JNI calls, which must not
-    // run with an exception pending.
-    env->ExceptionDescribe();
-    env->ExceptionClear();
-    LOG(instance_handle, LOG_LEVEL_ERROR, "JNI exception in %s", context);
-    return true;
-}
 
 jclass find_global_class(JNIEnv *env, const void *instance_handle, const char *name) {
     jclass local_class = env->FindClass(name);
@@ -55,13 +43,6 @@ jmethodID find_method(
         clear_jni_exception(env, instance_handle, name);
     }
     return method;
-}
-
-void delete_global_ref(JNIEnv *env, jclass &clazz) {
-    if (env && clazz) {
-        env->DeleteGlobalRef(clazz);
-        clazz = nullptr;
-    }
 }
 
 } // namespace

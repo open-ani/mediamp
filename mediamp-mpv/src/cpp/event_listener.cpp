@@ -1,60 +1,8 @@
 #include "mpv_handle_t.h"
 #include "method_cache.h"
+#include "jni_utils.h"
 
 namespace mediampv {
-
-namespace {
-
-struct attached_jni_env final {
-    explicit attached_jni_env(JavaVM *vm) : vm(vm) {
-        if (!vm) {
-            return;
-        }
-        const jint get_env_result = vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
-        if (get_env_result == JNI_OK) {
-            return;
-        }
-        if (get_env_result == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-            if (vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                attached = true;
-            }
-#else
-            if (vm->AttachCurrentThread(reinterpret_cast<void **>(&env), nullptr) == JNI_OK) {
-                attached = true;
-            }
-#endif
-        }
-    }
-
-    ~attached_jni_env() {
-        if (attached && vm) {
-            vm->DetachCurrentThread();
-        }
-    }
-
-    JNIEnv *env = nullptr;
-
-private:
-    JavaVM *vm = nullptr;
-    bool attached = false;
-};
-
-bool clear_jni_exception(JNIEnv *env, const void *instance_handle, const char *context) {
-    if (!env || !env->ExceptionCheck()) {
-        return false;
-    }
-
-    // Describe + clear first, then log: logging goes through the JNI dispatcher, which
-    // cannot run while an exception is pending. This surfaces the failure to the Kotlin
-    // sink instead of silently swallowing it.
-    env->ExceptionDescribe();
-    env->ExceptionClear();
-    LOG(instance_handle, LOG_LEVEL_ERROR, "JNI exception in %s", context);
-    return true;
-}
-
-} // namespace
 
 static void emit_property_change(
         JNIEnv *env,
@@ -129,19 +77,20 @@ static void emit_log_message(mpv_handle_t *instance, mpv_event_log_message *mess
                 message->text ? message->text : "");
 }
 
-void *(mpv_handle_t::event_loop)(void *arg) {
+void mpv_handle_t::event_loop() {
+    bind_current_thread();
     if (!jvm_ || !handle_) {
         LOG(this, LOG_LEVEL_ERROR,
             "[event_loop] jvm or mpv handle is not initialized; event loop will not start");
-        return nullptr;
+        return;
     }
 
-    attached_jni_env attached_env(jvm_);
+    scoped_jni_env attached_env(jvm_);
     JNIEnv *env = attached_env.env;
     if (!env) {
         LOG(this, LOG_LEVEL_ERROR,
             "[event_loop] failed to attach current thread; event loop will not start");
-        return nullptr;
+        return;
     }
     jni_cache_classes(env, this);
 
@@ -156,18 +105,21 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         mpv_event_property *event_property = nullptr;
         mpv_event_log_message *log_message = nullptr;
 
-        // 不处理 NONE 事件
+        // NONE is a timeout/wakeup, not an event.
         if ((event = mpv_wait_event(handle_, -1.0))->event_id == MPV_EVENT_NONE) {
             continue;
         }
+        // Snapshot per event and invoke outside listener_lock_ (see local_listener).
+        scoped_local_ref listener_ref(env, local_listener(env, event_listener_));
+        jobject listener = listener_ref.get();
 
-        if (event_listener_ &&
+        if (listener &&
             event->event_id != MPV_EVENT_PROPERTY_CHANGE &&
             event->event_id != MPV_EVENT_LOG_MESSAGE &&
             jni_mediamp_method_EventListener_onEvent
         ) {
             env->CallVoidMethod(
-                    event_listener_,
+                    listener,
                     jni_mediamp_method_EventListener_onEvent,
                     static_cast<jint>(event->event_id));
             clear_jni_exception(env, this, "EventListener.onEvent");
@@ -176,7 +128,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
         switch (event->event_id) {
             case MPV_EVENT_PROPERTY_CHANGE:
                 event_property = (mpv_event_property *) event->data;
-                emit_property_change(env, this, event_property, event_listener_);
+                emit_property_change(env, this, event_property, listener);
                 break;
             case MPV_EVENT_LOG_MESSAGE:
                 log_message = (mpv_event_log_message *) event->data;
@@ -188,9 +140,9 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 // playlist_entry_id exists since libmpv API 1.108 (mpv 0.33); data may be
                 // null on older cores — forward 0 ("unknown") then.
                 auto *start_file = (mpv_event_start_file *) event->data;
-                if (event_listener_ && jni_mediamp_method_EventListener_onStartFile) {
+                if (listener && jni_mediamp_method_EventListener_onStartFile) {
                     env->CallVoidMethod(
-                        event_listener_,
+                        listener,
                         jni_mediamp_method_EventListener_onStartFile,
                         static_cast<jlong>(start_file ? start_file->playlist_entry_id : 0));
                     clear_jni_exception(env, this, "EventListener.onStartFile");
@@ -204,9 +156,9 @@ void *(mpv_handle_t::event_loop)(void *arg) {
                 LOG(this, level, "[event_loop] end-file: reason=%d error=%s entry_id=%lld",
                     end_file->reason, mpv_error_string(end_file->error),
                     static_cast<long long>(end_file->playlist_entry_id));
-                if (event_listener_ && jni_mediamp_method_EventListener_onEndFile) {
+                if (listener && jni_mediamp_method_EventListener_onEndFile) {
                     env->CallVoidMethod(
-                        event_listener_,
+                        listener,
                         jni_mediamp_method_EventListener_onEndFile,
                         static_cast<jint>(end_file->reason),
                         static_cast<jint>(end_file->error),
@@ -217,7 +169,7 @@ void *(mpv_handle_t::event_loop)(void *arg) {
             }
             case MPV_EVENT_SHUTDOWN:
                 LOG(this, LOG_LEVEL_V, "[event_loop] shutdown");
-                return nullptr;
+                return;
             default:
                 LOG(this, LOG_LEVEL_TRACE, "[event_loop] unhandled event: %d", event->event_id);
                 break;
@@ -225,7 +177,6 @@ void *(mpv_handle_t::event_loop)(void *arg) {
 
     }
     LOG(this, LOG_LEVEL_V, "[event_loop] stopped");
-    return nullptr;
 }
 
 } // namespace mediampv
