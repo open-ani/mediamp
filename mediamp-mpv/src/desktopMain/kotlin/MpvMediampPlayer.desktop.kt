@@ -20,10 +20,13 @@ import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
 import org.openani.mediamp.mpv.internal.OpenGLSurfaceRingBackend
+import org.openani.mediamp.mpv.internal.OsdDimensions
 import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
 import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
+import org.openani.mediamp.mpv.internal.videoRectInFrame
+import org.openani.mediamp.mpv.internal.writeFramePng
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
@@ -176,9 +179,11 @@ actual class MpvMediampPlayer(
 
     /**
      * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot
-     * convert hwdec videotoolbox/d3d11va frames without zimg). When no surface is
-     * attached (headless capture), configures an ephemeral video-sized ring and waits
-     * for the render thread to produce a frame in it.
+     * convert hwdec videotoolbox/d3d11va frames without zimg) and keeps only the video
+     * rectangle: mpv letterboxes inside the render target, so the raw surface carries the
+     * black bars. When no surface is attached (headless capture), configures an ephemeral
+     * ring of the video's display size and waits for the render thread to produce a frame
+     * in it.
      */
     override suspend fun takeScreenshotImpl(path: String): Boolean {
         val backend = ringBackend ?: return super.takeScreenshotImpl(path)
@@ -186,8 +191,14 @@ actual class MpvMediampPlayer(
         val hadSurface = backend.hasSurface(ptr)
         var configured = false
         if (!hadSurface) {
-            val width = handle.getPropertyInt("width")
-            val height = handle.getPropertyInt("height")
+            // The display size has rotation and the sample aspect ratio applied, so the frame
+            // fills the ring without margins; the coded size serves until mpv derives it.
+            var width = handle.getPropertyInt("dwidth")
+            var height = handle.getPropertyInt("dheight")
+            if (width <= 0 || height <= 0) {
+                width = handle.getPropertyInt("width")
+                height = handle.getPropertyInt("height")
+            }
             if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
             configured = backend.setSurfaceConfig(ptr, width, height, 0L)
             if (!configured) return super.takeScreenshotImpl(path)
@@ -202,10 +213,36 @@ actual class MpvMediampPlayer(
                 return super.takeScreenshotImpl(path)
             }
         }
-        val saved = backend.saveSurfacePng(ptr, path)
+        val saved = saveVideoFramePng(backend, ptr, path)
         if (configured) backend.setSurfaceConfig(ptr, 0, 0, 0L)
         if (saved) return true
         return super.takeScreenshotImpl(path)
+    }
+
+    /**
+     * Writes the latest ring frame to [path] without the letterbox margins mpv reports in
+     * `osd-dimensions`. The native full-surface writer is the fallback when the pixel
+     * readback is unavailable.
+     */
+    private fun saveVideoFramePng(backend: MpvSurfaceBackend, ptr: Long, path: String): Boolean {
+        val dims = IntArray(2)
+        val pixels = backend.readSurfacePixels(ptr, dims)
+        if (pixels == null || dims[0] <= 0 || dims[1] <= 0) return backend.saveSurfacePng(ptr, path)
+        val rect = readOsdDimensions()?.let { videoRectInFrame(dims[0], dims[1], it) }
+        return writeFramePng(pixels, dims[0], dims[1], rect, path)
+    }
+
+    /** `osd-dimensions` as a whole, or null when mpv has not laid out a video yet. */
+    private fun readOsdDimensions(): OsdDimensions? {
+        fun prop(name: String): Int? = handle.getPropertyLongOrNull("osd-dimensions/$name")?.toInt()
+        return OsdDimensions(
+            width = prop("w") ?: return null,
+            height = prop("h") ?: return null,
+            marginLeft = prop("ml") ?: return null,
+            marginTop = prop("mt") ?: return null,
+            marginRight = prop("mr") ?: return null,
+            marginBottom = prop("mb") ?: return null,
+        )
     }
 
     companion object {
