@@ -15,7 +15,7 @@ import org.openani.mediamp.mpv.nDestroyRenderContextD3D11
 import org.openani.mediamp.mpv.nGetFrameStateD3D11
 import org.openani.mediamp.mpv.nHasD3D11Surface
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
-import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
+import org.openani.mediamp.mpv.nRenderFramePixelsD3D11
 import org.openani.mediamp.mpv.nSetReadbackSurfaceConfigD3D11
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaReadbackInterop
@@ -43,7 +43,7 @@ internal object D3D11ReadbackSurfaceBackend : MpvReadbackBackend {
 
     override fun getFrameState(ptr: Long) = nGetFrameStateD3D11(ptr)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsD3D11(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
 
     override fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =

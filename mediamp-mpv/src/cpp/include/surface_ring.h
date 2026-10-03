@@ -6,6 +6,7 @@
 #ifdef MEDIAMPV_DESKTOP
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -81,6 +82,29 @@ public:
         return true;
     }
 
+    bool render_frame_pixels(int width, int height, std::vector<uint32_t> &pixels) final {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!thread_.joinable() || width <= 0 || height <= 0 || frame_request_pending_) return false;
+        frame_request_pending_ = true;
+        frame_request_finished_ = false;
+        frame_request_width_ = width;
+        frame_request_height_ = height;
+        ++frame_request_serial_;
+        cv_.notify_all();
+        // Bounded: a wedged GPU must not hang the calling (JNI) thread. A result that
+        // arrives after this gave up is dropped by the render thread (serial mismatch).
+        const bool served = cv_.wait_for(
+            lock, std::chrono::seconds(5), [this] { return frame_request_finished_ || quit_; });
+        if (!served || !frame_request_finished_) {
+            frame_request_pending_ = false;
+            return false;
+        }
+        frame_request_finished_ = false;
+        if (!frame_request_ok_) return false;
+        pixels = std::move(frame_request_pixels_);
+        return true;
+    }
+
 protected:
     surface_ring(mpv_handle_t &owner, const char *name) : owner_(owner), name_(name) {}
 
@@ -106,6 +130,10 @@ protected:
     // Renders the current mpv frame into buffer and waits until it is complete on the
     // GPU (consumers sample it right after publication). Unlocked, render thread.
     virtual bool render_into(const Buffer &buffer) = 0;
+    // Renders the current mpv frame into a temporary width x height target of the path's
+    // own kind and reads it back as ARGB_8888 (top-down, alpha opaque); the ring is not
+    // touched. Unlocked, render thread.
+    virtual bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) = 0;
 
     // CPU readback (only D3D11 supports it): set up after a ring allocation, copy a
     // rendered buffer into system memory (unlocked), publish that copy (locked), release.
@@ -221,9 +249,11 @@ private:
     void run_loop() {
         std::unique_lock<std::mutex> lock(mutex_);
         while (!quit_) {
+            // A reconfig that still waits for the previous ring's ack is not work: counting
+            // it would spin here with mutex_ held, and the ack itself needs mutex_.
             cv_.wait(lock, [this] {
-                return quit_ || render_pending_ || config_pending_ || retire_ack_pending_ ||
-                    has_requests_locked();
+                return quit_ || render_pending_ || (config_pending_ && !has_retired_buffers_) ||
+                    retire_ack_pending_ || frame_request_pending_ || has_requests_locked();
             });
             if (quit_) break;
 
@@ -242,6 +272,24 @@ private:
             if (config_pending_ && !has_retired_buffers_) {
                 config_pending_ = false;
                 configured = apply_config_locked();
+            }
+
+            if (frame_request_pending_) {
+                frame_request_pending_ = false;
+                const int width = frame_request_width_, height = frame_request_height_;
+                const uint64_t serial = frame_request_serial_;
+                lock.unlock();
+                std::vector<uint32_t> pixels;
+                const bool ok = render_context_ && render_frame_pixels_on_render_thread(width, height, pixels);
+                lock.lock();
+                // A caller that gave up waiting has moved on, possibly to a newer request.
+                if (frame_request_serial_ == serial) {
+                    frame_request_pixels_ = std::move(pixels);
+                    frame_request_ok_ = ok;
+                    frame_request_finished_ = true;
+                    cv_.notify_all();
+                }
+                continue;
             }
 
             if (serve_requests_locked(lock)) continue;
@@ -411,6 +459,13 @@ private:
     bool render_pending_ = false;
     bool retire_ack_pending_ = false;
     bool config_pending_ = false;
+    // One-off frame request (render_frame_pixels): posted by any thread, served here.
+    bool frame_request_pending_ = false;
+    bool frame_request_finished_ = false;
+    bool frame_request_ok_ = false;
+    int frame_request_width_ = 0, frame_request_height_ = 0;
+    uint64_t frame_request_serial_ = 0;
+    std::vector<uint32_t> frame_request_pixels_;
     int pending_width_ = 0, pending_height_ = 0;
     int64_t pending_device_ = 0;
     bool pending_cpu_readback_ = false;
