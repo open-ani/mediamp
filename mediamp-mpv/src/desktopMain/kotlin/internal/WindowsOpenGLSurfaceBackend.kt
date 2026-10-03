@@ -15,7 +15,7 @@ import org.openani.mediamp.mpv.nDestroyRenderContextWindowsOpenGL
 import org.openani.mediamp.mpv.nGetFrameStateWindowsOpenGL
 import org.openani.mediamp.mpv.nHasWindowsOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsWindowsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePngWindowsOpenGL
+import org.openani.mediamp.mpv.nRenderFramePixelsWindowsOpenGL
 import org.openani.mediamp.mpv.nSetSurfaceConfigWindowsOpenGL
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
@@ -46,7 +46,7 @@ internal object WindowsOpenGLSurfaceBackend : MpvReadbackBackend {
 
     override fun getFrameState(ptr: Long) = nGetFrameStateWindowsOpenGL(ptr)
     override fun hasSurface(ptr: Long) = nHasWindowsOpenGLSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngWindowsOpenGL(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsWindowsOpenGL(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsWindowsOpenGL(ptr, dims)
 
     override fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =

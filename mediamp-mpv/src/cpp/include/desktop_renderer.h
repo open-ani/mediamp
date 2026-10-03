@@ -36,9 +36,14 @@ public:
     virtual bool set_surface_config(int width, int height, int64_t consumer_device) = 0;
     virtual uint64_t frame_state() = 0;
     virtual bool has_surface() = 0;
-    virtual bool save_surface_png(const char *path) = 0;
     // The latest frame as ARGB_8888 ints (0xAARRGGBB, row-major, top-down), alpha opaque.
     virtual bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) = 0;
+    // The current frame rendered once more into a temporary width x height target, as
+    // ARGB_8888 ints like read_surface_pixels: the video at the size the caller asks for
+    // (its display size for screenshots) rather than the consumer's. Needs no ring, only
+    // a frame mpv can redraw, so it also serves headless capture. Blocks the caller until
+    // the render thread served the request (bounded).
+    virtual bool render_frame_pixels(int width, int height, std::vector<uint32_t> &pixels) = 0;
 
     // GPU rings: the consumer-visible texture of ring buffer `index` for the current
     // generation, and the acknowledgement that the previous generation is unused.

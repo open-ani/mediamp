@@ -232,7 +232,7 @@ Skia 集成解耦。
   `uint64_t fence_value_` + `HANDLE fence_event_`、消费端 D3D12 侧 `ID3D12Device* skia_device_`。
   方法签名镜像 macOS:`create_render_context()`(无参)、`set_surface_config(int,int,int64_t)`、
   `get_frame_state()`、`get_buffer_texture(int)`、`ack_retired_buffers()`、`has_d3d11_surface()`、
-  `save_surface_png(const char*)`、私有 `render_thread_loop/apply_config_locked/allocate_buffer/
+  `render_frame_pixels(int,int,std::vector&)`、私有 `render_thread_loop/apply_config_locked/allocate_buffer/
   destroy_buffer_ring/publish_state_locked/render_into/drain_one_frame`。
 
 **Step 1.2** 新文件 `src/cpp/render_d3d11.cpp`(整体 `#ifdef _WIN32` 保护,对应
@@ -263,10 +263,12 @@ Skia 集成解耦。
 - `render_into(buffer)`:`mpv_render_context_render(MPV_RENDER_PARAM_D3D11_FBO=
   {buffer.d3d11_tex, w, h})` → (alpha 修正,§6.3)→ `d3d_ctx4_->Signal(fence_, ++fence_value_)`
   → `fence_->SetEventOnCompletion` + `WaitForSingleObject`(= `glFinish` 等价,在渲染线程)。
-- `save_surface_png(path)`:锁内取 `buffers_[latest_index_].d3d11_tex` →
-  `CreateTexture2D(USAGE_STAGING, CPU_ACCESS_READ)` + `CopyResource` + `Map` →
-  WIC(`IWICImagingFactory` → PNG encoder)写文件。对应 macOS 的 IOSurface+ImageIO 读回,
-  同样绕开 mpv screenshot 命令(桌面构建无 zimg,hwdec 帧转换不可靠)。
+- `render_frame_pixels(w, h)`(截图):渲染线程把当前帧再渲染一次到一张临时的
+  w×h `R8G8B8A8` 纹理(ring 与消费端不受影响),`CreateTexture2D(USAGE_STAGING,
+  CPU_ACCESS_READ)` + `CopyResource` + `Map` 读回为 ARGB 像素,Kotlin 侧编码 PNG。
+  按视频显示尺寸请求就得到原始分辨率、无黑边的画面,无 surface 时同样可用。对应
+  macOS/GLX 的临时 FBO + `glReadPixels` 读回,同样绕开 mpv screenshot 命令(桌面构建
+  无 zimg,hwdec 帧转换不可靠)。
 - `cleanup_render_resources()`:stop 线程 → 销毁两套 ring(`CloseHandle` shared handle、
   Release 两侧 COM)→ `mpv_render_context_free` → Release device/fence。
 
@@ -283,7 +285,7 @@ Skia 集成解耦。
   `nCreateRenderContextD3D11(ptr)`、`nDestroyRenderContextD3D11(ptr)`、
   `nSetSurfaceConfigD3D11(ptr, w, h, skikoDevicePtr)`、`nGetFrameStateD3D11(ptr): jlong`、
   `nGetBufferTextureD3D11(ptr, index): jlong`(返回 `ID3D12Resource*`)、
-  `nAckRetiredBuffersD3D11(ptr)`、`nHasD3D11Surface(ptr)`、`nSaveSurfacePngD3D11(ptr, path)`。
+  `nAckRetiredBuffersD3D11(ptr)`、`nHasD3D11Surface(ptr)`、`nRenderFramePixelsD3D11(ptr, w, h): jintArray`。
 
 **Step 1.5** buildSrc:`MpvTaskTypes.kt:347` 的源文件收集已含 `.cpp`,新文件自动纳入
 (自身 `#ifdef _WIN32` 保护,其余平台编译为空)。链接参数追加 WIC/COM:
@@ -314,9 +316,9 @@ Skia 集成解耦。
   device 指针语义(MTLDevice* vs Skiko DirectXDevice*)。抽一个私有
   `NativeBufferRing` 策略接口(macos/d3d11 两个实现),消费端状态机写一份 —— 避免
   300 行 near-duplicate。macOS 行为不变是硬性要求(冒烟测试保底)。
-- `takeScreenshotImpl` override:Windows 分支走 `nSaveSurfacePngD3D11`,无 surface 时
-  与 macOS 相同的"临时 ring(device=0)→ 等首帧 → 存图 → 拆除"流程(headless 时
-  D3D11 侧纹理即可读回,无需 D3D12)。
+- `takeScreenshotImpl` override:各平台统一走 `renderFramePixels(dwidth, dheight)`,
+  在渲染线程按视频显示尺寸渲染到临时纹理并读回,Kotlin 编码 PNG;有无 surface 都一样,
+  不需要临时 ring。
 - 删除 GL 遗留:`currentSize`(jvm 71 行)、`backendTexture`/`image`/
   `releaseSkiaTextureAndImage`(desktop 45–57 行)。
 
@@ -351,7 +353,7 @@ Platform.Windows -> {
   `createD3D11RenderContext()` + `nSetSurfaceConfigD3D11(ptr, 640, 360, 0)`
   (device=0 → 纯 D3D11 headless ring;WARP 兜底保证无 GPU runner 可跑)。
 - 像素验证(红/蓝双段视频、中心 20×20 取样)零改动复用 —— 截图走
-  `nSaveSurfacePngD3D11` 的 staging 读回。
+  `nRenderFramePixelsD3D11` 按显示尺寸渲染到临时纹理后的 staging 读回。
 - Windows 本地开发注意:**没有 brew mpv 等价物** —— 官方/shinchiro prebuilt libmpv
   不含未合并的 D3D11 API,dev 流程必须用我们 patched 源码构建的 libmpv
   (`mpvBuildWindowsX64` 产物或 CI runtime jar);如需 `compileJniDevWindows` 快捷任务,
