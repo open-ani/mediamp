@@ -249,9 +249,11 @@ private:
     void run_loop() {
         std::unique_lock<std::mutex> lock(mutex_);
         while (!quit_) {
+            // A reconfig that still waits for the previous ring's ack is not work: counting
+            // it would spin here with mutex_ held, and the ack itself needs mutex_.
             cv_.wait(lock, [this] {
-                return quit_ || render_pending_ || config_pending_ || retire_ack_pending_ ||
-                    frame_request_pending_ || has_requests_locked();
+                return quit_ || render_pending_ || (config_pending_ && !has_retired_buffers_) ||
+                    retire_ack_pending_ || frame_request_pending_ || has_requests_locked();
             });
             if (quit_) break;
 
