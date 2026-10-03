@@ -104,14 +104,6 @@ jlong copy_latest_frame(jlong ptr, jlong dest_addr, jint width, jint height) {
         reinterpret_cast<void *>(static_cast<uintptr_t>(dest_addr)), width, height));
 }
 
-jboolean save_surface_png(JNIEnv *env, jlong ptr, jstring path) {
-    auto renderer = get_renderer(ptr);
-    if (!renderer) return JNI_FALSE;
-    // GetStringUTFChars can return null (OOM); valid() guards it and pairs the release.
-    scoped_utf_chars path_chars(env, path);
-    return path_chars.valid() && renderer->save_surface_png(path_chars.get()) ? JNI_TRUE : JNI_FALSE;
-}
-
 // Shared body of nReadSurfacePixels*: the latest frame as an ARGB jintArray, writing
 // [width, height] into dims, or null when no frame is available.
 jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims) {
@@ -133,6 +125,23 @@ jintArray read_surface_pixels_to_java(JNIEnv *env, jlong ptr, jintArray dims) {
         reinterpret_cast<const jint *>(pixels.data()));
     const jint dims_out[2] = {width, height};
     env->SetIntArrayRegion(dims, 0, 2, dims_out);
+    return result;
+}
+
+// Shared body of nRenderFramePixels*: the current frame rendered at width x height as an
+// ARGB jintArray, or null when the renderer could not produce it.
+jintArray render_frame_pixels_to_java(JNIEnv *env, jlong ptr, jint width, jint height) {
+    auto renderer = get_renderer(ptr);
+    if (!renderer || width <= 0 || height <= 0) return nullptr;
+    std::vector<uint32_t> pixels;
+    if (!renderer->render_frame_pixels(width, height, pixels) || pixels.empty()) return nullptr;
+    jintArray result = env->NewIntArray(static_cast<jsize>(pixels.size()));
+    if (!result) {
+        return nullptr; // OOM; exception pending
+    }
+    env->SetIntArrayRegion(
+        result, 0, static_cast<jsize>(pixels.size()),
+        reinterpret_cast<const jint *>(pixels.data()));
     return result;
 }
 #endif
@@ -189,7 +198,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 
 	// Windows OpenGL fallback render path (render_opengl_win.cpp), used when Compose
@@ -199,7 +208,7 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasWindowsOpenGLSurface)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height);
 #endif
@@ -212,7 +221,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngMacos)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 #endif
 
@@ -225,7 +234,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *env, jclass clazz, jlong ptr);
-	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jstring path);
+	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
 	JNIEXPORT jint JNICALL FN_DESKTOP(nCreateOpenGLConsumerFbo)(JNIEnv *env, jclass clazz, jlong texture_name);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDeleteOpenGLConsumerFbo)(JNIEnv *env, jclass clazz, jint fbo);
@@ -595,9 +604,9 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass claz
     return renderer && renderer->has_surface() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jstring path) try {
-    return save_surface_png(env, ptr, path);
-} JNI_CATCH(JNI_FALSE)
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height) try {
+    return render_frame_pixels_to_java(env, ptr, width, height);
+} JNI_CATCH(nullptr)
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims) try {
     return read_surface_pixels_to_java(env, ptr, dims);
@@ -627,9 +636,9 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasWindowsOpenGLSurface)(JNIEnv *env, jcl
     return renderer && renderer->has_surface() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jstring path) try {
-    return save_surface_png(env, ptr, path);
-} JNI_CATCH(JNI_FALSE)
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height) try {
+    return render_frame_pixels_to_java(env, ptr, width, height);
+} JNI_CATCH(nullptr)
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsWindowsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims) try {
     return read_surface_pixels_to_java(env, ptr, dims);
@@ -677,9 +686,9 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass claz
     return renderer && renderer->has_surface() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngMacos)(JNIEnv *env, jclass clazz, jlong ptr, jstring path) try {
-    return save_surface_png(env, ptr, path);
-} JNI_CATCH(JNI_FALSE)
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height) try {
+    return render_frame_pixels_to_java(env, ptr, width, height);
+} JNI_CATCH(nullptr)
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims) try {
     return read_surface_pixels_to_java(env, ptr, dims);
@@ -781,9 +790,9 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *env, jclass, jl
     return renderer && renderer->has_surface() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
-JNIEXPORT jboolean JNICALL FN_DESKTOP(nSaveSurfacePngOpenGL)(JNIEnv *env, jclass, jlong ptr, jstring path) try {
-    return save_surface_png(env, ptr, path);
-} JNI_CATCH(JNI_FALSE)
+JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height) try {
+    return render_frame_pixels_to_java(env, ptr, width, height);
+} JNI_CATCH(nullptr)
 
 JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsOpenGL)(JNIEnv *env, jclass, jlong ptr, jintArray dims) try {
     return read_surface_pixels_to_java(env, ptr, dims);

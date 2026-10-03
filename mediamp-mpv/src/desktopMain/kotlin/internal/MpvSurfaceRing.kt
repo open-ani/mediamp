@@ -45,9 +45,9 @@ import org.openani.mediamp.mpv.nHasOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePngMacos
-import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
-import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
+import org.openani.mediamp.mpv.nRenderFramePixelsMacos
+import org.openani.mediamp.mpv.nRenderFramePixelsD3D11
+import org.openani.mediamp.mpv.nRenderFramePixelsOpenGL
 import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
@@ -156,7 +156,6 @@ internal interface MpvSurfaceBackend {
     fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long): Boolean
     fun getFrameState(ptr: Long): Long
     fun hasSurface(ptr: Long): Boolean
-    fun saveSurfacePng(ptr: Long, path: String): Boolean
 
     /**
      * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
@@ -164,6 +163,15 @@ internal interface MpvSurfaceBackend {
      * is available.
      */
     fun readSurfacePixels(ptr: Long, dims: IntArray): IntArray?
+
+    /**
+     * Renders the current frame once more into a temporary [width] x [height] target and
+     * returns it as ARGB_8888 pixels (`0xAARRGGBB`, row-major, top-down, alpha opaque):
+     * the video at the requested size instead of the consumer's. Needs no surface, only a
+     * frame mpv can redraw. Blocks until the render thread served the request (bounded);
+     * returns `null` when it could not.
+     */
+    fun renderFramePixels(ptr: Long, width: Int, height: Int): IntArray?
 
     /** Creates the consumer state machine matching this backend's publication model. */
     fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer
@@ -200,7 +208,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureMacos(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngMacos(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsMacos(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
@@ -230,7 +238,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureD3D11(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersD3D11(ptr)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsD3D11(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) = MpvConsumerRenderTarget(
@@ -275,7 +283,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureOpenGL(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersOpenGL(ptr)
     override fun hasSurface(ptr: Long) = nHasOpenGLSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngOpenGL(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsOpenGL(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsOpenGL(ptr, dims)
 
     fun attachRenderEnvironment(ptr: Long, environment: OpenGLRenderEnvironment): Boolean =

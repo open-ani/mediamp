@@ -10,8 +10,7 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
 import org.openani.mediamp.InternalMediampApi
@@ -20,12 +19,10 @@ import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
 import org.openani.mediamp.mpv.internal.MpvSurfaceConsumer
 import org.openani.mediamp.mpv.internal.OpenGLSurfaceRingBackend
-import org.openani.mediamp.mpv.internal.OsdDimensions
 import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
 import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
-import org.openani.mediamp.mpv.internal.videoRectInFrame
 import org.openani.mediamp.mpv.internal.writeFramePng
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
@@ -178,71 +175,23 @@ actual class MpvMediampPlayer(
     }
 
     /**
-     * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot
-     * convert hwdec videotoolbox/d3d11va frames without zimg) and keeps only the video
-     * rectangle: mpv letterboxes inside the render target, so the raw surface carries the
-     * black bars. When no surface is attached (headless capture), configures an ephemeral
-     * ring of the video's display size and waits for the render thread to produce a frame
-     * in it.
+     * Renders the current frame once more at the video's display size (`dwidth` x
+     * `dheight`: rotation and sample aspect ratio applied) on the render thread and writes
+     * it as PNG. The ring, sized to the consumer, is not involved: the image is the video
+     * at its own resolution and has no letterbox margins, and headless capture needs no
+     * ring either. mpv's own screenshot command is the fallback; it cannot convert hwdec
+     * frames without zimg.
      */
     override suspend fun takeScreenshotImpl(path: String): Boolean {
-        val backend = ringBackend ?: return super.takeScreenshotImpl(path)
-        val ptr = handle.ptr
-        val hadSurface = backend.hasSurface(ptr)
-        var configured = false
-        if (!hadSurface) {
-            // The display size has rotation and the sample aspect ratio applied, so the frame
-            // fills the ring without margins; the coded size serves until mpv derives it.
-            var width = handle.getPropertyInt("dwidth")
-            var height = handle.getPropertyInt("dheight")
-            if (width <= 0 || height <= 0) {
-                width = handle.getPropertyInt("width")
-                height = handle.getPropertyInt("height")
-            }
-            if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
-            configured = backend.setSurfaceConfig(ptr, width, height, 0L)
-            if (!configured) return super.takeScreenshotImpl(path)
-            val rendered = withTimeoutOrNull(2_000) {
-                while (((backend.getFrameState(ptr) ushr 44) and 0xF).toInt() == 0xF) {
-                    delay(10)
-                }
-                true
-            } ?: false
-            if (!rendered) {
-                backend.setSurfaceConfig(ptr, 0, 0, 0L)
-                return super.takeScreenshotImpl(path)
-            }
+        val backend = ringBackend?.takeUnless { surfaceTeardownStarted } ?: return super.takeScreenshotImpl(path)
+        val width = handle.getPropertyInt("dwidth")
+        val height = handle.getPropertyInt("dheight")
+        if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
+        val saved = withContext(Dispatchers.IO) {
+            val pixels = backend.renderFramePixels(handle.ptr, width, height) ?: return@withContext false
+            writeFramePng(pixels, width, height, path)
         }
-        val saved = saveVideoFramePng(backend, ptr, path)
-        if (configured) backend.setSurfaceConfig(ptr, 0, 0, 0L)
-        if (saved) return true
-        return super.takeScreenshotImpl(path)
-    }
-
-    /**
-     * Writes the latest ring frame to [path] without the letterbox margins mpv reports in
-     * `osd-dimensions`. The native full-surface writer is the fallback when the pixel
-     * readback is unavailable.
-     */
-    private fun saveVideoFramePng(backend: MpvSurfaceBackend, ptr: Long, path: String): Boolean {
-        val dims = IntArray(2)
-        val pixels = backend.readSurfacePixels(ptr, dims)
-        if (pixels == null || dims[0] <= 0 || dims[1] <= 0) return backend.saveSurfacePng(ptr, path)
-        val rect = readOsdDimensions()?.let { videoRectInFrame(dims[0], dims[1], it) }
-        return writeFramePng(pixels, dims[0], dims[1], rect, path)
-    }
-
-    /** `osd-dimensions` as a whole, or null when mpv has not laid out a video yet. */
-    private fun readOsdDimensions(): OsdDimensions? {
-        fun prop(name: String): Int? = handle.getPropertyLongOrNull("osd-dimensions/$name")?.toInt()
-        return OsdDimensions(
-            width = prop("w") ?: return null,
-            height = prop("h") ?: return null,
-            marginLeft = prop("ml") ?: return null,
-            marginTop = prop("mt") ?: return null,
-            marginRight = prop("mr") ?: return null,
-            marginBottom = prop("mb") ?: return null,
-        )
+        return saved || super.takeScreenshotImpl(path)
     }
 
     companion object {

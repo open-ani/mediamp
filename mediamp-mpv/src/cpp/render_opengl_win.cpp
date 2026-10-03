@@ -53,7 +53,6 @@
 #include "log.h"
 #include "mpv_handle_t.h"
 #include "jni_utils.h"
-#include "png_writer_win.h"
 #include "wgl_offscreen_context.h"
 
 namespace {
@@ -161,6 +160,12 @@ struct win_gl_state final {
     bool render_pending = false;
     bool quit = false;
     bool initialized = false, initialize_ok = false;
+    // One-off frame request (render_frame_pixels): posted by any thread, served by the
+    // render thread with its WGL context current.
+    bool shot_pending = false, shot_finished = false, shot_ok = false;
+    int shot_width = 0, shot_height = 0;
+    uint64_t shot_serial = 0;
+    std::vector<uint32_t> shot_pixels;
     std::mutex mutex;
     std::condition_variable cv;
     std::thread *thread = nullptr;
@@ -184,8 +189,8 @@ public:
     bool set_surface_config(int width, int height, int64_t consumer_device) override;
     uint64_t frame_state() override;
     bool has_surface() override;
-    bool save_surface_png(const char *path) override;
     bool read_surface_pixels(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) override;
+    bool render_frame_pixels(int width, int height, std::vector<uint32_t> &pixels) override;
     // Copies the latest frame as tightly packed RGBA8 rows (top-down) into dest,
     // provided the frame is exactly width x height (dest must hold width*height*4
     // bytes). Called from the consumer (UI) thread; the copy is serialized against the
@@ -210,6 +215,7 @@ private:
     // render, where mapping the just-queued PBO would defeat the asynchrony).
     bool collect_ready_frame(int *out_width, int *out_height, bool include_pbos);
     void drain_one_frame();
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels);
 
     mpv_handle_t &owner_;
     win_gl_state state_;
@@ -359,9 +365,9 @@ void win_gl_renderer::render_thread_loop() {
             // after a short grace so the last rendered frame never gets stuck in the
             // PBO. Mapping then cannot stall anything: the thread is idle.
             s->cv.wait_for(lock, std::chrono::milliseconds(50), [s] {
-                return s->quit || s->render_pending || s->config_pending;
+                return s->quit || s->render_pending || s->config_pending || s->shot_pending;
             });
-            if (!s->quit && !s->render_pending && !s->config_pending) {
+            if (!s->quit && !s->render_pending && !s->config_pending && !s->shot_pending) {
                 lock.unlock();
                 int ready_width = 0, ready_height = 0;
                 const bool ready = collect_ready_frame(&ready_width, &ready_height, true);
@@ -375,9 +381,27 @@ void win_gl_renderer::render_thread_loop() {
                 continue;
             }
         } else {
-            s->cv.wait(lock, [s] { return s->quit || s->render_pending || s->config_pending; });
+            s->cv.wait(lock, [s] { return s->quit || s->render_pending || s->config_pending || s->shot_pending; });
         }
         if (s->quit) break;
+
+        if (s->shot_pending) {
+            s->shot_pending = false;
+            const int width = s->shot_width, height = s->shot_height;
+            const uint64_t serial = s->shot_serial;
+            lock.unlock();
+            std::vector<uint32_t> pixels;
+            const bool ok = render_frame_pixels_on_render_thread(width, height, pixels);
+            lock.lock();
+            // A caller that gave up waiting has moved on, possibly to a newer request.
+            if (s->shot_serial == serial) {
+                s->shot_pixels = std::move(pixels);
+                s->shot_ok = ok;
+                s->shot_finished = true;
+                s->cv.notify_all();
+            }
+            continue;
+        }
 
         // Refresh the cached video display size before acting on the wake-up: both
         // the config target and the per-frame drift check depend on it, and mpv must
@@ -733,13 +757,80 @@ bool win_gl_renderer::read_surface_pixels(
     return true;
 }
 
-bool win_gl_renderer::save_surface_png(const char *path) {
-    if (!path) return false;
-    std::vector<uint32_t> pixels;
-    int width = 0, height = 0;
-    if (!read_surface_pixels(pixels, width, height)) return false;
-    const bool ok = write_argb_png_wic(path, width, height, pixels);
-    if (!ok) LOGE("save_surface_png(OpenGL fallback) failed for %s", path);
+bool win_gl_renderer::render_frame_pixels(int width, int height, std::vector<uint32_t> &pixels) {
+    auto *s = &state_;
+    std::unique_lock<std::mutex> lock(s->mutex);
+    if (!s->initialize_ok || s->quit || width <= 0 || height <= 0 || s->shot_pending) return false;
+    s->shot_pending = true;
+    s->shot_finished = false;
+    s->shot_width = width;
+    s->shot_height = height;
+    ++s->shot_serial;
+    s->cv.notify_all();
+    // Bounded like the ring paths: a wedged GPU must not hang the calling thread.
+    const bool served = s->cv.wait_for(
+        lock, std::chrono::seconds(5), [s] { return s->shot_finished || s->quit; });
+    if (!served || !s->shot_finished) {
+        s->shot_pending = false;
+        return false;
+    }
+    s->shot_finished = false;
+    if (!s->shot_ok) return false;
+    pixels = std::move(s->shot_pixels);
+    return true;
+}
+
+// A private FBO of the requested size: mpv redraws the current frame into it (the
+// streaming target and its PBOs are untouched). No FLIP_Y here: mpv then writes row 0 =
+// top, and glReadPixels returns rows from row 0, so the readback is top-down as is.
+bool win_gl_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) {
+    auto *s = &state_;
+    if (!s->render_context) return false;
+    drain_gl_errors();
+    GLuint texture = 0, fbo = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    gl::gen_framebuffers(1, &fbo);
+    gl::bind_framebuffer(GL_FRAMEBUFFER, fbo);
+    gl::framebuffer_texture_2d(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    const GLenum status = gl::check_framebuffer_status(GL_FRAMEBUFFER);
+    gl::bind_framebuffer(GL_FRAMEBUFFER, 0);
+    bool ok = status == GL_FRAMEBUFFER_COMPLETE && glGetError() == GL_NO_ERROR;
+    if (!ok) LOGE("frame request FBO incomplete (%dx%d): 0x%x", width, height, status);
+    if (ok) {
+        mpv_opengl_fbo target{static_cast<int>(fbo), width, height, 0};
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_OPENGL_FBO, &target},
+            {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+        ok = mpv_render_context_render(s->render_context, params) >= 0;
+        // Failures below must be ours, not a stale error mpv's renderer left queued.
+        drain_gl_errors();
+    }
+    if (ok) {
+        const size_t pixel_count = static_cast<size_t>(width) * height;
+        std::vector<uint8_t> rgba(pixel_count * 4);
+        gl::bind_framebuffer(GL_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        gl::bind_framebuffer(GL_FRAMEBUFFER, 0);
+        ok = glGetError() == GL_NO_ERROR;
+        if (ok) {
+            pixels.resize(pixel_count);
+            for (size_t i = 0; i < pixel_count; ++i) {
+                pixels[i] = 0xFF000000u |
+                    (static_cast<uint32_t>(rgba[i * 4]) << 16) |
+                    (static_cast<uint32_t>(rgba[i * 4 + 1]) << 8) |
+                    static_cast<uint32_t>(rgba[i * 4 + 2]);
+            }
+        }
+    }
+    gl::delete_framebuffers(1, &fbo);
+    glDeleteTextures(1, &texture);
     return ok;
 }
 

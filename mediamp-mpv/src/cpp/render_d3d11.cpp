@@ -49,7 +49,6 @@
 
 #include "surface_ring.h"
 #include "log.h"
-#include "png_writer_win.h"
 
 namespace {
 
@@ -263,7 +262,6 @@ public:
         return request_config(width, height, 0, true);
     }
     uint64_t copy_latest_frame(void *dest, int width, int height) override;
-    bool save_surface_png(const char *path) override;
     bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
 
 protected:
@@ -275,6 +273,7 @@ protected:
         return static_cast<int64_t>(reinterpret_cast<uintptr_t>(buffer.d3d12_resource));
     }
     bool render_into(const d3d11_buffer &buffer) override;
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) override;
     bool setup_readback_locked() override;
     bool read_back(const d3d11_buffer &buffer) override;
     void publish_readback_locked() override { readback_scratch_.swap(readback_latest_); }
@@ -283,7 +282,7 @@ protected:
 
 private:
     bool wait_for_gpu();
-    bool read_frame_argb_locked(std::vector<uint32_t> &pixels, int &width, int &height);
+    bool read_texture_argb(ID3D11Texture2D *source, std::vector<uint32_t> &pixels, int &width, int &height);
 
     // mpv renders on our own D3D11 device. Its immediate context is multithread-protected
     // so screenshot readbacks (JNI thread) can copy/map while the render thread is inside
@@ -578,13 +577,11 @@ uint64_t d3d11_renderer::copy_latest_frame(void *dest, int width, int height) {
     return frame_state();
 }
 
-// Copies the latest rendered frame into ARGB_8888 ints through a staging texture;
-// independent of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va) frames
-// without zimg. mutex_ keeps the render thread from cycling the ring onto this buffer.
-bool d3d11_renderer::read_frame_argb_locked(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
-    if (!buffers_allocated_ || latest_index_ < 0 || !device_ || !context_) return false;
-    ID3D11Texture2D *source = buffers_[latest_index_].texture;
-    if (!source) return false;
+// Copies a rendered texture into ARGB_8888 ints through a staging texture; independent
+// of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va) frames without zimg.
+bool d3d11_renderer::read_texture_argb(
+    ID3D11Texture2D *source, std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!source || !device_ || !context_) return false;
 
     D3D11_TEXTURE2D_DESC desc = {};
     source->GetDesc(&desc);
@@ -624,22 +621,43 @@ bool d3d11_renderer::read_frame_argb_locked(std::vector<uint32_t> &out_pixels, i
     return true;
 }
 
+// mutex_ keeps the render thread from cycling the ring onto the buffer being read.
 bool d3d11_renderer::read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) {
     std::lock_guard<std::mutex> guard(mutex_);
-    return read_frame_argb_locked(pixels, width, height);
+    if (!buffers_allocated_ || latest_index_ < 0) return false;
+    return read_texture_argb(buffers_[latest_index_].texture, pixels, width, height);
 }
 
-// mutex_ is only held for the readback; the encode works on our own copy.
-bool d3d11_renderer::save_surface_png(const char *path) {
-    if (!path) return false;
-    std::vector<uint32_t> pixels;
-    int width = 0, height = 0;
-    {
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (!read_frame_argb_locked(pixels, width, height)) return false;
+// A private render target of the requested size: mpv redraws the current frame into it
+// (the ring and its consumer are untouched); the GPU wait and the staging copy follow
+// the ring's own protocol.
+bool d3d11_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) {
+    if (!render_context_ || !device_) return false;
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = (UINT) width;
+    desc.Height = (UINT) height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D *target = nullptr;
+    const HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &target);
+    if (FAILED(hr) || !target) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "CreateTexture2D(%dx%d frame request) failed: 0x%lx", width, height, hr);
+        return false;
     }
-    const bool ok = write_argb_png_wic(path, width, height, pixels);
-    if (!ok) LOG(&owner_, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
+    mpv_d3d11_fbo fbo{target, width, height};
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_D3D11_FBO, &fbo},
+        {MPV_RENDER_PARAM_INVALID, nullptr},
+    };
+    bool ok = mpv_render_context_render(render_context_, params) >= 0;
+    ok = wait_for_gpu() && ok;
+    int read_width = 0, read_height = 0;
+    if (ok) ok = read_texture_argb(target, pixels, read_width, read_height);
+    target->Release();
     return ok;
 }
 

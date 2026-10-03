@@ -31,9 +31,6 @@
 #include <OpenGL/gl3.h>
 #include <OpenGL/CGLIOSurface.h>
 
-#include <CoreGraphics/CoreGraphics.h>
-#include <ImageIO/ImageIO.h>
-
 #include <dlfcn.h>
 
 #include <mpv/client.h>
@@ -78,7 +75,6 @@ public:
 
     bool create();
 
-    bool save_surface_png(const char *path) override;
     bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
 
 protected:
@@ -98,6 +94,7 @@ protected:
         return (int64_t) (uintptr_t) buffer.mtl_texture;
     }
     bool render_into(const macos_buffer &buffer) override;
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) override;
 
 private:
     CGLContextObj cgl_context_ = nullptr;
@@ -313,53 +310,53 @@ bool macos_renderer::read_surface_pixels(
     return true;
 }
 
-// Writes the latest rendered frame (BGRA IOSurface) as PNG. Independent of mpv's
-// screenshot pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU
-// download. Holds mutex_ for the whole save so the render thread cannot cycle the ring
-// back onto this buffer mid-read.
-bool macos_renderer::save_surface_png(const char *path) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    if (!buffers_allocated_ || latest_index_ < 0 || !path) {
-        LOG(&owner_, LOG_LEVEL_WARN, "save_surface_png: no surface/frame available");
-        return false;
+// A private FBO of the requested size on the render thread's CGL context: mpv redraws
+// the current frame into it (the ring and its consumer are untouched). Same orientation
+// contract as the ring (no FLIP_Y: mpv writes row 0 = top), and glReadPixels returns rows
+// from row 0, so the readback is top-down as is.
+bool macos_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) {
+    if (!render_context_) return false;
+    GLuint texture = 0, fbo = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    const GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    bool ok = fbo_status == GL_FRAMEBUFFER_COMPLETE;
+    if (!ok) LOG(&owner_, LOG_LEVEL_ERROR, "frame request FBO incomplete: 0x%x", fbo_status);
+    if (ok) {
+        mpv_opengl_fbo target{(int) fbo, width, height, 0};
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_OPENGL_FBO, &target},
+            {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+        ok = mpv_render_context_render(render_context_, params) >= 0;
+        glFinish();
     }
-    auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
-    if (!surface) {
-        LOG(&owner_, LOG_LEVEL_ERROR, "save_surface_png: IOSurface is null");
-        return false;
-    }
-
-    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
-        LOG(&owner_, LOG_LEVEL_ERROR, "IOSurfaceLock failed");
-        return false;
-    }
-    bool ok = false;
-    void *base = IOSurfaceGetBaseAddress(surface);
-    size_t bpr = IOSurfaceGetBytesPerRow(surface);
-    size_t width = IOSurfaceGetWidth(surface);
-    size_t height = IOSurfaceGetHeight(surface);
-
-    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
-    CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, base, bpr * height, nullptr);
-    CGImageRef image = CGImageCreate(
-        width, height, 8, 32, bpr, color_space,
-        kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, // BGRA in memory, alpha ignored
-        provider, nullptr, false, kCGRenderingIntentDefault);
-    if (image) {
-        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
-        CGImageDestinationRef dest = CGImageDestinationCreateWithURL(
-            (__bridge CFURLRef) url, CFSTR("public.png"), 1, nullptr);
-        if (dest) {
-            CGImageDestinationAddImage(dest, image, nullptr);
-            ok = CGImageDestinationFinalize(dest);
-            CFRelease(dest);
+    if (ok) {
+        const size_t pixel_count = (size_t) width * height;
+        std::vector<uint8_t> rgba(pixel_count * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ok = glGetError() == GL_NO_ERROR;
+        if (ok) {
+            pixels.resize(pixel_count);
+            for (size_t i = 0; i < pixel_count; ++i) {
+                pixels[i] = 0xFF000000u | ((uint32_t) rgba[i * 4] << 16) |
+                    ((uint32_t) rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+            }
         }
-        CGImageRelease(image);
     }
-    CGDataProviderRelease(provider);
-    CGColorSpaceRelease(color_space);
-    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
-    if (!ok) LOG(&owner_, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &texture);
     return ok;
 }
 

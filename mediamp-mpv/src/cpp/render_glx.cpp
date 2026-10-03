@@ -17,10 +17,7 @@
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
-#include <zlib.h>
 
-#include <array>
-#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <thread>
@@ -35,69 +32,6 @@ namespace {
 void *glx_get_proc_address(void *ctx, const char *name) {
     auto *provider = static_cast<mediampv::glx_context_provider *>(ctx);
     return provider ? provider->get_proc_address(name) : nullptr;
-}
-
-void append_u32_be(std::vector<uint8_t> &out, uint32_t value) {
-    out.push_back(static_cast<uint8_t>(value >> 24));
-    out.push_back(static_cast<uint8_t>(value >> 16));
-    out.push_back(static_cast<uint8_t>(value >> 8));
-    out.push_back(static_cast<uint8_t>(value));
-}
-
-void append_png_chunk(
-    std::vector<uint8_t> &out, const char type[4], const uint8_t *data, size_t size) {
-    append_u32_be(out, static_cast<uint32_t>(size));
-    const size_t type_offset = out.size();
-    out.insert(out.end(), type, type + 4);
-    if (size != 0) out.insert(out.end(), data, data + size);
-    const auto checksum = crc32(
-        0L, reinterpret_cast<const Bytef *>(out.data() + type_offset),
-        static_cast<uInt>(4 + size));
-    append_u32_be(out, static_cast<uint32_t>(checksum));
-}
-
-bool write_rgba_png(const char *path, int width, int height, const std::vector<uint8_t> &bottom_up) {
-    if (!path || width <= 0 || height <= 0) return false;
-    const size_t stride = static_cast<size_t>(width) * 4;
-    std::vector<uint8_t> scanlines(static_cast<size_t>(height) * (stride + 1));
-    // glReadPixels is bottom-up; PNG scanlines are top-down.
-    for (int y = 0; y < height; ++y) {
-        auto *dst = scanlines.data() + static_cast<size_t>(y) * (stride + 1);
-        dst[0] = 0; // PNG filter None
-        const auto *src = bottom_up.data() + static_cast<size_t>(height - 1 - y) * stride;
-        std::memcpy(dst + 1, src, stride);
-    }
-    uLongf compressed_size = compressBound(static_cast<uLong>(scanlines.size()));
-    std::vector<uint8_t> compressed(compressed_size);
-    if (compress2(compressed.data(), &compressed_size, scanlines.data(),
-                  static_cast<uLong>(scanlines.size()), Z_BEST_SPEED) != Z_OK) {
-        return false;
-    }
-    compressed.resize(compressed_size);
-
-    std::vector<uint8_t> png;
-    constexpr std::array<uint8_t, 8> signature = {137, 80, 78, 71, 13, 10, 26, 10};
-    png.insert(png.end(), signature.begin(), signature.end());
-    std::array<uint8_t, 13> ihdr{};
-    ihdr[0] = static_cast<uint8_t>(width >> 24);
-    ihdr[1] = static_cast<uint8_t>(width >> 16);
-    ihdr[2] = static_cast<uint8_t>(width >> 8);
-    ihdr[3] = static_cast<uint8_t>(width);
-    ihdr[4] = static_cast<uint8_t>(height >> 24);
-    ihdr[5] = static_cast<uint8_t>(height >> 16);
-    ihdr[6] = static_cast<uint8_t>(height >> 8);
-    ihdr[7] = static_cast<uint8_t>(height);
-    ihdr[8] = 8;  // bits/component
-    ihdr[9] = 6;  // RGBA
-    append_png_chunk(png, "IHDR", ihdr.data(), ihdr.size());
-    append_png_chunk(png, "IDAT", compressed.data(), compressed.size());
-    append_png_chunk(png, "IEND", nullptr, 0);
-
-    FILE *file = std::fopen(path, "wb");
-    if (!file) return false;
-    const bool ok = std::fwrite(png.data(), 1, png.size(), file) == png.size();
-    std::fclose(file);
-    return ok;
 }
 
 } // namespace
@@ -119,7 +53,6 @@ public:
 
     bool create(const glx_environment_ref &environment);
 
-    bool save_surface_png(const char *path) override;
     bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
 
 protected:
@@ -134,21 +67,17 @@ protected:
         return static_cast<int64_t>(buffer.texture); // GLuint texture name, not an FBO
     }
     bool render_into(const opengl_buffer &buffer) override;
-    // Screenshots and pixel readbacks need B's context, so they run on the render thread.
-    bool has_requests_locked() const override { return screenshot_pending_ || readback_pending_; }
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) override;
+    // Pixel readbacks need B's context, so they run on the render thread.
+    bool has_requests_locked() const override { return readback_pending_; }
     bool serve_requests_locked(std::unique_lock<std::mutex> &lock) override;
 
 private:
-    bool write_surface_png_on_render_thread(const char *path);
     bool read_surface_pixels_on_render_thread(std::vector<uint32_t> &out_pixels, int &out_width, int &out_height);
 
     glx_context_provider *glx_provider_ = nullptr;
 
     // Render-thread requests; guarded by mutex_.
-    std::string screenshot_path_;
-    bool screenshot_pending_ = false;
-    bool screenshot_finished_ = false;
-    bool screenshot_ok_ = false;
     bool readback_pending_ = false;
     bool readback_finished_ = false;
     bool readback_ok_ = false;
@@ -219,17 +148,6 @@ void glx_renderer::after_shutdown() {
 }
 
 bool glx_renderer::serve_requests_locked(std::unique_lock<std::mutex> &lock) {
-    if (screenshot_pending_) {
-        const std::string path = screenshot_path_;
-        screenshot_pending_ = false;
-        lock.unlock();
-        const bool saved = write_surface_png_on_render_thread(path.c_str());
-        lock.lock();
-        screenshot_ok_ = saved;
-        screenshot_finished_ = true;
-        cv_.notify_all();
-        return true;
-    }
     if (readback_pending_) {
         readback_pending_ = false;
         lock.unlock();
@@ -303,30 +221,41 @@ bool glx_renderer::render_into(const opengl_buffer &buffer) {
     return result >= 0 && glGetError() == GL_NO_ERROR;
 }
 
-bool glx_renderer::write_surface_png_on_render_thread(const char *path) {
-    if (!buffers_allocated_ || latest_index_ < 0 || !path) return false;
-    const opengl_buffer &buffer = buffers_[latest_index_];
-    std::vector<uint8_t> pixels(static_cast<size_t>(buffer_width_) * buffer_height_ * 4);
-    glBindFramebuffer(GL_FRAMEBUFFER, buffer.fbo);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, buffer_width_, buffer_height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (glGetError() != GL_NO_ERROR) return false;
-    const bool ok = write_rgba_png(path, buffer_width_, buffer_height_, pixels);
-    if (!ok) LOGE("save_surface_png failed for %s", path);
+// A private producer FBO of the requested size on context B: mpv redraws the current
+// frame into it (the ring and its consumer are untouched). No FLIP_Y here: mpv then
+// writes row 0 = top, and glReadPixels returns rows from row 0, so the readback is
+// top-down as is (the ring flips because Skia samples it with a bottom-left origin).
+bool glx_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &out_pixels) {
+    if (!render_context_) return false;
+    opengl_buffer target;
+    if (!allocate_buffer(target, width, height)) return false;
+    mpv_opengl_fbo fbo{static_cast<int>(target.fbo), width, height, 0};
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+        {MPV_RENDER_PARAM_INVALID, nullptr},
+    };
+    bool ok = mpv_render_context_render(render_context_, params) >= 0;
+    glFinish();
+    if (ok) {
+        const size_t pixel_count = static_cast<size_t>(width) * height;
+        std::vector<uint8_t> rgba(pixel_count * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ok = glGetError() == GL_NO_ERROR;
+        if (ok) {
+            out_pixels.resize(pixel_count);
+            for (size_t i = 0; i < pixel_count; ++i) {
+                out_pixels[i] = 0xFF000000u |
+                    (static_cast<uint32_t>(rgba[i * 4]) << 16) |
+                    (static_cast<uint32_t>(rgba[i * 4 + 1]) << 8) |
+                    static_cast<uint32_t>(rgba[i * 4 + 2]);
+            }
+        }
+    }
+    destroy_buffer(target);
     return ok;
-}
-
-bool glx_renderer::save_surface_png(const char *path) {
-    if (!path) return false;
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (!buffers_allocated_ || latest_index_ < 0 || screenshot_pending_) return false;
-    screenshot_path_ = path;
-    screenshot_pending_ = true;
-    screenshot_finished_ = false;
-    cv_.notify_all();
-    cv_.wait(lock, [this] { return screenshot_finished_ || quit_; });
-    return screenshot_finished_ && screenshot_ok_;
 }
 
 bool glx_renderer::read_surface_pixels_on_render_thread(
