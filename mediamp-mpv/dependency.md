@@ -335,7 +335,7 @@ Windows 后端根据已挂载 `SkiaLayer` 的实际 redrawer 类型选择：`Dir
 
 Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
 **D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
-以 `render_d3d11.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除)在我们自建的
+以 `mpv.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除对应补丁)在我们自建的
 `ID3D11Device` 上渲染进三重缓冲的共享纹理环 (`DXGI_FORMAT_R8G8B8A8_UNORM`,
 `D3D11_RESOURCE_MISC_SHARED | SHARED_NTHANDLE`), 每块纹理经 NT 共享句柄在 Skia 的
 D3D12 设备 (Compose Windows 默认后端, Skiko `Direct3DRedrawer`) 上打开为

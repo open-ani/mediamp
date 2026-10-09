@@ -8,7 +8,7 @@
 > **状态:已实施(2026-07-08)。** Phase 0–3 全部完成并在 Windows 上冒烟验证通过
 > (`:mediamp-mpv-demo:runD3D11` 播放 h264 视频, Compose overlay 混合正常, native
 > 环 PNG 读回像素正确)。与计划的偏差:
-> - PR 以 `mediamp-mpv/render_d3d11.patch` 落地(构建链已有 patch 机制), 未建 fork;
+> - PR 以 `mediamp-mpv/mpv.patch` 落地(构建链已有 patch 机制), 未建 fork;
 > - 帧同步用 `D3D11_QUERY_EVENT` 轮询(等价 glFinish), 未用 shared fence(留作 Phase 4);
 > - alpha 无需处理:`RGB_888x` 在 Skia D3D12 后端不可 wrap(非 renderable, 返回 null),
 >   实际用 `RGBA_8888`, mpv d3d11 渲染器对不透明视频输出 alpha=1(像素验证);
