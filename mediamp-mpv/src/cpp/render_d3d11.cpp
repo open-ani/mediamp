@@ -35,7 +35,7 @@
 #include <windows.h>
 #include <d3d11_4.h>
 #include <d3d12.h>
-#include <dxgi1_4.h>
+#include <dxgi1_6.h>
 
 #include <cstdint>
 #include <cstring>
@@ -199,13 +199,132 @@ IDXGIAdapter *skia_adapter(const void *instance_handle, int64_t skiko_device_ptr
     return adapter_by_luid(instance_handle, luid);
 }
 
+// Debug overrides that reproduce other GPU environments on the machine at hand: the render
+// path matrix scenarios, and diagnosing a user's machine without their hardware. Read once
+// per process; every renderer logs the active ones.
+//
+//   MEDIAMP_D3D11_ADAPTER: where mpv's device is created. `auto` (Skia's adapter, then the
+//     default hardware adapter, then WARP), `default` (ignore Skia's adapter, the behaviour
+//     before devices followed Skia), `warp`, `minimum-power` / `high-performance` (that GPU
+//     of a hybrid machine).
+//   MEDIAMP_D3D11_MAX_FEATURE_LEVEL: hardware devices behave as on a GPU supporting at most
+//     this level (e.g. `10_1`, a DX10.1-class GPU), so creation fails where it would fail
+//     there and the WARP fallback runs. WARP is unaffected, as on a real machine.
+enum class adapter_override { automatic, system_default, warp, minimum_power, high_performance };
+
+struct d3d11_overrides {
+    adapter_override adapter = adapter_override::automatic;
+    std::string adapter_text;  // raw value, empty when unset
+    D3D_FEATURE_LEVEL max_level = static_cast<D3D_FEATURE_LEVEL>(0);  // 0 = no cap
+    std::string max_level_text;
+    std::string ignored;  // unknown values, reported with the active overrides
+};
+
+std::string environment_value(const char *name) {
+    char value[64] = {};
+    const DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+    return length > 0 && length < sizeof(value) ? std::string(value, length) : std::string();
+}
+
+const d3d11_overrides &overrides() {
+    static const d3d11_overrides parsed = [] {
+        d3d11_overrides result;
+        result.adapter_text = environment_value("MEDIAMP_D3D11_ADAPTER");
+        const std::string &adapter = result.adapter_text;
+        if (adapter == "default") {
+            result.adapter = adapter_override::system_default;
+        } else if (adapter == "warp") {
+            result.adapter = adapter_override::warp;
+        } else if (adapter == "minimum-power") {
+            result.adapter = adapter_override::minimum_power;
+        } else if (adapter == "high-performance") {
+            result.adapter = adapter_override::high_performance;
+        } else if (!adapter.empty() && adapter != "auto") {
+            result.ignored += " MEDIAMP_D3D11_ADAPTER=" + adapter;
+        }
+
+        static const struct {
+            const char *name;
+            D3D_FEATURE_LEVEL level;
+        } known_levels[] = {
+            {"12_1", D3D_FEATURE_LEVEL_12_1}, {"12_0", D3D_FEATURE_LEVEL_12_0},
+            {"11_1", D3D_FEATURE_LEVEL_11_1}, {"11_0", D3D_FEATURE_LEVEL_11_0},
+            {"10_1", D3D_FEATURE_LEVEL_10_1}, {"10_0", D3D_FEATURE_LEVEL_10_0},
+            {"9_3", D3D_FEATURE_LEVEL_9_3}, {"9_2", D3D_FEATURE_LEVEL_9_2}, {"9_1", D3D_FEATURE_LEVEL_9_1},
+        };
+        result.max_level_text = environment_value("MEDIAMP_D3D11_MAX_FEATURE_LEVEL");
+        if (!result.max_level_text.empty()) {
+            for (const auto &known : known_levels) {
+                if (result.max_level_text == known.name) result.max_level = known.level;
+            }
+            if (result.max_level == 0) result.ignored += " MEDIAMP_D3D11_MAX_FEATURE_LEVEL=" + result.max_level_text;
+        }
+        return result;
+    }();
+    return parsed;
+}
+
+void log_overrides(const void *instance_handle) {
+    const d3d11_overrides &active = overrides();
+    if (!active.ignored.empty()) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "D3D11 overrides: ignoring unknown values:%s",
+            active.ignored.c_str());
+    }
+    if (active.adapter != adapter_override::automatic || active.max_level != 0) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "D3D11 overrides active: MEDIAMP_D3D11_ADAPTER=%s MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s",
+            active.adapter != adapter_override::automatic ? active.adapter_text.c_str() : "auto",
+            active.max_level != 0 ? active.max_level_text.c_str() : "none");
+    }
+}
+
+bool is_software_adapter(IDXGIAdapter *adapter) {
+    IDXGIAdapter1 *adapter1 = nullptr;
+    if (FAILED(adapter->QueryInterface(__uuidof(IDXGIAdapter1), reinterpret_cast<void **>(&adapter1)))) {
+        return false;
+    }
+    DXGI_ADAPTER_DESC1 desc{};
+    const bool software = SUCCEEDED(adapter1->GetDesc1(&desc)) && (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE);
+    adapter1->Release();
+    return software;
+}
+
+// The first hardware adapter in `preference` order (the hybrid-GPU choice); caller owns it.
+IDXGIAdapter *adapter_by_preference(const void *instance_handle, DXGI_GPU_PREFERENCE preference) {
+    IDXGIFactory6 *factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory6), reinterpret_cast<void **>(&factory));
+    if (FAILED(hr) || !factory) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "IDXGIFactory6 unavailable (0x%lx); cannot pick an adapter by GPU preference", hr);
+        return nullptr;
+    }
+    IDXGIAdapter *found = nullptr;
+    for (UINT index = 0; !found; ++index) {
+        IDXGIAdapter *candidate = nullptr;
+        if (FAILED(factory->EnumAdapterByGpuPreference(
+                index, preference, __uuidof(IDXGIAdapter), reinterpret_cast<void **>(&candidate)))) {
+            break;
+        }
+        if (is_software_adapter(candidate)) {
+            candidate->Release();
+        } else {
+            found = candidate;
+        }
+    }
+    factory->Release();
+    if (!found) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "no hardware adapter for GPU preference %d", (int) preference);
+    }
+    return found;
+}
+
 // VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to the
 // device; retried without it for drivers/WARP levels that reject the flag (playback then
 // falls back to software decoding but rendering still works). With an explicit adapter
 // the driver type must be UNKNOWN; without one, the default hardware adapter is tried
-// before WARP (headless CI / no GPU).
+// before WARP (headless CI / no GPU), unless `warp_only`.
 HRESULT create_d3d11_device(
-    const void *instance_handle, IDXGIAdapter *adapter,
+    const void *instance_handle, IDXGIAdapter *adapter, bool warp_only,
     ID3D11Device **device, ID3D11DeviceContext **context) {
     const UINT flag_sets[] = {
         D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
@@ -213,21 +332,39 @@ HRESULT create_d3d11_device(
     };
     const D3D_DRIVER_TYPE default_driver_types[] = {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
     const D3D_DRIVER_TYPE adapter_driver_types[] = {D3D_DRIVER_TYPE_UNKNOWN};
-    const D3D_DRIVER_TYPE *driver_types = adapter ? adapter_driver_types : default_driver_types;
-    const size_t driver_type_count = adapter ? ARRAYSIZE(adapter_driver_types) : ARRAYSIZE(default_driver_types);
-    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    const D3D_DRIVER_TYPE warp_driver_types[] = {D3D_DRIVER_TYPE_WARP};
+    const D3D_DRIVER_TYPE *driver_types = adapter ? adapter_driver_types
+        : warp_only ? warp_driver_types : default_driver_types;
+    const size_t driver_type_count = adapter ? ARRAYSIZE(adapter_driver_types)
+        : warp_only ? ARRAYSIZE(warp_driver_types) : ARRAYSIZE(default_driver_types);
+    const D3D_FEATURE_LEVEL wanted_levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    const D3D_FEATURE_LEVEL max_level = overrides().max_level;
+    const bool software_adapter = adapter && is_software_adapter(adapter);
     HRESULT hr = E_FAIL;
     for (size_t i = 0; i < driver_type_count; ++i) {
         const D3D_DRIVER_TYPE driver_type = driver_types[i];
+        const bool capped = max_level != 0 && driver_type != D3D_DRIVER_TYPE_WARP && !software_adapter;
+        std::vector<D3D_FEATURE_LEVEL> levels;
+        for (D3D_FEATURE_LEVEL level : wanted_levels) {
+            if (!capped || level <= max_level) levels.push_back(level);
+        }
+        if (levels.empty()) {
+            // What a driver below Direct3D 11 answers for the levels mpv's renderer needs.
+            hr = DXGI_ERROR_UNSUPPORTED;
+            LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+                "D3D11CreateDevice(adapter=%p type=%d) refused: MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s",
+                adapter, (int) driver_type, overrides().max_level_text.c_str());
+            continue;
+        }
         for (UINT flags : flag_sets) {
             hr = D3D11CreateDevice(
                 adapter, driver_type, nullptr, flags,
-                levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, device, nullptr, context);
-            if (hr == E_INVALIDARG) {
+                levels.data(), (UINT) levels.size(), D3D11_SDK_VERSION, device, nullptr, context);
+            if (hr == E_INVALIDARG && levels.size() > 1 && levels[0] == D3D_FEATURE_LEVEL_11_1) {
                 // Pre-11.1 runtime rejects the 11_1 entry; retry without it.
                 hr = D3D11CreateDevice(
                     adapter, driver_type, nullptr, flags,
-                    levels + 1, ARRAYSIZE(levels) - 1, D3D11_SDK_VERSION, device, nullptr, context);
+                    levels.data() + 1, (UINT) levels.size() - 1, D3D11_SDK_VERSION, device, nullptr, context);
             }
             if (SUCCEEDED(hr)) return hr;
             if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
@@ -310,19 +447,41 @@ bool d3d11_renderer::create(int64_t consumer_device_hint) {
     // Shared textures only open on a D3D12 device of the same adapter, so follow Skia's
     // adapter when it is known; the default adapter differs from it on hybrid-GPU
     // machines (GPU preference settings, skiko.gpu.priority).
+    const d3d11_overrides &active = overrides();
+    log_overrides(&owner_);
     HRESULT hr = E_FAIL;
-    IDXGIAdapter *adapter = consumer_device_hint ? skia_adapter(&owner_, consumer_device_hint) : nullptr;
+    IDXGIAdapter *adapter = nullptr;
+    const char *adapter_source = "Skia's adapter";
+    switch (active.adapter) {
+        case adapter_override::automatic:
+            adapter = consumer_device_hint ? skia_adapter(&owner_, consumer_device_hint) : nullptr;
+            break;
+        case adapter_override::minimum_power:
+            adapter = adapter_by_preference(&owner_, DXGI_GPU_PREFERENCE_MINIMUM_POWER);
+            adapter_source = "the minimum-power adapter";
+            break;
+        case adapter_override::high_performance:
+            adapter = adapter_by_preference(&owner_, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE);
+            adapter_source = "the high-performance adapter";
+            break;
+        case adapter_override::system_default:
+        case adapter_override::warp:
+            break;
+    }
     if (adapter) {
-        hr = create_d3d11_device(&owner_, adapter, &device_, &context_);
+        hr = create_d3d11_device(&owner_, adapter, false, &device_, &context_);
         adapter->Release();
         if (FAILED(hr)) {
             LOG(&owner_, LOG_LEVEL_WARN,
-                "D3D11CreateDevice on Skia's adapter failed (0x%lx); using the default adapter", hr);
+                "D3D11CreateDevice on %s failed (0x%lx); using the default adapter", adapter_source, hr);
             safe_release(context_);
             safe_release(device_);
         }
     }
-    if (!device_) hr = create_d3d11_device(&owner_, nullptr, &device_, &context_);
+    if (!device_) {
+        hr = create_d3d11_device(
+            &owner_, nullptr, active.adapter == adapter_override::warp, &device_, &context_);
+    }
     if (FAILED(hr) || !device_ || !context_) {
         LOG(&owner_, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
         return false;
