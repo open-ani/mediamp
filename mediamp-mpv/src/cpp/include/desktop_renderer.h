@@ -48,8 +48,8 @@ public:
     // CPU readback paths: copies the latest frame (RGBA8, top-down, width*4 stride) into
     // dest if it is exactly width x height; returns its frame state, or 0.
     virtual uint64_t copy_latest_frame(void *dest, int width, int height) { return 0; }
-    // D3D11 only: set_surface_config for consumers without a D3D12 device, which take
-    // frames through copy_latest_frame instead.
+    // D3D11 and macOS: set_surface_config for consumers without a device to share the ring
+    // with (a D3D12 device, an MTLDevice), which take frames through copy_latest_frame.
     virtual bool set_readback_surface_config(int width, int height) { return false; }
 };
 
