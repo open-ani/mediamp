@@ -57,6 +57,8 @@ kotlin {
             implementation(kotlin("test"))
             // The live-redrawer regression test constructs a real SkiaLayer.
             runtimeOnly(compose.desktop.currentOs)
+            // RenderPathMatrixTest prints the window through Win32 on Windows.
+            implementation(libs.jna.platform)
         }
     }
 }
@@ -294,6 +296,8 @@ val renderPathTests = renderPathApis.map { api ->
         systemProperty("skiko.renderApi", api)
         systemProperty("mediamp.mpv.renderpath.outputDir", outputDir.absolutePath)
         getPropertyOrNull("mediamp.mpv.renderpath.strict")?.let { systemProperty("mediamp.mpv.renderpath.strict", it) }
+        // The JUnit XML keeps the cell's stdout/stderr, including Skiko's own fallback logs.
+        reports.junitXml.outputLocation = outputDir.resolve("junit")
         // The outcome depends on the machine's GPU and drivers, which are not task inputs.
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }

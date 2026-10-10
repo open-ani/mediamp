@@ -30,10 +30,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.skiko.OS
+import org.jetbrains.skiko.hostOs
 import org.openani.mediamp.InternalMediampApi
 import org.openani.mediamp.mpv.compose.MpvMediampPlayerSurface
 import org.openani.mediamp.mpv.utils.MpvTestMedia
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
+import org.openani.mediamp.mpv.utils.WindowsWindowCapture
 import org.openani.mediamp.mpv.utils.findSkiaLayer
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.UriMediaData
@@ -60,9 +63,9 @@ import kotlin.time.TimeSource
  * The headless suites drive the native producer alone. This is the check that frames reach
  * the screen through the consumer path chosen from Skiko's *actual* redrawer, including the
  * silent fallbacks that put user machines without a usable D3D12 device on the OpenGL,
- * ANGLE or software paths. Pixels come from a [Robot] screen capture, after the OS
- * composited the window, so a frame that Skia drew but the window never presented fails too,
- * and so does a see-through or garbage window.
+ * ANGLE or software paths. Pixels are what the OS composes for the window (on Windows
+ * [WindowsWindowCapture], elsewhere a [Robot] screen capture), so a frame that Skia drew but
+ * the window never presented fails too, and so does a see-through or garbage window.
  *
  * A requested API the machine cannot provide is not a failure by default: Skiko falls back
  * as it would for a user, and the cell reports where it landed. Set
@@ -215,7 +218,7 @@ class RenderPathMatrixTest {
     }
 
     private inner class ScreenProbe(private val window: ComposeWindow, private val layout: SceneLayout) {
-        private val robot = Robot()
+        private val robot = if (hostOs == OS.Windows) null else Robot()
 
         /**
          * Captures until [accept] holds or [timeout] passes; the last capture is saved as
@@ -236,12 +239,18 @@ class RenderPathMatrixTest {
         }
 
         private suspend fun capture(): Pair<BufferedImage?, Samples?> {
-            val bounds = withContext(Dispatchers.Main) {
-                window.findSkiaLayer()?.takeIf { it.isShowing }?.let { Rectangle(it.locationOnScreen, it.size) }
-            }
             val root = layout.root
-            if (bounds == null || root.width == 0 || root.height == 0 || layout.video.isEmpty) return null to null
-            val image = withContext(Dispatchers.IO) { robot.createScreenCapture(bounds) }
+            if (root.width == 0 || root.height == 0 || layout.video.isEmpty) return null to null
+            val image = if (robot == null) {
+                withContext(Dispatchers.Main) {
+                    window.findSkiaLayer()?.takeIf { it.isShowing }?.let(WindowsWindowCapture::capture)
+                }
+            } else {
+                val bounds = withContext(Dispatchers.Main) {
+                    window.findSkiaLayer()?.takeIf { it.isShowing }?.let { Rectangle(it.locationOnScreen, it.size) }
+                }
+                bounds?.let { withContext(Dispatchers.IO) { robot.createScreenCapture(it) } }
+            } ?: return null to null
             // Layout is in root pixels, the capture in screen pixels: sample by fraction.
             fun at(point: Offset): Int = image.averageAt(point.x / root.width, point.y / root.height)
             val video = layout.video
