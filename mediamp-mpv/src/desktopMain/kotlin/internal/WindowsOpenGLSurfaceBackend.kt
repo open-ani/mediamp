@@ -71,8 +71,16 @@ internal class WindowsOpenGLRenderContextLifecycle(
     private val eager: EagerRenderContextLifecycle,
     private val host: MpvRenderContextHost,
 ) : MpvRenderContextLifecycle by eager {
+    private var replacedHwdec: String? = null
+
     override fun initialize() {
+        replacedHwdec = host.handle.getPropertyString("hwdec")
         check(host.handle.setPropertyString("hwdec", "d3d11va-copy,auto-safe"))
         eager.initialize()
+    }
+
+    // The D3D11 backends decode zero-copy into their own device again.
+    override fun detach() {
+        replacedHwdec?.let { host.handle.setPropertyString("hwdec", it) }
     }
 }

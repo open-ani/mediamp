@@ -97,13 +97,22 @@ private fun MpvMediampPlayerSurfaceRing(
     var interopSettled by remember(player, layerRedrawer) { mutableStateOf(layerRedrawer == null) }
     LaunchedEffect(player, layerRedrawer) {
         val liveLayer = layerRedrawer ?: return@LaunchedEffect
-        // Composition can precede Skiko's first render. Wait for its actual choice,
-        // including startup fallbacks, before creating mpv's matching producer context.
-        while (liveLayer.redrawerOrNull == null) delay(50.milliseconds)
-        interop = runCatching { player.createSkiaInterop(liveLayer) }
-            .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
-            .getOrNull()
-        interopSettled = true
+        // Composition can precede Skiko's first render, and Skiko replaces a redrawer that
+        // fails, even on its first frame. Select mpv's producer for the actual redrawer,
+        // and again after every switch.
+        liveLayer.rendererChanges.collectLatest {
+            while (liveLayer.redrawerOrNull == null) delay(50.milliseconds)
+            val previousBackend = player.ringBackend
+            val selected = runCatching { player.createSkiaInterop(liveLayer) }
+                .onFailure { MPVLog.error(player.handle.ptr, "Skia device interop init failed; video stays black", it) }
+                .getOrNull()
+            // A new interop restarts the surface setup below. Keep the current one when Skiko
+            // only recreated the same kind of redrawer: the draw pass follows its device.
+            if (selected == null || interop == null || player.ringBackend !== previousBackend) {
+                interop = selected
+            }
+            interopSettled = true
+        }
     }
     val drawResolver: MpvSurfaceDrawResolver? = remember(player, interop) {
         interop?.let { player.renderContextLifecycle?.createDrawResolver(it) }
@@ -176,6 +185,12 @@ private fun MpvMediampPlayerSurfaceRing(
             } else {
                 logOnce("skia interop not initialized yet")
             }
+            return@Canvas
+        }
+        if (layerRedrawer != null && !player.rendersFor(layerRedrawer)) {
+            // Skiko switched its redrawer and the reselection above has not run yet; the
+            // current backend's interop must not read the new redrawer from inside its frame.
+            logOnce("Skiko switched its renderer; waiting for the mpv render path to follow")
             return@Canvas
         }
         val drawPass = drawResolver.resolveDrawPass(renderContextReady)

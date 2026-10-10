@@ -12,6 +12,7 @@ import org.jetbrains.skiko.SkiaLayer
 import java.lang.reflect.Proxy
 import javax.swing.SwingUtilities
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -50,6 +51,25 @@ class SkiaLayerRedrawerTest {
                 assertSame(layer, liveLayer.layer)
             } finally {
                 redrawerField.set(manager, original)
+                layer.dispose()
+            }
+        }
+    }
+
+    @Test
+    fun `renderer switches are counted once per layer for every wrapper`() {
+        SwingUtilities.invokeAndWait {
+            val layer = SkiaLayer()
+            try {
+                val first = SkiaLayerRedrawer(layer)
+                val second = SkiaLayerRedrawer(layer)
+                assertSame(first.rendererChanges, second.rendererChanges)
+                val before = first.rendererChanges.value
+
+                // Skiko notifies through the same setter its fallback uses.
+                layer.renderApi = layer.renderApi
+                assertEquals(before + 1, second.rendererChanges.value)
+            } finally {
                 layer.dispose()
             }
         }
