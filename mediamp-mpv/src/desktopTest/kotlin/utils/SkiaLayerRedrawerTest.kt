@@ -23,6 +23,16 @@ class SkiaLayerRedrawerTest {
         SwingUtilities.invokeAndWait {
             val layer = SkiaLayer()
             val liveLayer = SkiaLayerRedrawer(layer)
+            if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+                try {
+                    assertNull(liveLayer.redrawerOrNull)
+                    assertFailsWith<IllegalStateException> { liveLayer.redrawer }
+                    assertSame(layer, liveLayer.layer)
+                } finally {
+                    layer.dispose()
+                }
+                return@invokeAndWait
+            }
             val managerField = SkiaLayer::class.java.getDeclaredField("redrawerManager")
                 .apply { isAccessible = true }
             val manager = managerField.get(layer)
