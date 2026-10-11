@@ -438,6 +438,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         setupGradle()
 
         gradleCheck()
+        renderPathMatrix()
         buildFfmpegArtifacts()
         uploadWindowsArm64Runtime()
         verifyAppleXcframeworkPublication()
@@ -728,9 +729,11 @@ class WithMatrix(
         `if`: String? = null,
         @Language("shell", prefix = "./gradlew ") vararg tasks: String,
         env: Map<String, String> = emptyMap(),
+        continueOnError: Boolean? = null,
     ): CommandStep = run(
         name = name,
         `if` = `if`,
+        continueOnError = continueOnError,
         command = shell(
             buildString {
                 append("./gradlew ")
@@ -1059,6 +1062,31 @@ class WithMatrix(
         }
     }
 
+    /**
+     * 渲染路径矩阵: 每个 Skiko 渲染后端各起一个 JVM, 用真实 Compose 窗口播放已知颜色的视频并截屏校验.
+     * 结果表写进 job summary, 截图作为 artifact 上传.
+     * GitHub 的 Windows runner 没有 GPU, 请求的后端多半会被 Skiko 回退, 表里写明实际落到的路径.
+     * 结果稳定之前不阻塞构建.
+     */
+    fun JobBuilder<*>.renderPathMatrix() {
+        if (!matrix.isWindows || !matrix.runTests || matrix.mpvBuildVariant == null) return
+        runGradle(
+            name = "Render path matrix",
+            tasks = arrayOf("--continue", ":mediamp-mpv:renderPathMatrix"),
+            continueOnError = true,
+        )
+        uses(
+            name = "Upload render path matrix",
+            `if` = "always()",
+            action = UploadArtifact(
+                name = "render-path-matrix-${matrix.runner.id}",
+                path_Untyped = "mediamp-mpv/build/render-path-matrix/",
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Warn,
+            ),
+        )
+    }
+
     fun JobBuilder<*>.buildFfmpegArtifacts() {
         if (matrix.ffmpegBuildVariant != null) {
             runGradle(
@@ -1182,7 +1210,12 @@ class WithMatrix(
             tasks = arrayOf(
                 // 预引号: PowerShell 会把未引号的 -Dmaven.repo.local=... 分词拆坏
                 "\"-Dmaven.repo.local=mediamp-mpv/build/maven-local\"",
-                ":mediamp-mpv:publishToMavenLocal",
+                if (matrix.isWindowsAArch64) {
+                    // windows-11-arm does not provide an Android SDK; validate only the ARM64 runtime publication.
+                    ":mediamp-mpv:publishMpvRuntimeWindowsArm64PublicationToMavenLocal"
+                } else {
+                    ":mediamp-mpv:publishToMavenLocal"
+                },
             ),
         )
     }
