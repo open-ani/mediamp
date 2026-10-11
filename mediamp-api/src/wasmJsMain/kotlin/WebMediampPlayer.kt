@@ -101,6 +101,8 @@ public class WebMediampPlayer(
     private var openEpoch: Int = 0
 
     init {
+        // Optional for same-origin video; required for CORS-enabled cross-origin WebGL uploads.
+        if (!videoElement.hasAttribute("crossorigin")) videoElement.crossOrigin = "anonymous"
         videoElement.preload = "metadata"
         videoElement.controls = false
         videoElement.playsInline = true
