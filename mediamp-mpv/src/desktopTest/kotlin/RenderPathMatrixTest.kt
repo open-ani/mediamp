@@ -55,10 +55,11 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
 /**
- * One cell of the render path matrix: a real Compose window on the Skiko render API this JVM
- * was started with (`skiko.renderApi`, set per cell by the `renderPathTest_<API>` Gradle
- * tasks), playing a known-colour clip through [MpvMediampPlayerSurface], checked against what
- * the screen actually shows.
+ * One scenario of the render path matrix: a real Compose window on the Skiko render API this
+ * JVM was started with (`skiko.renderApi` plus the scenario's other overrides, set by the
+ * `renderPathTest_<scenario>` Gradle tasks, see buildSrc `RenderPathMatrix.kt`), playing a
+ * known-colour clip through [MpvMediampPlayerSurface], checked against what the screen
+ * actually shows.
  *
  * The headless suites drive the native producer alone. This is the check that frames reach
  * the screen through the consumer path chosen from Skiko's *actual* redrawer, including the
@@ -68,18 +69,22 @@ import kotlin.time.TimeSource
  * the window never presented fails too, and so does a see-through or garbage window.
  *
  * A requested API the machine cannot provide is not a failure by default: Skiko falls back
- * as it would for a user, and the cell reports where it landed. Set
- * `mediamp.mpv.renderpath.strict=true` on a machine expected to support every requested API.
+ * as it would for a user, and the scenario reports where it landed. Set
+ * `mediamp.mpv.renderpath.strict=true` on a machine expected to support every requested API;
+ * strict mode also checks the scenario's expected `hwdec-current`.
  *
  * Each run writes `result.properties` and the captured screens to
  * `mediamp.mpv.renderpath.outputDir`; `renderPathMatrixReport` tabulates them.
  */
 class RenderPathMatrixTest {
     private val requestedApi = System.getProperty("skiko.renderApi") ?: "default"
+    private val scenario = System.getProperty("mediamp.mpv.renderpath.scenario") ?: requestedApi
     private val outputDir = File(
-        System.getProperty("mediamp.mpv.renderpath.outputDir") ?: "build/render-path-matrix/$requestedApi",
+        System.getProperty("mediamp.mpv.renderpath.outputDir") ?: "build/render-path-matrix/$scenario",
     )
     private val strict = System.getProperty("mediamp.mpv.renderpath.strict") == "true"
+    private val hwdecOverride = System.getProperty("mediamp.mpv.renderpath.hwdec")
+    private val expectedHwdec = System.getProperty("mediamp.mpv.renderpath.expectedHwdec")
 
     @OptIn(InternalMediampApi::class)
     @Test
@@ -91,7 +96,18 @@ class RenderPathMatrixTest {
         }
         val clip = extractClip()
         outputDir.mkdirs()
-        val result = Properties().apply { setProperty("requestedApi", requestedApi) }
+        val result = Properties().apply {
+            setProperty("scenario", scenario)
+            setProperty("requestedApi", requestedApi)
+            val overrides = listOfNotNull(
+                System.getProperty("skiko.gpu.priority")?.let { "skiko.gpu.priority=$it" },
+                System.getenv("MEDIAMP_D3D11_ADAPTER")?.let { "MEDIAMP_D3D11_ADAPTER=$it" },
+                System.getenv("MEDIAMP_D3D11_MAX_FEATURE_LEVEL")?.let { "MEDIAMP_D3D11_MAX_FEATURE_LEVEL=$it" },
+                hwdecOverride?.let { "hwdec=$it" },
+                System.getProperty("mediamp.mpv.renderpath.gpuPreference")?.let { "GpuPreference=$it" },
+            )
+            setProperty("overrides", overrides.joinToString(", "))
+        }
         val notableLog = mutableListOf<String>()
         MPVHandle.setLogHandler { message ->
             println("[$TAG][${message.prefix}] ${message.line}")
@@ -105,7 +121,7 @@ class RenderPathMatrixTest {
             val layout = SceneLayout()
             val window = withContext(Dispatchers.Main) {
                 ComposeWindow().apply {
-                    title = "mediamp render path matrix: $requestedApi"
+                    title = "mediamp render path matrix: $scenario"
                     setContent { RenderPathScene(player, layout) }
                     setBounds(32, 32, 960, 640)
                     isAlwaysOnTop = true
@@ -114,29 +130,26 @@ class RenderPathMatrixTest {
             }
             val screen = ScreenProbe(window, layout)
             try {
-                // The surface creates mpv's producer only after Skiko settled on a redrawer
-                // (including startup fallbacks), so the path is final once this is set.
-                val backend = withTimeoutOrNull(30.seconds) {
+                // The surface creates mpv's producer once Skiko has a redrawer; a later Skiko
+                // switch can still move it, so the path is recorded again at the end.
+                withTimeoutOrNull(30.seconds) {
                     while (player.ringBackend == null) delay(100.milliseconds)
-                    player.ringBackend
                 } ?: throw AssertionError("the surface did not pick an mpv render path within 30s")
-                withContext(Dispatchers.Main) {
-                    result.setProperty("actualApi", window.renderApi.name)
-                    window.findSkiaLayer()?.let { layer ->
-                        val redrawer = SkiaLayerRedrawer(layer).redrawerOrNull
-                        result.setProperty("redrawer", redrawer?.javaClass?.simpleName ?: "none")
-                    }
-                }
-                result.setProperty("mediampRenderer", backend.rendererName)
+                recordPath(window, player, result)
                 if (strict) {
                     assertEquals(requestedApi, result.getProperty("actualApi"), "Skiko fell back from the requested API")
                 }
 
                 withContext(Dispatchers.Main) {
+                    val handle = player.impl as MPVHandle
+                    hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
                     player.setMediaData(
                         UriMediaData(clip.absolutePath, emptyMap(), MediaExtraFiles.EMPTY),
                         playWhenReady = false,
                     )
+                    // A render-context lifecycle may set hwdec while loading; mpv applies a
+                    // runtime change by reinitializing the decoder, before the seeks below.
+                    hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
                     player.seekTo(1_000)
                 }
                 screen.await("segment-a", 30.seconds) { it.video.near(SEGMENT_A_RGB) && it.uiIntact() }
@@ -156,13 +169,20 @@ class RenderPathMatrixTest {
                     result.setProperty("hwdec", handle.getPropertyString("hwdec-current") ?: "unknown")
                     result.setProperty("droppedFrames", handle.getPropertyLongOrNull("frame-drop-count")?.toString() ?: "?")
                 }
+                recordPath(window, player, result)
+                if (strict && expectedHwdec != null) {
+                    assertEquals(expectedHwdec, result.getProperty("hwdec"), "hwdec-current")
+                }
                 result.setProperty("result", "PASS")
             } catch (e: Throwable) {
                 result.setProperty("result", "FAIL")
                 result.setProperty("failure", e.toString())
                 throw e
             } finally {
-                result.setProperty("log", synchronized(notableLog) { notableLog.joinToString("\n") })
+                val log = synchronized(notableLog) { notableLog.toList() }
+                result.setProperty("log", log.joinToString("\n"))
+                log.lastMatch(SKIA_ADAPTER)?.let { result.setProperty("skiaAdapter", it) }
+                log.lastMatch(MPV_ADAPTER)?.let { result.setProperty("mpvAdapter", it) }
                 outputDir.resolve("result.properties").writer().use { result.store(it, null) }
                 withContext(Dispatchers.Main) {
                     window.dispose()
@@ -170,6 +190,19 @@ class RenderPathMatrixTest {
                 }
                 MPVHandle.setLogHandler(null)
             }
+        }
+    }
+
+    /** Skiko's API and redrawer and mediamp's render path, as of now. */
+    @OptIn(InternalMediampApi::class)
+    private suspend fun recordPath(window: ComposeWindow, player: MpvMediampPlayer, result: Properties) {
+        withContext(Dispatchers.Main) {
+            result.setProperty("actualApi", window.renderApi.name)
+            window.findSkiaLayer()?.let { layer ->
+                val redrawer = SkiaLayerRedrawer(layer).redrawerOrNull
+                result.setProperty("redrawer", redrawer?.javaClass?.simpleName ?: "none")
+            }
+            player.ringBackend?.let { result.setProperty("mediampRenderer", it.rendererName) }
         }
     }
 
@@ -301,7 +334,14 @@ class RenderPathMatrixTest {
         const val TOLERANCE = 48
 
         /** Log lines worth keeping in the matrix report besides errors. */
-        val NOTABLE_LOG = listOf("adapter", " surface", "Fallback", "hwdec", "readback")
+        val NOTABLE_LOG = listOf("adapter", " surface", "Fallback", "hwdec", "readback", "overrides", "D3D11CreateDevice")
+
+        /** The native producer's adapter log lines (render_d3d11.cpp), including the mismatch error. */
+        val SKIA_ADAPTER = Regex("""Skia(?:'s)? D3D12 device (?:is )?on adapter '([^']*)'""")
+        val MPV_ADAPTER = Regex("""D3D11 device on adapter '([^']*)'""")
+
+        fun List<String>.lastMatch(pattern: Regex): String? =
+            asReversed().firstNotNullOfOrNull { pattern.find(it)?.groupValues?.get(1) }
 
         val Color.rgb: Int get() = toArgb() and 0xFFFFFF
 

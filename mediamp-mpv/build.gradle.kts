@@ -12,8 +12,8 @@ import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SourcesJar
 import mpv.configureMediampMpvModule
+import mpv.configureRenderPathMatrix
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
-import java.util.Properties
 
 plugins {
     kotlin("multiplatform")
@@ -218,100 +218,9 @@ if (hostMpvRuntimeJarTaskName != null && hostMpvRuntimeJarTaskName in tasks.name
     }
 }
 
-// Render path matrix: RenderPathMatrixTest once per Skiko render API, each in a fresh JVM
-// because Skiko reads skiko.renderApi when the window is created and the native loader keeps
-// per-JVM state. An API the machine cannot provide still runs: Skiko falls back as it would
-// for a user and the cell reports where it landed (-Pmediamp.mpv.renderpath.strict=true makes
-// that a failure). Results: build/render-path-matrix/<API>/.
-// ./gradlew --continue :mediamp-mpv:renderPathMatrix
-val renderPathApis = when (getOs()) {
-    // Skiko has no OpenGL renderer on Windows ARM64.
-    Os.Windows -> if (getArch() == Arch.AARCH64) {
-        listOf("DIRECT3D", "ANGLE", "SOFTWARE_FAST", "SOFTWARE_COMPAT")
-    } else {
-        listOf("DIRECT3D", "ANGLE", "OPENGL", "SOFTWARE_FAST", "SOFTWARE_COMPAT")
-    }
-    Os.MacOS -> listOf("METAL", "SOFTWARE_COMPAT")
-    else -> emptyList()
-}
-val renderPathMatrixDir = layout.buildDirectory.dir("render-path-matrix")
-
-tasks.named<Test>("desktopTest") {
-    filter { excludeTestsMatching("*RenderPathMatrixTest") }
-}
-
-val renderPathMatrixReport = tasks.register("renderPathMatrixReport") {
-    group = "mediamp"
-    description = "Tabulates the render path matrix results, also into the GitHub step summary"
-    val resultsDir = renderPathMatrixDir.get().asFile
-    val apis = renderPathApis
-    // Results left over from an earlier build (a cell not run this time) are not reported.
-    val buildStartMillis = System.currentTimeMillis()
-    doLast {
-        fun cell(value: String?) = (value ?: "").replace("|", "\\|").replace("\n", " ")
-        val report = buildString {
-            appendLine("### Render path matrix (${System.getProperty("os.name")} ${System.getProperty("os.arch")})")
-            appendLine()
-            appendLine("| Requested | Skiko actual | Redrawer | mediamp path | hwdec | VO drops | Result |")
-            appendLine("|---|---|---|---|---|---|---|")
-            val details = StringBuilder()
-            for (api in apis) {
-                val file = resultsDir.resolve("$api/result.properties")
-                if (!file.isFile || file.lastModified() < buildStartMillis) {
-                    appendLine("| $api | | | | | | not run |")
-                    continue
-                }
-                val result = Properties().apply { file.reader().use { load(it) } }
-                fun get(key: String) = cell(result.getProperty(key))
-                appendLine(
-                    "| $api | ${get("actualApi")} | ${get("redrawer")} | ${get("mediampRenderer")} | " +
-                        "${get("hwdec")} | ${get("droppedFrames")} | ${get("result")} |",
-                )
-                val failure = result.getProperty("failure")
-                val log = result.getProperty("log").orEmpty()
-                if (failure != null || log.isNotBlank()) {
-                    details.appendLine("<details><summary>$api</summary>").appendLine()
-                    failure?.let { details.appendLine("**Failure:** `${it.replace("`", "'")}`").appendLine() }
-                    if (log.isNotBlank()) details.appendLine("```").appendLine(log).appendLine("```")
-                    details.appendLine("</details>").appendLine()
-                }
-            }
-            appendLine()
-            append(details)
-        }
-        logger.lifecycle(report)
-        System.getenv("GITHUB_STEP_SUMMARY")?.let { File(it).appendText(report + "\n") }
-    }
-}
-
-val renderPathTests = renderPathApis.map { api ->
-    tasks.register<Test>("renderPathTest_$api") {
-        group = "mediamp"
-        description = "Plays a known clip in a Compose window on Skiko's $api render API and checks the screen"
-        val testCompilation = kotlin.targets.getByName("desktop").compilations.getByName("test")
-        testClassesDirs = testCompilation.output.classesDirs
-        classpath = files(testCompilation.output.allOutputs, testCompilation.runtimeDependencyFiles)
-        filter { includeTestsMatching("*RenderPathMatrixTest") }
-        val outputDir = renderPathMatrixDir.get().dir(api).asFile
-        systemProperty("skiko.renderApi", api)
-        systemProperty("mediamp.mpv.renderpath.outputDir", outputDir.absolutePath)
-        getPropertyOrNull("mediamp.mpv.renderpath.strict")?.let { systemProperty("mediamp.mpv.renderpath.strict", it) }
-        // The JUnit XML keeps the cell's stdout/stderr, including Skiko's own fallback logs.
-        reports.junitXml.outputLocation = outputDir.resolve("junit")
-        // The outcome depends on the machine's GPU and drivers, which are not task inputs.
-        outputs.upToDateWhen { false }
-        outputs.cacheIf { false }
-        doFirst { outputDir.deleteRecursively() }
-        finalizedBy(renderPathMatrixReport)
-    }
-}
-renderPathMatrixReport.configure { mustRunAfter(renderPathTests) }
-
-tasks.register("renderPathMatrix") {
-    group = "mediamp"
-    description = "Runs the render path matrix for this host (use --continue to run every cell)"
-    dependsOn(renderPathTests)
-}
+// End-to-end render path scenarios (real window, screen check) for this host:
+// ./gradlew --continue :mediamp-mpv:renderPathMatrix [-Pmediamp.mpv.renderpath.tier=ci|gpu|hybrid]
+configureRenderPathMatrix()
 
 // The Android AAR bundles the LGPL libmpv (.so) built with -Dgpl=false; every other
 // publication of this module is pure Kotlin/JNI glue (Apache-2.0). Desktop natives ship in

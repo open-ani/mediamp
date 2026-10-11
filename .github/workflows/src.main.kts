@@ -55,8 +55,11 @@ import io.github.typesafegithub.workflows.domain.Mode
 import io.github.typesafegithub.workflows.domain.Permission
 import io.github.typesafegithub.workflows.domain.RunnerType
 import io.github.typesafegithub.workflows.domain.actions.CustomAction
+import io.github.typesafegithub.workflows.domain.triggers.Cron
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
 import io.github.typesafegithub.workflows.domain.triggers.Push
+import io.github.typesafegithub.workflows.domain.triggers.Schedule
+import io.github.typesafegithub.workflows.domain.triggers.WorkflowDispatch
 import io.github.typesafegithub.workflows.dsl.JobBuilder
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.GitHubContext
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.SecretsContext
@@ -324,6 +327,15 @@ sealed class Runner(
         labels = setOf("self-hosted", "Windows", "X64"),
     )
 
+    // Optimus laptop for the GPU render matrix (docs/gpu-test-runner.md).
+    object SelfHostedWindowsHybridGpu : SelfHosted(
+        id = "self-hosted-windows-gpu-hybrid",
+        displayName = "Windows x86_64 hybrid GPU (Self-Hosted)",
+        os = OS.WINDOWS,
+        arch = Arch.X64,
+        labels = setOf("self-hosted", "Windows", "X64", "gpu-hybrid"),
+    )
+
     object SelfHostedMacOS15 : SelfHosted(
         id = "self-hosted-macos-15",
         displayName = "macOS 15 AArch64 (Self-Hosted)",
@@ -495,6 +507,68 @@ workflow(
             outputs = BuildJobOutputs(),
             block = getBuildJobBody(matrix),
         )
+    }
+}
+
+// GPU 测试机 (双显卡笔记本, docs/gpu-test-runner.md): 只跑渲染路径矩阵.
+// 没有 push / pull_request 触发, fork 的 PR 代码永远不会在这台机器上执行.
+val gpuRenderMatrixInstance = MatrixInstance(
+    runner = Runner.SelfHostedWindowsHybridGpu,
+    uploadApk = false,
+    composeResourceTriple = "windows-x64",
+    uploadDesktopInstallers = false,
+    ffmpegBuildVariant = "windows",
+    mpvBuildVariant = "windows",
+    extraGradleArgs = listOf(
+        "-P$ANI_ANDROID_ABIS=x86_64",
+        "-Pmediamp.mpv.test.required=true",
+    ),
+    buildAllAndroidAbis = false,
+    // 一台普通的 Windows 笔记本: 和托管 runner 一样由 workflow 安装 MSYS2
+    installNativeDeps = true,
+    gradleParallel = false,
+)
+
+workflow(
+    name = "GPU Render Matrix",
+    on = listOf(
+        WorkflowDispatch(
+            inputs = mapOf(
+                "tier" to WorkflowDispatch.Input(
+                    description = "Highest render path scenario tier to run",
+                    required = true,
+                    type = WorkflowDispatch.Type.Choice,
+                    options = listOf("ci", "gpu", "hybrid"),
+                    default = "hybrid",
+                ),
+            ),
+        ),
+        Schedule(listOf(Cron("0 18 * * *"))), // 02:00 UTC+8
+    ),
+    // 只有一台机器: 排队, 不并发也不取消正在跑的
+    concurrency = Concurrency(group = "gpu-render-matrix", cancelInProgress = false),
+    sourceFile = __FILE__,
+    targetFileName = "gpu-render-matrix.yml",
+    consistencyCheckJobConfig = ConsistencyCheckJobConfig.Disabled,
+) {
+    val matrix = gpuRenderMatrixInstance
+    job(
+        id = "render_path_matrix",
+        name = "Render path matrix (${matrix.name})",
+        runsOn = RunnerType.Labelled(matrix.runsOn),
+        permissions = mapOf(
+            Permission.Actions to Mode.Write, // Upload artifacts
+        ),
+        `if` = expr { github.isAnimekoRepository },
+    ) {
+        uses(action = Checkout(submodules_Untyped = "recursive", lfs = true))
+        with(WithMatrix(matrix)) {
+            installJbr21()
+            installDependencies()
+            setupGradle()
+            // Scheduled runs have no inputs.
+            renderPathMatrix(tier = expr("inputs.tier || 'hybrid'"), strict = true, continueOnError = false)
+        }
     }
 }
 
@@ -1063,17 +1137,27 @@ class WithMatrix(
     }
 
     /**
-     * 渲染路径矩阵: 每个 Skiko 渲染后端各起一个 JVM, 用真实 Compose 窗口播放已知颜色的视频并截屏校验.
+     * 渲染路径矩阵: 每个场景各起一个 JVM, 用真实 Compose 窗口播放已知颜色的视频并截屏校验.
      * 结果表写进 job summary, 截图作为 artifact 上传.
-     * GitHub 的 Windows runner 没有 GPU, 请求的后端多半会被 Skiko 回退, 表里写明实际落到的路径.
-     * 结果稳定之前不阻塞构建.
+     * GitHub 的 Windows runner 没有 GPU, 只跑 ci 档的场景; 请求的后端多半会被 Skiko 回退, 表里写明实际落到的路径.
+     * 托管 runner 上结果稳定之前不阻塞构建; GPU 测试机 ([gpuRenderMatrixInstance]) 以 strict 模式跑全部场景.
      */
-    fun JobBuilder<*>.renderPathMatrix() {
+    fun JobBuilder<*>.renderPathMatrix(
+        tier: String? = null,
+        strict: Boolean = false,
+        continueOnError: Boolean = true,
+    ) {
         if (!matrix.isWindows || !matrix.runTests || matrix.mpvBuildVariant == null) return
         runGradle(
             name = "Render path matrix",
-            tasks = arrayOf("--continue", ":mediamp-mpv:renderPathMatrix"),
-            continueOnError = true,
+            tasks = listOfNotNull(
+                "--continue",
+                // 预引号: PowerShell 会把未引号的 -Pa.b=c 分词拆坏
+                tier?.let { "\"-Pmediamp.mpv.renderpath.tier=$it\"" },
+                "\"-Pmediamp.mpv.renderpath.strict=true\"".takeIf { strict },
+                ":mediamp-mpv:renderPathMatrix",
+            ).toTypedArray(),
+            continueOnError = true.takeIf { continueOnError },
         )
         uses(
             name = "Upload render path matrix",
