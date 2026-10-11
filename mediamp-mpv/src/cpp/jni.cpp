@@ -208,6 +208,8 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCreateRenderContextMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nDestroyRenderContextMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong mtl_device_ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
+	JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameMacos)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
@@ -657,6 +659,15 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigMacos)(JNIEnv *env, jclas
     auto renderer = get_renderer(ptr);
     return renderer && renderer->set_surface_config(width, height, mtl_device_ptr) ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height) try {
+    auto renderer = get_renderer(ptr);
+    return renderer && renderer->set_readback_surface_config(width, height) ? JNI_TRUE : JNI_FALSE;
+} JNI_CATCH(JNI_FALSE)
+
+JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameMacos)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height) try {
+    return copy_latest_frame(ptr, dest_addr, width, height);
+} JNI_CATCH(0)
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv *env, jclass clazz, jlong ptr) try {
     return frame_state(ptr);

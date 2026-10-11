@@ -209,6 +209,9 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.BGRA_8888
     override val rendererName: String get() = "Metal"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaMetalInterop(layerRedrawer)
+
+    // Without a Metal device (Skiko's software redrawers) the same producer serves CPU frames.
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer = MacosSurfaceConsumer(handlePtr)
 }
 
 @OptIn(InternalMediampApi::class)

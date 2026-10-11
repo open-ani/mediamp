@@ -30,8 +30,9 @@ namespace mediampv {
 // requests are posted under mutex_ and wake the thread. A resize retires the current
 // ring instead of freeing it: the consumer may still be sampling it until it re-wrapped
 // the new generation and acked (ack_retired_buffers). Only one retired generation is
-// kept, so a further resize waits for that ack. CPU readback consumers (D3D11 only)
-// never hold ring textures, so there a resize frees the old ring immediately.
+// kept, so a further resize waits for that ack. CPU readback consumers (D3D11, macOS)
+// never hold ring textures, so a reconfig to or within readback frees the old ring
+// immediately.
 //
 // Why 3 buffers: the render thread writes (latest+1)%3 while Skia may still have
 // sampling of both the published latest and the previous frame in flight on its own
@@ -107,7 +108,7 @@ protected:
     // GPU (consumers sample it right after publication). Unlocked, render thread.
     virtual bool render_into(const Buffer &buffer) = 0;
 
-    // CPU readback (only D3D11 supports it): set up after a ring allocation, copy a
+    // CPU readback (D3D11 and macOS support it): set up after a ring allocation, copy a
     // rendered buffer into system memory (unlocked), publish that copy (locked), release.
     virtual bool setup_readback_locked() { return false; }
     virtual bool read_back(const Buffer &buffer) { return false; }
@@ -314,9 +315,12 @@ private:
             return false;
         }
 
-        if (buffers_allocated_ && cpu_readback_) {
+        if (buffers_allocated_ && (cpu_readback_ || cpu_readback)) {
             // A readback consumer never references ring textures (and never acks): free
-            // the old ring now; it keeps drawing its last CPU copy meanwhile.
+            // the old ring now; it keeps drawing its last CPU copy meanwhile. The same
+            // holds when a GPU consumer hands over to readback (macOS, Skiko leaving
+            // Metal): it dropped every wrap before asking, and nothing would ack a
+            // retired generation, which would block every later reconfig.
             destroy_ring(buffers_);
         } else if (buffers_allocated_) {
             for (int i = 0; i < kBufferCount; ++i) {

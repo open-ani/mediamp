@@ -18,6 +18,10 @@
 // cost the video pipeline nothing user-visible: during a resize the consumer keeps
 // drawing the previous generation (kept alive until acked), and swaps to the new ring
 // the first time it observes a frame in it.
+//
+// Consumers without a Metal device (Skiko's software redrawers, after it fell back from
+// Metal) take the CPU readback mode instead: the render thread also copies each frame
+// out of its IOSurface into system memory, as RGBA, for copy_latest_frame.
 
 #ifdef __APPLE__
 
@@ -35,6 +39,9 @@
 #include <ImageIO/ImageIO.h>
 
 #include <dlfcn.h>
+
+#include <cstring>
+#include <vector>
 
 #include <mpv/client.h>
 #include <mpv/render.h>
@@ -78,6 +85,10 @@ public:
 
     bool create();
 
+    bool set_readback_surface_config(int width, int height) override {
+        return request_config(width, height, 0, true);
+    }
+    uint64_t copy_latest_frame(void *dest, int width, int height) override;
     bool save_surface_png(const char *path) override;
     bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
 
@@ -89,7 +100,8 @@ protected:
     }
     void on_thread_exit() override { CGLSetCurrentContext(nullptr); }
     void after_shutdown() override;
-    // MTLTextures are created on the consumer-provided MTLDevice (0 = system default).
+    // MTLTextures are created on the consumer-provided MTLDevice (0 = system default,
+    // or none when the system has no Metal device).
     bool prepare_device_locked(int64_t consumer_device, bool changed) override;
     void release_device_locked() override { mtl_device_ = nil; }
     bool allocate_buffer(macos_buffer &buffer, int width, int height) override;
@@ -98,10 +110,21 @@ protected:
         return (int64_t) (uintptr_t) buffer.mtl_texture;
     }
     bool render_into(const macos_buffer &buffer) override;
+    // The IOSurfaces are CPU-mappable, so readback needs no staging resources.
+    bool setup_readback_locked() override { return true; }
+    bool read_back(const macos_buffer &buffer) override;
+    void publish_readback_locked() override { readback_scratch_.swap(readback_latest_); }
+    void release_readback_locked() override {
+        std::vector<uint8_t>().swap(readback_scratch_);
+        std::vector<uint8_t>().swap(readback_latest_);
+    }
 
 private:
     CGLContextObj cgl_context_ = nullptr;
     id<MTLDevice> mtl_device_ = nil;  // strong (ARC)
+    // CPU readback: the render thread owns readback_scratch_; readback_latest_ is swapped
+    // in and copied out under mutex_.
+    std::vector<uint8_t> readback_scratch_, readback_latest_;
 };
 
 bool macos_renderer::create() {
@@ -174,10 +197,15 @@ void macos_renderer::after_shutdown() {
 }
 
 bool macos_renderer::prepare_device_locked(int64_t consumer_device, bool) {
-    mtl_device_ = consumer_device != 0
-        ? (__bridge id<MTLDevice>) (void *) (uintptr_t) consumer_device
-        : MTLCreateSystemDefaultDevice();
-    return mtl_device_ != nil;
+    if (consumer_device != 0) {
+        mtl_device_ = (__bridge id<MTLDevice>) (void *) (uintptr_t) consumer_device;
+        return mtl_device_ != nil;
+    }
+    // A consumer-less ring (CPU readback, headless capture) never samples the
+    // MTLTextures, and Skiko may have left Metal precisely because the system has no
+    // usable Metal device: go without them then.
+    mtl_device_ = MTLCreateSystemDefaultDevice();
+    return true;
 }
 
 bool macos_renderer::allocate_buffer(macos_buffer &buffer, int width, int height) {
@@ -221,28 +249,31 @@ bool macos_renderer::allocate_buffer(macos_buffer &buffer, int width, int height
         return false;
     }
 
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                     width:(NSUInteger) width
-                                    height:(NSUInteger) height
-                                 mipmapped:NO];
-    descriptor.usage = MTLTextureUsageShaderRead;
-    descriptor.storageMode = MTLStorageModeShared;
-    id<MTLTexture> metal_texture = [mtl_device_ newTextureWithDescriptor:descriptor
-                                                               iosurface:surface
-                                                                   plane:0];
-    if (!metal_texture) {
-        LOG(&owner_, LOG_LEVEL_ERROR, "newTextureWithDescriptor:iosurface: failed");
-        glDeleteFramebuffers(1, &fbo);
-        glDeleteTextures(1, &texture);
-        CFRelease(surface);
-        return false;
+    id<MTLTexture> metal_texture = nil;
+    if (mtl_device_) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:(NSUInteger) width
+                                        height:(NSUInteger) height
+                                     mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModeShared;
+        metal_texture = [mtl_device_ newTextureWithDescriptor:descriptor
+                                                    iosurface:surface
+                                                        plane:0];
+        if (!metal_texture) {
+            LOG(&owner_, LOG_LEVEL_ERROR, "newTextureWithDescriptor:iosurface: failed");
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteTextures(1, &texture);
+            CFRelease(surface);
+            return false;
+        }
     }
 
     buffer.io_surface = (void *) surface;
     buffer.texture = texture;
     buffer.fbo = fbo;
-    buffer.mtl_texture = (void *) CFBridgingRetain(metal_texture);
+    buffer.mtl_texture = metal_texture ? (void *) CFBridgingRetain(metal_texture) : nullptr;
     return true;
 }
 
@@ -280,6 +311,49 @@ bool macos_renderer::render_into(const macos_buffer &buffer) {
     // finish guarantees visibility. Runs on the render thread, so it never blocks UI.
     glFinish();
     return render_result >= 0;
+}
+
+// Render thread, unlocked: render_into already waited for the GPU (glFinish), so the
+// IOSurface holds the complete frame. Copied out as RGBA8, top-down, alpha opaque.
+bool macos_renderer::read_back(const macos_buffer &buffer) {
+    auto surface = (IOSurfaceRef) buffer.io_surface;
+    if (!surface) return false;
+    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "read_back: IOSurfaceLock failed");
+        return false;
+    }
+    const auto *base = (const uint8_t *) IOSurfaceGetBaseAddress(surface);
+    const size_t bpr = IOSurfaceGetBytesPerRow(surface);
+    const size_t width = (size_t) buffer_width_;
+    const size_t height = (size_t) buffer_height_;
+    readback_scratch_.resize(width * height * 4);
+    for (size_t y = 0; y < height; ++y) {
+        const auto *src = (const uint32_t *) (base + y * bpr);
+        auto *dst = (uint32_t *) (readback_scratch_.data() + y * width * 4);
+        // BGRA bytes read as a little-endian word are 0xAARRGGBB; RGBA bytes are
+        // 0xAABBGGRR: swap the red and blue bytes.
+        for (size_t x = 0; x < width; ++x) {
+            const uint32_t pixel = src[x];
+            dst[x] = 0xFF000000u | (pixel & 0x0000FF00u) |
+                ((pixel >> 16) & 0xFFu) | ((pixel & 0xFFu) << 16);
+        }
+    }
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+    return true;
+}
+
+uint64_t macos_renderer::copy_latest_frame(void *dest, int width, int height) {
+    if (!dest || width <= 0 || height <= 0) return 0;
+    std::lock_guard<std::mutex> guard(mutex_);
+    // latest_index_ is reset on every reconfig and set again only after a frame of the
+    // new size was read back, so a published frame always has the buffer size.
+    if (!cpu_readback_ || latest_index_ < 0 || width != buffer_width_ || height != buffer_height_) {
+        return 0;
+    }
+    const size_t size = (size_t) width * height * 4;
+    if (readback_latest_.size() < size) return 0;
+    std::memcpy(dest, readback_latest_.data(), size);
+    return frame_state();
 }
 
 // Copies the latest rendered frame (BGRA IOSurface) into ARGB_8888 ints. BGRA words

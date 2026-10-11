@@ -32,6 +32,17 @@ external fun nDestroyRenderContextMacos(ptr: Long): Boolean
 external fun nSetSurfaceConfigMacos(ptr: Long, width: Int, height: Int, mtlDevicePtr: Long): Boolean
 
 /**
+ * [nSetSurfaceConfigMacos] for consumers without a Metal device: the render thread also
+ * copies every frame to system memory, taken with [nCopyLatestFrameMacos].
+ */
+@InternalMediampApi
+external fun nSetReadbackSurfaceConfigMacos(ptr: Long, width: Int, height: Int): Boolean
+
+/** macOS readback equivalent of [nCopyLatestFrameWindowsOpenGL]. */
+@InternalMediampApi
+external fun nCopyLatestFrameMacos(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
+/**
  * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
  * height(14) | serial(16). Any change means a new frame or a new buffer ring.
  */
