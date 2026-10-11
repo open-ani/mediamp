@@ -15,6 +15,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.mpv.internal.MpvBackendChange
+import org.openani.mediamp.mpv.internal.MpvBackendSelection
 import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
@@ -55,6 +57,7 @@ actual class MpvMediampPlayer(
 
     @Volatile
     private var rendering: Rendering? = null
+    private val backendSelection = MpvBackendSelection()
     internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
     private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
     internal val renderContextLifecycle: MpvRenderContextLifecycle? get() = rendering?.lifecycle
@@ -74,8 +77,7 @@ actual class MpvMediampPlayer(
     private fun attachBackend(backend: MpvSurfaceBackend) {
         rendering?.let {
             check(it.backend === backend) {
-                "Skiko changed the mpv surface backend from ${it.backend.rendererName} to ${backend.rendererName}. " +
-                    "Recreate the player to use the new renderer."
+                "Attaching ${backend.rendererName} over ${it.backend.rendererName}; detach the current backend first"
             }
             return
         }
@@ -99,6 +101,15 @@ actual class MpvMediampPlayer(
         renderContextBecameReady()
     }
 
+    /** Releases the current backend's consumer and producer; see [MpvBackendChange.REPLACE]. */
+    private fun detachBackend() {
+        val current = rendering ?: return
+        rendering = null
+        current.surface.release()
+        current.lifecycle.detach()
+        current.backend.destroyRenderContext(handle.ptr)
+    }
+
     /** Explicitly creates a windowless render context for headless capture. Idempotent. */
     internal fun createRenderContext(): Boolean {
         if (surfaceTeardownStarted) return false
@@ -112,10 +123,62 @@ actual class MpvMediampPlayer(
     override fun ensureRenderContextForLoad(): Boolean =
         !surfaceTeardownStarted && (renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend())
 
-    /** Returns null until Skiko has chosen its redrawer; loading waits for that selection. */
+    /**
+     * The backend for Skiko's live redrawer, or null while it has none. On Windows this
+     * follows the redrawer, which Skiko replaces whenever one fails (including on its first
+     * frame); elsewhere it is fixed.
+     */
+    internal fun surfaceBackendFor(layerRedrawer: SkiaLayerRedrawer): MpvSurfaceBackend? =
+        currentSurfaceBackend(layerRedrawer)?.let(backendSelection::resolve)
+
+    /** Whether the current backend is the one for Skiko's live redrawer, so its interop may be drawn with. */
+    internal fun rendersFor(layerRedrawer: SkiaLayerRedrawer): Boolean {
+        val current = rendering?.backend ?: return false
+        return current === surfaceBackendFor(layerRedrawer)
+    }
+
+    /**
+     * Selects the backend for Skiko's live redrawer — again whenever Skiko replaced it — and
+     * returns its interop. Returns null until Skiko has chosen its redrawer (loading waits for
+     * that selection), and when the backend would have to change during playback
+     * ([MpvBackendChange.REFUSE_DURING_PLAYBACK]).
+     */
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
         if (surfaceTeardownStarted) return null
-        val backend = currentSurfaceBackend(layerRedrawer) ?: return null
+        val backend = surfaceBackendFor(layerRedrawer) ?: return null
+        val current = rendering?.backend
+        when (MpvBackendSelection.change(current, backend, hasActivePlaybackSession())) {
+            MpvBackendChange.KEEP -> {}
+            MpvBackendChange.REPLACE -> {
+                MPVLog.info(
+                    handle.ptr,
+                    "switching the mpv render path from ${current?.rendererName} to ${backend.rendererName}",
+                )
+                detachBackend()
+            }
+
+            MpvBackendChange.REFUSE_DURING_PLAYBACK -> {
+                MPVLog.error(
+                    handle.ptr,
+                    "Skiko switched its renderer during playback; the ${current?.rendererName} render path " +
+                        "cannot follow it to ${backend.rendererName} without reopening the media, video stays black",
+                )
+                return null
+            }
+        }
+        // Without a producer vo=libmpv cannot show video at all, so a producer that cannot come
+        // up on this machine hands over to its fallback before it is attached, which is when a
+        // load waiting for the selection may start. Probed only with no other producer
+        // installed: native creation reports success while any renderer exists.
+        if (MpvBackendSelection.fallbackWhenUnavailable(backend) != null && !backend.createRenderContext(handle.ptr)) {
+            backendSelection.markUnavailable(backend)?.let { fallback ->
+                MPVLog.warn(
+                    handle.ptr,
+                    "${backend.rendererName} render context unavailable; using ${fallback.rendererName} instead",
+                )
+                return createSkiaInterop(layerRedrawer)
+            }
+        }
         val interop = backend.createSkiaInterop(layerRedrawer)
         if (rendering == null) {
             // Before attachBackend: eager lifecycles create the producer device there.
