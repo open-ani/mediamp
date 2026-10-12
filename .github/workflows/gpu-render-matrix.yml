@@ -58,45 +58,50 @@ jobs:
     - id: 'step-2'
       run: 'echo "jvm.toolchain.version=21" >> local.properties'
     - id: 'step-3'
+      name: 'Find MSYS2 ucrt64 for mpv'
+      run: |-
+        $pacman = 'C:\msys64\usr\bin\pacman.exe'
+        $found = $false
+        if (Test-Path $pacman) {
+            # Missing packages are reported on stderr.
+            & $pacman -Q @('git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross' -split ' ') | Out-Null
+            $found = $LASTEXITCODE -eq 0
+        }
+        "found=$("$found".ToLower())" >> $env:GITHUB_OUTPUT
+        if (-not $found) {
+            Write-Host "::notice::C:\msys64 is missing or lacks some of: git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross. This run installs a temporary MSYS2; to build with C:\msys64 instead, install them there once: pacman -S --needed --noconfirm git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross"
+        }
+        exit 0
+    - id: 'step-4'
       name: 'Setup MSYS2 ucrt64 for mpv'
       uses: 'msys2/setup-msys2@v2'
       with:
         msystem: 'UCRT64'
         update: 'true'
-        install: |-
-          git
-          mingw-w64-ucrt-x86_64-ca-certificates
-          mingw-w64-ucrt-x86_64-gcc
-          mingw-w64-ucrt-x86_64-libass
-          mingw-w64-ucrt-x86_64-libplacebo
-          mingw-w64-ucrt-x86_64-meson
-          mingw-w64-ucrt-x86_64-ninja
-          mingw-w64-ucrt-x86_64-pkgconf
-          mingw-w64-ucrt-x86_64-python-certifi
-          mingw-w64-ucrt-x86_64-python
-          mingw-w64-ucrt-x86_64-shaderc
-          mingw-w64-ucrt-x86_64-spirv-cross
-    - id: 'step-4'
+        install: 'git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross'
+      if: 'steps.step-3.outputs.found != ''true'''
+    - id: 'step-5'
       name: 'Configure MSYS2 root'
       run: |-
-        $msys2Dir = '${{ steps.step-3.outputs.msys2-location }}'.Replace('\', '/')
+        $msys2Dir = '${{ steps.step-4.outputs.msys2-location }}'.Replace('\', '/')
         "msys2.dir=$msys2Dir" >> local.properties
-    - id: 'step-5'
+      if: 'steps.step-3.outputs.found != ''true'''
+    - id: 'step-6'
       name: 'Setup Gradle'
       uses: 'gradle/actions/setup-gradle@v3'
       with:
         cache-disabled: 'true'
-    - id: 'step-6'
+    - id: 'step-7'
       name: 'Clean and download dependencies'
       uses: 'nick-fields/retry@v2'
       with:
         timeout_minutes: '60'
         max_attempts: '3'
         command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-7'
+    - id: 'step-8'
       name: 'Render path matrix'
       run: './gradlew --continue "-Pmediamp.mpv.renderpath.tier=${{ inputs.tier || ''hybrid'' }}" "-Pmediamp.mpv.renderpath.strict=true" :mediamp-mpv:renderPathMatrix "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-8'
+    - id: 'step-9'
       name: 'Upload render path matrix'
       uses: 'actions/upload-artifact@v4'
       with:

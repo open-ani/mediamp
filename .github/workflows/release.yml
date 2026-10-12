@@ -92,42 +92,44 @@ jobs:
     - id: 'step-4'
       run: 'echo "jvm.toolchain.version=21" >> local.properties'
     - id: 'step-5'
+      name: 'Find MSYS2 ucrt64 for mpv'
+      run: |-
+        $pacman = 'C:\msys64\usr\bin\pacman.exe'
+        $found = $false
+        if (Test-Path $pacman) {
+            # Missing packages are reported on stderr.
+            & $pacman -Q @('git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross' -split ' ') | Out-Null
+            $found = $LASTEXITCODE -eq 0
+        }
+        "found=$("$found".ToLower())" >> $env:GITHUB_OUTPUT
+        exit 0
+    - id: 'step-6'
       name: 'Setup MSYS2 ucrt64 for mpv'
       uses: 'msys2/setup-msys2@v2'
       with:
         msystem: 'UCRT64'
         update: 'true'
-        install: |-
-          git
-          mingw-w64-ucrt-x86_64-ca-certificates
-          mingw-w64-ucrt-x86_64-gcc
-          mingw-w64-ucrt-x86_64-libass
-          mingw-w64-ucrt-x86_64-libplacebo
-          mingw-w64-ucrt-x86_64-meson
-          mingw-w64-ucrt-x86_64-ninja
-          mingw-w64-ucrt-x86_64-pkgconf
-          mingw-w64-ucrt-x86_64-python-certifi
-          mingw-w64-ucrt-x86_64-python
-          mingw-w64-ucrt-x86_64-shaderc
-          mingw-w64-ucrt-x86_64-spirv-cross
-    - id: 'step-6'
+        install: 'git mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-libplacebo mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python-certifi mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-cross'
+      if: 'steps.step-5.outputs.found != ''true'''
+    - id: 'step-7'
       name: 'Configure MSYS2 root'
       run: |-
-        $msys2Dir = '${{ steps.step-5.outputs.msys2-location }}'.Replace('\', '/')
+        $msys2Dir = '${{ steps.step-6.outputs.msys2-location }}'.Replace('\', '/')
         "msys2.dir=$msys2Dir" >> local.properties
-    - id: 'step-7'
+      if: 'steps.step-5.outputs.found != ''true'''
+    - id: 'step-8'
       name: 'Setup Gradle'
       uses: 'gradle/actions/setup-gradle@v3'
       with:
         cache-disabled: 'true'
-    - id: 'step-8'
+    - id: 'step-9'
       name: 'Clean and download dependencies'
       uses: 'nick-fields/retry@v2'
       with:
         timeout_minutes: '60'
         max_attempts: '3'
         command: './gradlew "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-9'
+    - id: 'step-10'
       name: 'Update Release Version Name'
       env:
         GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
@@ -135,10 +137,10 @@ jobs:
         CI_RELEASE_ID: '${{ needs.create-release.outputs.id }}'
         CI_TAG: '${{ steps.step-1.outputs.tag }}'
       run: './gradlew updateReleaseVersionNameFromGit "-DCI_TAG=${{ steps.step-1.outputs.tag }}" "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-10'
+    - id: 'step-11'
       name: 'Build FFmpeg runtime jar'
       run: './gradlew :mediamp-ffmpeg:ffmpegRuntimeJarWindowsX64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-11'
+    - id: 'step-12'
       name: 'Upload FFmpeg runtime jar'
       uses: 'actions/upload-artifact@v4'
       with:
@@ -146,10 +148,10 @@ jobs:
         path: 'mediamp-ffmpeg/build/libs/mediamp-ffmpeg-runtime-*-windows-x64.jar'
         if-no-files-found: 'error'
         overwrite: 'true'
-    - id: 'step-12'
+    - id: 'step-13'
       name: 'Build mpv runtime jar'
       run: './gradlew :mediamp-mpv:mpvRuntimeJarWindowsX64 "--scan" "--no-configuration-cache" "-Porg.gradle.daemon.idletimeout=60000" "-Pkotlin.native.ignoreDisabledTargets=true" "-Dfile.encoding=UTF-8" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBoost_INCLUDE_DIR=C:/vcpkg/installed/x64-windows/include" "-Dorg.gradle.jvmargs=-Xmx4g" "-Dkotlin.daemon.jvm.options=-Xmx4g" "-Pani.android.abis=x86_64" "-Pmediamp.mpv.test.required=true" "-Pmediamp.ffmpeg.buildvariant=windows" "-Pmediamp.mpv.buildvariant=windows"'
-    - id: 'step-13'
+    - id: 'step-14'
       name: 'Upload mpv runtime jar'
       uses: 'actions/upload-artifact@v4'
       with:
