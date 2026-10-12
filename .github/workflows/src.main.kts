@@ -521,8 +521,9 @@ val gpuRenderMatrixInstance = MatrixInstance(
         "-Pmediamp.mpv.test.required=true",
     ),
     buildAllAndroidAbis = false,
-    // An ordinary Windows laptop: the workflow installs MSYS2, as on the GitHub-hosted runners.
-    installNativeDeps = true,
+    // MSYS2 is preinstalled at C:\msys64, the build's default (ci-helper/install-gpu-runner-msys2.ps1):
+    // installing it on every run failed whenever a mirror stalled on the laptop's connection.
+    installNativeDeps = false,
     gradleParallel = false,
 )
 
@@ -1065,7 +1066,7 @@ class WithMatrix(
                 ),
             )
         }
-        if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows")) {
+        if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows") && matrix.installNativeDeps) {
             // mpv 的 Windows 构建走 MSYS2 UCRT64 (packages 与 MpvSupport.windowsTarget 对齐)
             val msys2 = uses(
                 name = "Setup MSYS2 ucrt64 for mpv",

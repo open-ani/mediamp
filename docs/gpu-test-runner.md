@@ -11,7 +11,8 @@ hybrid-GPU adapter selection and real drivers are exercised. This guide sets it 
 - Current drivers from the GPU vendors, not only what Windows Update installs: the results
   should reflect what users run.
 - Git for Windows with Git LFS, and PowerShell 7 (`pwsh`, the default shell of the
-  workflow's steps). The workflow installs MSYS2, the JDK and Gradle itself.
+  workflow's steps). The workflow installs the JDK and Gradle itself; MSYS2 is installed once
+  on the machine (below).
 - The first run builds FFmpeg and mpv from source (tens of minutes); the local Gradle build
   cache in the runner account's `~/.gradle` makes later runs fast. Leave it in place.
 
@@ -24,6 +25,21 @@ hybrid-GPU adapter selection and real drivers are exercised. This guide sets it 
    Render Matrix workflow asks for that label, and any runner carrying it takes those jobs:
    put it on the hybrid laptop only.
 3. When `config.cmd` asks whether to run the runner as a service, answer **no**.
+
+## Install MSYS2
+
+The FFmpeg, dav1d and mpv builds compile with MSYS2's UCRT64 toolchain. GitHub-hosted runners
+install it fresh on every run; on this machine that failed whenever an MSYS2 mirror stalled,
+so it is installed once instead, at `C:\msys64`, where the build looks by default:
+
+```powershell
+$env:https_proxy = 'http://127.0.0.1:<port>'  # if the machine needs a proxy
+powershell -ExecutionPolicy Bypass -File ci-helper\install-gpu-runner-msys2.ps1
+```
+
+Run it while the runner is idle: it stops every process using MSYS2. Run it again now and then
+to update the packages, which on hosted runners are always the latest. A package the build
+needs but the script does not install is installed by the build itself, during the run.
 
 ## Run it in a desktop session, not as a service
 
