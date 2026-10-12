@@ -20,6 +20,12 @@ import org.jetbrains.skia.Image
  */
 internal interface MpvSurfaceConsumer {
     /**
+     * What Compose draws the frames with right now: [MpvSurfaceBackend.rendererName] of the
+     * backend whose frames this consumer takes, which an adapting consumer may change.
+     */
+    val rendererName: String
+
+    /**
      * Asks the native render thread to size its render target to [width] x [height]
      * (physical pixels, normally the composable size — mpv then scales, letterboxes
      * and renders subtitles at display resolution). Asynchronous and cheap; until the

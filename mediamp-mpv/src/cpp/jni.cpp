@@ -185,6 +185,7 @@ extern "C" {
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetReadbackSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong dest_addr, jint width, jint height);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr);
+	JNIEXPORT jboolean JNICALL FN_DESKTOP(nCanShareFramesD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong skiko_device_ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
@@ -576,6 +577,11 @@ JNIEXPORT jlong JNICALL FN_DESKTOP(nCopyLatestFrameD3D11)(JNIEnv *env, jclass cl
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nSetSurfaceConfigD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height, jlong skiko_device_ptr) try {
     auto renderer = get_renderer(ptr);
     return renderer && renderer->set_surface_config(width, height, skiko_device_ptr) ? JNI_TRUE : JNI_FALSE;
+} JNI_CATCH(JNI_FALSE)
+
+JNIEXPORT jboolean JNICALL FN_DESKTOP(nCanShareFramesD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jlong skiko_device_ptr) try {
+    auto renderer = get_renderer(ptr);
+    return renderer && renderer->can_share_with(skiko_device_ptr) ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
 JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr) try {

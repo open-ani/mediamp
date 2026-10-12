@@ -72,6 +72,8 @@ internal class MacosSurfaceConsumer(private val handlePtr: Long) : MpvSurfaceCon
     private var requestedWidth = 0
     private var requestedHeight = 0
 
+    override val rendererName: String get() = (active ?: ring).rendererName
+
     private fun consumerFor(devicePtr: Long): MpvSurfaceConsumer = if (devicePtr == 0L) readback else ring
 
     override fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
