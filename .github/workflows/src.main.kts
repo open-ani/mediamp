@@ -521,9 +521,6 @@ val gpuRenderMatrixInstance = MatrixInstance(
         "-Pmediamp.mpv.test.required=true",
     ),
     buildAllAndroidAbis = false,
-    // MSYS2 is preinstalled at C:\msys64, the build's default (ci-helper/install-gpu-runner-msys2.ps1):
-    // installing it on every run failed whenever a mirror stalled on the laptop's connection.
-    installNativeDeps = false,
     gradleParallel = false,
 )
 
@@ -1066,10 +1063,58 @@ class WithMatrix(
                 ),
             )
         }
-        if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows") && matrix.installNativeDeps) {
+        if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows")) {
             // mpv 的 Windows 构建走 MSYS2 UCRT64 (packages 与 MpvSupport.windowsTarget 对齐)
+            val packages = listOf(
+                "git",
+                "mingw-w64-ucrt-x86_64-ca-certificates",
+                "mingw-w64-ucrt-x86_64-gcc",
+                "mingw-w64-ucrt-x86_64-libass",
+                "mingw-w64-ucrt-x86_64-libplacebo",
+                "mingw-w64-ucrt-x86_64-meson",
+                "mingw-w64-ucrt-x86_64-ninja",
+                "mingw-w64-ucrt-x86_64-pkgconf",
+                "mingw-w64-ucrt-x86_64-python-certifi",
+                "mingw-w64-ucrt-x86_64-python",
+                "mingw-w64-ucrt-x86_64-shaderc",
+                "mingw-w64-ucrt-x86_64-spirv-cross",
+            ).joinToString(" ")
+            // A machine whose own MSYS2 at C:\msys64 (the build's default msys2.dir) already has these
+            // packages builds with it: installing a fresh MSYS2 per run fails whenever a mirror stalls,
+            // as on the GPU laptop. GitHub's image ships C:\msys64 without them, so hosted runners
+            // still install one. FFmpeg and dav1d add their own packages in the build either way.
+            val existingMsys2 = run(
+                name = "Find MSYS2 ucrt64 for mpv",
+                command = buildList {
+                    add(
+                        $$"""
+                        $pacman = 'C:\msys64\usr\bin\pacman.exe'
+                        $found = $false
+                        if (Test-Path $pacman) {
+                            # Missing packages are reported on stderr.
+                            & $pacman -Q @('$${packages}' -split ' ') | Out-Null
+                            $found = $LASTEXITCODE -eq 0
+                        }
+                        "found=$("$found".ToLower())" >> $env:GITHUB_OUTPUT
+                        """.trimIndent(),
+                    )
+                    // Tells whoever maintains the machine how to make the next runs skip the install.
+                    if (matrix.selfHosted) {
+                        add(
+                            $$"""
+                            if (-not $found) {
+                                Write-Host "::notice::C:\msys64 is missing or lacks some of: $${packages}. This run installs a temporary MSYS2; to build with C:\msys64 instead, install them there once: pacman -S --needed --noconfirm $${packages}"
+                            }
+                            """.trimIndent(),
+                        )
+                    }
+                    add("exit 0") // the probe's exit code is not the step's
+                }.joinToString("\n"),
+            )
+            val installMsys2 = "${existingMsys2.outputs["found"]} != 'true'"
             val msys2 = uses(
                 name = "Setup MSYS2 ucrt64 for mpv",
+                `if` = installMsys2,
                 action = CustomAction(
                     actionOwner = "msys2",
                     actionName = "setup-msys2",
@@ -1077,25 +1122,13 @@ class WithMatrix(
                     inputs = mapOf(
                         "msystem" to "UCRT64",
                         "update" to "true",
-                        "install" to """
-                            git
-                            mingw-w64-ucrt-x86_64-ca-certificates
-                            mingw-w64-ucrt-x86_64-gcc
-                            mingw-w64-ucrt-x86_64-libass
-                            mingw-w64-ucrt-x86_64-libplacebo
-                            mingw-w64-ucrt-x86_64-meson
-                            mingw-w64-ucrt-x86_64-ninja
-                            mingw-w64-ucrt-x86_64-pkgconf
-                            mingw-w64-ucrt-x86_64-python-certifi
-                            mingw-w64-ucrt-x86_64-python
-                            mingw-w64-ucrt-x86_64-shaderc
-                            mingw-w64-ucrt-x86_64-spirv-cross
-                        """.trimIndent(),
+                        "install" to packages,
                     ),
                 ),
             )
             run(
                 name = "Configure MSYS2 root",
+                `if` = installMsys2,
                 command = shell(
                     $$"""
                     $msys2Dir = '$${expr { msys2.outputs["msys2-location"] }}'.Replace('\', '/')
