@@ -508,8 +508,7 @@ workflow(
     }
 }
 
-// GPU 测试机 (双显卡笔记本, docs/gpu-test-runner.md): 只跑渲染路径矩阵.
-// 没有 push / pull_request 触发, fork 的 PR 代码永远不会在这台机器上执行.
+// The GPU test machine (a hybrid-GPU laptop, docs/gpu-test-runner.md): runs only the render path matrix.
 val gpuRenderMatrixInstance = MatrixInstance(
     runner = Runner.SelfHostedWindowsHybridGpu,
     uploadApk = false,
@@ -522,7 +521,7 @@ val gpuRenderMatrixInstance = MatrixInstance(
         "-Pmediamp.mpv.test.required=true",
     ),
     buildAllAndroidAbis = false,
-    // 一台普通的 Windows 笔记本: 和托管 runner 一样由 workflow 安装 MSYS2
+    // An ordinary Windows laptop: the workflow installs MSYS2, as on the GitHub-hosted runners.
     installNativeDeps = true,
     gradleParallel = false,
 )
@@ -530,7 +529,7 @@ val gpuRenderMatrixInstance = MatrixInstance(
 workflow(
     name = "GPU Render Matrix",
     on = listOf(
-        // 只有一台机器: 分支只在开了 PR 时跑 (pull_request), 不再为同一个 commit 多跑一次 push
+        // One machine: branches run only once they have a PR (pull_request), so a commit is not run twice.
         Push(branches = listOf("main"), pathsIgnore = listOf("**/*.md")),
         PullRequest(pathsIgnore = listOf("**/*.md")),
         WorkflowDispatch(
@@ -545,7 +544,8 @@ workflow(
             ),
         ),
     ),
-    // 同 Build: PR 的新推送取消它取代的运行; main 的每个 commit 各占一组, 在机器上排队跑完
+    // As in Build: a new push to a PR cancels the run it supersedes; every commit on main gets
+    // its own group and waits for the machine.
     concurrency = Concurrency(
         group = "gpu-render-matrix-" + expr { "github.event_name" } + "-" +
                 expr { "github.ref == 'refs/heads/main' && github.run_id || github.ref" },
@@ -563,12 +563,13 @@ workflow(
         permissions = mapOf(
             Permission.Actions to Mode.Write, // Upload artifacts
         ),
-        // 这台 runner 是登录着桌面的个人电脑: fork 的 PR 不在上面跑
+        // The runner is a personal machine with a signed-in desktop: never run pull requests from forks.
         `if` = expr {
             "${github.isAnimekoRepository} && (!(${github.isPullRequest}) || " +
                 "github.event.pull_request.head.repo.full_name == github.repository)"
         },
-        // 不启动机主全局配置里的 fsmonitor daemon: 它们活得比 job 久, 占着 job 的目录
+        // Keep the machine's global git config from starting fsmonitor daemons: they outlive the
+        // job and hold its directories open.
         env = mapOf(
             "GIT_CONFIG_COUNT" to "1",
             "GIT_CONFIG_KEY_0" to "core.fsmonitor",
@@ -1151,10 +1152,13 @@ class WithMatrix(
     }
 
     /**
-     * 渲染路径矩阵: 每个场景各起一个 JVM, 用真实 Compose 窗口播放已知颜色的视频并截屏校验.
-     * 结果表写进 job summary, 截图作为 artifact 上传.
-     * GitHub 的 Windows runner 没有 GPU, 只跑 ci 档的场景; 请求的后端多半会被 Skiko 回退, 表里写明实际落到的路径.
-     * 托管 runner 上结果稳定之前不阻塞构建; GPU 测试机 ([gpuRenderMatrixInstance]) 以 strict 模式跑全部场景.
+     * Render path matrix: one JVM per scenario plays a clip of known colours in a real Compose
+     * window and checks the captured frames. The result table goes to the job summary, the
+     * captures to an artifact.
+     * GitHub's Windows runners have no GPU and run only the ci tier; Skiko usually falls back from
+     * the requested API there, and the table shows where each scenario actually landed.
+     * Non-blocking on hosted runners until the results are stable; the GPU test machine
+     * ([gpuRenderMatrixInstance]) runs every scenario in strict mode.
      */
     fun JobBuilder<*>.renderPathMatrix(
         tier: String? = null,
@@ -1166,7 +1170,7 @@ class WithMatrix(
             name = "Render path matrix",
             tasks = listOfNotNull(
                 "--continue",
-                // 预引号: PowerShell 会把未引号的 -Pa.b=c 分词拆坏
+                // Pre-quoted: PowerShell splits an unquoted -Pa.b=c into separate arguments.
                 tier?.let { "\"-Pmediamp.mpv.renderpath.tier=$it\"" },
                 "\"-Pmediamp.mpv.renderpath.strict=true\"".takeIf { strict },
                 ":mediamp-mpv:renderPathMatrix",
