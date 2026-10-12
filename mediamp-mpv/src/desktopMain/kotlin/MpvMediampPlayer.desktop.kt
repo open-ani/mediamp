@@ -60,6 +60,9 @@ actual class MpvMediampPlayer(
     private val backendSelection = MpvBackendSelection()
     internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
     private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
+
+    /** What Compose draws the video with right now (see [MpvSurfaceConsumer.rendererName]). UI thread only. */
+    internal val rendererName: String? get() = surfaceRing?.rendererName
     internal val renderContextLifecycle: MpvRenderContextLifecycle? get() = rendering?.lifecycle
 
     /**
