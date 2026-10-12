@@ -10,9 +10,11 @@ package org.openani.mediamp.mpv.utils
 
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skiko.SkiaLayer
+import org.junit.Assume.assumeFalse
 import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
 import org.openani.mediamp.mpv.internal.WindowsOpenGLSurfaceBackend
 import org.openani.mediamp.mpv.internal.windowsSurfaceBackend
+import java.awt.GraphicsEnvironment
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
 import kotlin.test.Test
@@ -108,6 +110,7 @@ class SkiaRendererAccessTest {
 
     @Test
     fun `live Skiko renderer can be resolved and its context read`() {
+        assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
         SwingUtilities.invokeAndWait {
             // The default-argument constructor ABI differs between Skiko versions.
             val constructor = SkiaLayer::class.java.constructors.single {

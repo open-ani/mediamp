@@ -10,10 +10,12 @@ package org.openani.mediamp.mpv
 
 import org.jetbrains.skiko.SkiaLayer
 import org.jetbrains.skiko.GraphicsApi
+import org.junit.Assume.assumeFalse
 import javax.swing.JFrame
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaMetalInterop
 import org.openani.mediamp.mpv.utils.isSkikoMetalRedrawer
+import java.awt.GraphicsEnvironment
 import java.lang.reflect.Proxy
 import javax.swing.SwingUtilities
 import kotlin.test.Test
@@ -54,6 +56,7 @@ class MacosSurfaceBackendTest {
      */
     @Test
     fun `Metal interop reports no device for a non-Metal redrawer instead of throwing`() {
+        assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
         SwingUtilities.invokeAndWait {
             if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
                 val layer = SkiaLayer(renderApi = GraphicsApi.SOFTWARE_COMPAT)
