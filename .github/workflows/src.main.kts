@@ -55,10 +55,8 @@ import io.github.typesafegithub.workflows.domain.Mode
 import io.github.typesafegithub.workflows.domain.Permission
 import io.github.typesafegithub.workflows.domain.RunnerType
 import io.github.typesafegithub.workflows.domain.actions.CustomAction
-import io.github.typesafegithub.workflows.domain.triggers.Cron
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
 import io.github.typesafegithub.workflows.domain.triggers.Push
-import io.github.typesafegithub.workflows.domain.triggers.Schedule
 import io.github.typesafegithub.workflows.domain.triggers.WorkflowDispatch
 import io.github.typesafegithub.workflows.dsl.JobBuilder
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.GitHubContext
@@ -532,6 +530,9 @@ val gpuRenderMatrixInstance = MatrixInstance(
 workflow(
     name = "GPU Render Matrix",
     on = listOf(
+        // 只有一台机器: 分支只在开了 PR 时跑 (pull_request), 不再为同一个 commit 多跑一次 push
+        Push(branches = listOf("main"), pathsIgnore = listOf("**/*.md")),
+        PullRequest(pathsIgnore = listOf("**/*.md")),
         WorkflowDispatch(
             inputs = mapOf(
                 "tier" to WorkflowDispatch.Input(
@@ -543,10 +544,13 @@ workflow(
                 ),
             ),
         ),
-        Schedule(listOf(Cron("0 18 * * *"))), // 02:00 UTC+8
     ),
-    // 只有一台机器: 排队, 不并发也不取消正在跑的
-    concurrency = Concurrency(group = "gpu-render-matrix", cancelInProgress = false),
+    // 同 Build: PR 的新推送取消它取代的运行; main 的每个 commit 各占一组, 在机器上排队跑完
+    concurrency = Concurrency(
+        group = "gpu-render-matrix-" + expr { "github.event_name" } + "-" +
+                expr { "github.ref == 'refs/heads/main' && github.run_id || github.ref" },
+        cancelInProgress = true,
+    ),
     sourceFile = __FILE__,
     targetFileName = "gpu-render-matrix.yml",
     consistencyCheckJobConfig = ConsistencyCheckJobConfig.Disabled,
@@ -559,14 +563,24 @@ workflow(
         permissions = mapOf(
             Permission.Actions to Mode.Write, // Upload artifacts
         ),
-        `if` = expr { github.isAnimekoRepository },
+        // 这台 runner 是登录着桌面的个人电脑: fork 的 PR 不在上面跑
+        `if` = expr {
+            "${github.isAnimekoRepository} && (!(${github.isPullRequest}) || " +
+                "github.event.pull_request.head.repo.full_name == github.repository)"
+        },
+        // 不启动机主全局配置里的 fsmonitor daemon: 它们活得比 job 久, 占着 job 的目录
+        env = mapOf(
+            "GIT_CONFIG_COUNT" to "1",
+            "GIT_CONFIG_KEY_0" to "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0" to "false",
+        ),
     ) {
         uses(action = Checkout(submodules_Untyped = "recursive", lfs = true))
         with(WithMatrix(matrix)) {
             installJbr21()
             installDependencies()
             setupGradle()
-            // Scheduled runs have no inputs.
+            // push and pull_request runs have no inputs.
             renderPathMatrix(tier = expr("inputs.tier || 'hybrid'"), strict = true, continueOnError = false)
         }
     }

@@ -4,6 +4,14 @@
 
 name: 'GPU Render Matrix'
 on:
+  push:
+    branches:
+    - 'main'
+    paths-ignore:
+    - '**/*.md'
+  pull_request:
+    paths-ignore:
+    - '**/*.md'
   workflow_dispatch:
     inputs:
       tier:
@@ -15,11 +23,9 @@ on:
         - 'ci'
         - 'gpu'
         - 'hybrid'
-  schedule:
-  - cron: '0 18 * * *'
 concurrency:
-  group: 'gpu-render-matrix'
-  cancel-in-progress: false
+  group: 'gpu-render-matrix-${{ github.event_name }}-${{ github.ref == ''refs/heads/main'' && github.run_id || github.ref }}'
+  cancel-in-progress: true
 jobs:
   render_path_matrix:
     name: 'Render path matrix (Windows x86_64 hybrid GPU (Self-Hosted))'
@@ -30,7 +36,11 @@ jobs:
     - 'gpu-hybrid'
     permissions:
       actions: 'write'
-    if: '${{ github.repository == ''open-ani/mediamp'' }}'
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: 'core.fsmonitor'
+      GIT_CONFIG_VALUE_0: 'false'
+    if: '${{ github.repository == ''open-ani/mediamp'' && (!(github.event_name == ''pull_request'') || github.event.pull_request.head.repo.full_name == github.repository) }}'
     steps:
     - id: 'step-0'
       uses: 'actions/checkout@v4'
