@@ -257,6 +257,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     // Skiko's D3D12 device.
     override val rendererName: String get() = "D3D12"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaDirectXInterop(layerRedrawer)
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer = D3D11SurfaceConsumer(handlePtr)
 }
 
 /**
@@ -350,6 +351,8 @@ internal class MpvSurfaceRing(
     private var requestedWidth = 0
     private var requestedHeight = 0
     private var requestedDevicePtr = 0L
+
+    override val rendererName: String get() = backend.rendererName
 
     /**
      * Asks the native render thread to size the buffer ring to [width] x [height]
@@ -568,7 +571,11 @@ internal class MpvSurfaceRing(
         closeWraps()
         surfaceContext = null
         // All texture references are dropped, so the render thread may free both
-        // generations immediately; frames go back to being drained.
+        // generations immediately; frames go back to being drained. Without the ack, a
+        // generation retired by a resize this consumer never drew would hold back every
+        // later config, including the one of a consumer taking over (D3D11SurfaceConsumer,
+        // MacosSurfaceConsumer).
+        backend.ackRetiredBuffers(handlePtr)
         backend.setSurfaceConfig(handlePtr, 0, 0, 0L)
         requestedWidth = 0
         requestedHeight = 0

@@ -202,7 +202,7 @@ class RenderPathMatrixTest {
                 val redrawer = SkiaLayerRedrawer(layer).redrawerOrNull
                 result.setProperty("redrawer", redrawer?.javaClass?.simpleName ?: "none")
             }
-            player.ringBackend?.let { result.setProperty("mediampRenderer", it.rendererName) }
+            player.rendererName?.let { result.setProperty("mediampRenderer", it) }
         }
     }
 

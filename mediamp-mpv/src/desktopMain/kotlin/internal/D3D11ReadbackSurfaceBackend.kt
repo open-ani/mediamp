@@ -24,7 +24,8 @@ import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 /**
  * Windows backend for Skiko redrawers that have no D3D12 or OpenGL device to share
  * with: the software redrawers (Skiko's last fallback, e.g. when Direct3D 12 is
- * unavailable on Windows ARM64, over Remote Desktop, or in VMs) and ANGLE.
+ * unavailable on Windows ARM64, over Remote Desktop, or in VMs) and ANGLE. Also the mode
+ * [D3D11SurfaceConsumer] switches to when Skia's D3D12 device is on another adapter.
  *
  * The producer is the regular D3D11 render path (render_d3d11.cpp) on the default
  * adapter, which falls back to WARP, so it works wherever Direct3D 11 does, unlike the

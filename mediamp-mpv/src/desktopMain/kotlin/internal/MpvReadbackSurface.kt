@@ -66,6 +66,8 @@ internal class MpvReadbackSurface(
     private var requestedHeight = 0
     private var configured = false
 
+    override val rendererName: String get() = backend.rendererName
+
     override fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
         if (configured && width == requestedWidth && height == requestedHeight) return true
         if (!backend.setSurfaceConfig(handlePtr, width, height, 0L)) return false

@@ -111,6 +111,15 @@ external fun nCopyLatestFrameD3D11(ptr: Long, destAddr: Long, width: Int, height
 external fun nSetSurfaceConfigD3D11(ptr: Long, width: Int, height: Int, skikoDevicePtr: Long): Boolean
 
 /**
+ * Whether the ring textures of the current render context can be opened on the
+ * ID3D12Device inside [skikoDevicePtr]: only when both devices are on one adapter. When
+ * not, the reason is logged and frames must be taken through
+ * [nSetReadbackSurfaceConfigD3D11]. False without a render context.
+ */
+@InternalMediampApi
+external fun nCanShareFramesD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
+
+/**
  * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
  * height(14) | serial(16). Any change means a new frame or a new buffer ring.
  */
