@@ -398,6 +398,7 @@ public:
     bool set_readback_surface_config(int width, int height) override {
         return request_config(width, height, 0, true);
     }
+    bool can_share_with(int64_t consumer_device) override;
     uint64_t copy_latest_frame(void *dest, int width, int height) override;
     bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
 
@@ -426,6 +427,9 @@ private:
     // mpv_render_context_render.
     ID3D11Device *device_ = nullptr;
     ID3D11DeviceContext *context_ = nullptr;
+    // device_'s adapter, set in create() and constant afterwards (read from the JNI thread).
+    DXGI_ADAPTER_DESC adapter_desc_{};
+    bool adapter_known_ = false;
     ID3D11Query *flush_query_ = nullptr;  // D3D11_QUERY_EVENT, the glFinish equivalent
     // Consumer-side D3D12 device (owned reference), extracted from Skiko's native
     // DirectXDevice struct; null while the ring is headless (device 0).
@@ -485,11 +489,11 @@ bool d3d11_renderer::create(int64_t consumer_device_hint) {
         LOG(&owner_, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
         return false;
     }
-    DXGI_ADAPTER_DESC adapter_desc{};
-    if (d3d11_adapter_desc(device_, adapter_desc)) {
+    adapter_known_ = d3d11_adapter_desc(device_, adapter_desc_);
+    if (adapter_known_) {
         LOG(&owner_, LOG_LEVEL_INFO, "D3D11 device on adapter '%s' (luid %08lx:%08lx)",
-            adapter_name(adapter_desc).c_str(),
-            adapter_desc.AdapterLuid.HighPart, adapter_desc.AdapterLuid.LowPart);
+            adapter_name(adapter_desc_).c_str(),
+            adapter_desc_.AdapterLuid.HighPart, adapter_desc_.AdapterLuid.LowPart);
     }
 
     ID3D11Multithread *multithread = nullptr;
@@ -558,6 +562,24 @@ bool d3d11_renderer::prepare_device_locked(int64_t consumer_device, bool changed
         }
     }
     return true;
+}
+
+bool d3d11_renderer::can_share_with(int64_t consumer_device) {
+    ID3D12Device *skia_device = open_skia_d3d12_device(&owner_, consumer_device);
+    // A device that cannot be read (already logged) could not open the textures either.
+    if (!skia_device) return false;
+    const LUID skia_luid = d3d12_adapter_luid(skia_device);
+    skia_device->Release();
+    // When DXGI cannot tell our adapter, try sharing as before.
+    if (!adapter_known_ || same_luid(adapter_desc_.AdapterLuid, skia_luid)) return true;
+    // Happens when our device could not be created on Skia's adapter (it fell back to the
+    // default adapter or WARP), or when Skia moved to another adapter after our device was
+    // created: the device is fixed for the render context's lifetime.
+    LOG(&owner_, LOG_LEVEL_WARN,
+        "Skia's D3D12 device is on adapter '%s' but mpv's D3D11 device is on '%s'; "
+        "shared video textures cannot be opened across adapters, frames go through CPU readback",
+        adapter_name_for_luid(&owner_, skia_luid).c_str(), adapter_name(adapter_desc_).c_str());
+    return false;
 }
 
 bool d3d11_renderer::allocate_buffer(d3d11_buffer &buffer, int width, int height) {

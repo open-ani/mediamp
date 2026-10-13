@@ -56,6 +56,10 @@ public:
     // D3D11 and macOS: set_surface_config for consumers without a device to share the ring
     // with (a D3D12 device, an MTLDevice), which take frames through copy_latest_frame.
     virtual bool set_readback_surface_config(int width, int height) { return false; }
+    // D3D11: whether the ring's textures can be opened on consumer_device (Skiko's
+    // DirectXDevice), which requires both devices on one adapter. A consumer that cannot
+    // share takes frames through set_readback_surface_config instead.
+    virtual bool can_share_with(int64_t consumer_device) { return false; }
 };
 
 // Factories: each returns null (after logging why) when the path cannot start.

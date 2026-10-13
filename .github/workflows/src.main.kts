@@ -55,10 +55,8 @@ import io.github.typesafegithub.workflows.domain.Mode
 import io.github.typesafegithub.workflows.domain.Permission
 import io.github.typesafegithub.workflows.domain.RunnerType
 import io.github.typesafegithub.workflows.domain.actions.CustomAction
-import io.github.typesafegithub.workflows.domain.triggers.Cron
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
 import io.github.typesafegithub.workflows.domain.triggers.Push
-import io.github.typesafegithub.workflows.domain.triggers.Schedule
 import io.github.typesafegithub.workflows.domain.triggers.WorkflowDispatch
 import io.github.typesafegithub.workflows.dsl.JobBuilder
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.GitHubContext
@@ -510,8 +508,7 @@ workflow(
     }
 }
 
-// GPU 测试机 (双显卡笔记本, docs/gpu-test-runner.md): 只跑渲染路径矩阵.
-// 没有 push / pull_request 触发, fork 的 PR 代码永远不会在这台机器上执行.
+// The GPU test machine (a hybrid-GPU laptop, docs/gpu-test-runner.md): runs only the render path matrix.
 val gpuRenderMatrixInstance = MatrixInstance(
     runner = Runner.SelfHostedWindowsHybridGpu,
     uploadApk = false,
@@ -524,14 +521,15 @@ val gpuRenderMatrixInstance = MatrixInstance(
         "-Pmediamp.mpv.test.required=true",
     ),
     buildAllAndroidAbis = false,
-    // 一台普通的 Windows 笔记本: 和托管 runner 一样由 workflow 安装 MSYS2
-    installNativeDeps = true,
     gradleParallel = false,
 )
 
 workflow(
     name = "GPU Render Matrix",
     on = listOf(
+        // One machine: branches run only once they have a PR (pull_request), so a commit is not run twice.
+        Push(branches = listOf("main"), pathsIgnore = listOf("**/*.md")),
+        PullRequest(pathsIgnore = listOf("**/*.md")),
         WorkflowDispatch(
             inputs = mapOf(
                 "tier" to WorkflowDispatch.Input(
@@ -543,10 +541,14 @@ workflow(
                 ),
             ),
         ),
-        Schedule(listOf(Cron("0 18 * * *"))), // 02:00 UTC+8
     ),
-    // 只有一台机器: 排队, 不并发也不取消正在跑的
-    concurrency = Concurrency(group = "gpu-render-matrix", cancelInProgress = false),
+    // As in Build: a new push to a PR cancels the run it supersedes; every commit on main gets
+    // its own group and waits for the machine.
+    concurrency = Concurrency(
+        group = "gpu-render-matrix-" + expr { "github.event_name" } + "-" +
+                expr { "github.ref == 'refs/heads/main' && github.run_id || github.ref" },
+        cancelInProgress = true,
+    ),
     sourceFile = __FILE__,
     targetFileName = "gpu-render-matrix.yml",
     consistencyCheckJobConfig = ConsistencyCheckJobConfig.Disabled,
@@ -559,14 +561,25 @@ workflow(
         permissions = mapOf(
             Permission.Actions to Mode.Write, // Upload artifacts
         ),
-        `if` = expr { github.isAnimekoRepository },
+        // The runner is a personal machine with a signed-in desktop: never run pull requests from forks.
+        `if` = expr {
+            "${github.isAnimekoRepository} && (!(${github.isPullRequest}) || " +
+                "github.event.pull_request.head.repo.full_name == github.repository)"
+        },
+        // Keep the machine's global git config from starting fsmonitor daemons: they outlive the
+        // job and hold its directories open.
+        env = mapOf(
+            "GIT_CONFIG_COUNT" to "1",
+            "GIT_CONFIG_KEY_0" to "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0" to "false",
+        ),
     ) {
         uses(action = Checkout(submodules_Untyped = "recursive", lfs = true))
         with(WithMatrix(matrix)) {
             installJbr21()
             installDependencies()
             setupGradle()
-            // Scheduled runs have no inputs.
+            // push and pull_request runs have no inputs.
             renderPathMatrix(tier = expr("inputs.tier || 'hybrid'"), strict = true, continueOnError = false)
         }
     }
@@ -1052,8 +1065,56 @@ class WithMatrix(
         }
         if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows")) {
             // mpv 的 Windows 构建走 MSYS2 UCRT64 (packages 与 MpvSupport.windowsTarget 对齐)
+            val packages = listOf(
+                "git",
+                "mingw-w64-ucrt-x86_64-ca-certificates",
+                "mingw-w64-ucrt-x86_64-gcc",
+                "mingw-w64-ucrt-x86_64-libass",
+                "mingw-w64-ucrt-x86_64-libplacebo",
+                "mingw-w64-ucrt-x86_64-meson",
+                "mingw-w64-ucrt-x86_64-ninja",
+                "mingw-w64-ucrt-x86_64-pkgconf",
+                "mingw-w64-ucrt-x86_64-python-certifi",
+                "mingw-w64-ucrt-x86_64-python",
+                "mingw-w64-ucrt-x86_64-shaderc",
+                "mingw-w64-ucrt-x86_64-spirv-cross",
+            ).joinToString(" ")
+            // A machine whose own MSYS2 at C:\msys64 (the build's default msys2.dir) already has these
+            // packages builds with it: installing a fresh MSYS2 per run fails whenever a mirror stalls,
+            // as on the GPU laptop. GitHub's image ships C:\msys64 without them, so hosted runners
+            // still install one. FFmpeg and dav1d add their own packages in the build either way.
+            val existingMsys2 = run(
+                name = "Find MSYS2 ucrt64 for mpv",
+                command = buildList {
+                    add(
+                        $$"""
+                        $pacman = 'C:\msys64\usr\bin\pacman.exe'
+                        $found = $false
+                        if (Test-Path $pacman) {
+                            # Missing packages are reported on stderr.
+                            & $pacman -Q @('$${packages}' -split ' ') | Out-Null
+                            $found = $LASTEXITCODE -eq 0
+                        }
+                        "found=$("$found".ToLower())" >> $env:GITHUB_OUTPUT
+                        """.trimIndent(),
+                    )
+                    // Tells whoever maintains the machine how to make the next runs skip the install.
+                    if (matrix.selfHosted) {
+                        add(
+                            $$"""
+                            if (-not $found) {
+                                Write-Host "::notice::C:\msys64 is missing or lacks some of: $${packages}. This run installs a temporary MSYS2; to build with C:\msys64 instead, install them there once: pacman -S --needed --noconfirm $${packages}"
+                            }
+                            """.trimIndent(),
+                        )
+                    }
+                    add("exit 0") // the probe's exit code is not the step's
+                }.joinToString("\n"),
+            )
+            val installMsys2 = "${existingMsys2.outputs["found"]} != 'true'"
             val msys2 = uses(
                 name = "Setup MSYS2 ucrt64 for mpv",
+                `if` = installMsys2,
                 action = CustomAction(
                     actionOwner = "msys2",
                     actionName = "setup-msys2",
@@ -1061,25 +1122,13 @@ class WithMatrix(
                     inputs = mapOf(
                         "msystem" to "UCRT64",
                         "update" to "true",
-                        "install" to """
-                            git
-                            mingw-w64-ucrt-x86_64-ca-certificates
-                            mingw-w64-ucrt-x86_64-gcc
-                            mingw-w64-ucrt-x86_64-libass
-                            mingw-w64-ucrt-x86_64-libplacebo
-                            mingw-w64-ucrt-x86_64-meson
-                            mingw-w64-ucrt-x86_64-ninja
-                            mingw-w64-ucrt-x86_64-pkgconf
-                            mingw-w64-ucrt-x86_64-python-certifi
-                            mingw-w64-ucrt-x86_64-python
-                            mingw-w64-ucrt-x86_64-shaderc
-                            mingw-w64-ucrt-x86_64-spirv-cross
-                        """.trimIndent(),
+                        "install" to packages,
                     ),
                 ),
             )
             run(
                 name = "Configure MSYS2 root",
+                `if` = installMsys2,
                 command = shell(
                     $$"""
                     $msys2Dir = '$${expr { msys2.outputs["msys2-location"] }}'.Replace('\', '/')
@@ -1137,10 +1186,13 @@ class WithMatrix(
     }
 
     /**
-     * 渲染路径矩阵: 每个场景各起一个 JVM, 用真实 Compose 窗口播放已知颜色的视频并截屏校验.
-     * 结果表写进 job summary, 截图作为 artifact 上传.
-     * GitHub 的 Windows runner 没有 GPU, 只跑 ci 档的场景; 请求的后端多半会被 Skiko 回退, 表里写明实际落到的路径.
-     * 托管 runner 上结果稳定之前不阻塞构建; GPU 测试机 ([gpuRenderMatrixInstance]) 以 strict 模式跑全部场景.
+     * Render path matrix: one JVM per scenario plays a clip of known colours in a real Compose
+     * window and checks the captured frames. The result table goes to the job summary, the
+     * captures to an artifact.
+     * GitHub's Windows runners have no GPU and run only the ci tier; Skiko usually falls back from
+     * the requested API there, and the table shows where each scenario actually landed.
+     * Non-blocking on hosted runners until the results are stable; the GPU test machine
+     * ([gpuRenderMatrixInstance]) runs every scenario in strict mode.
      */
     fun JobBuilder<*>.renderPathMatrix(
         tier: String? = null,
@@ -1152,7 +1204,7 @@ class WithMatrix(
             name = "Render path matrix",
             tasks = listOfNotNull(
                 "--continue",
-                // 预引号: PowerShell 会把未引号的 -Pa.b=c 分词拆坏
+                // Pre-quoted: PowerShell splits an unquoted -Pa.b=c into separate arguments.
                 tier?.let { "\"-Pmediamp.mpv.renderpath.tier=$it\"" },
                 "\"-Pmediamp.mpv.renderpath.strict=true\"".takeIf { strict },
                 ":mediamp-mpv:renderPathMatrix",
