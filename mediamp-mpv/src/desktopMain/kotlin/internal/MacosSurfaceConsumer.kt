@@ -18,7 +18,7 @@ import org.openani.mediamp.mpv.nDestroyRenderContextMacos
 import org.openani.mediamp.mpv.nGetFrameStateMacos
 import org.openani.mediamp.mpv.nHasMetalSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
-import org.openani.mediamp.mpv.nSaveSurfacePngMacos
+import org.openani.mediamp.mpv.nRenderFramePixelsMacos
 import org.openani.mediamp.mpv.nSetReadbackSurfaceConfigMacos
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaReadbackInterop
@@ -40,7 +40,7 @@ internal object MacosReadbackSurfaceBackend : MpvReadbackBackend {
 
     override fun getFrameState(ptr: Long) = nGetFrameStateMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngMacos(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsMacos(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =
