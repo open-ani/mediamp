@@ -108,8 +108,12 @@ internal fun headlessSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
 
 internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend? = when (redrawerClass?.name) {
     null -> null
-    "org.jetbrains.skiko.redrawer.Direct3DRedrawer" -> D3D11SurfaceRingBackend
-    "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer" -> WindowsOpenGLSurfaceBackend
+    "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
+    "org.jetbrains.skiko.renderer.Direct3DRenderer",
+    -> D3D11SurfaceRingBackend
+    "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer",
+    "org.jetbrains.skiko.renderer.WindowsOpenGLRenderer",
+    -> WindowsOpenGLSurfaceBackend
     // Software (WindowsSoftwareRedrawer, SoftwareRedrawer), ANGLE and any future
     // redrawer: the readback path needs nothing from Skiko's renderer.
     else -> D3D11ReadbackSurfaceBackend

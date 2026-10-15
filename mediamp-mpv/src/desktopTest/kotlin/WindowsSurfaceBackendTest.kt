@@ -18,7 +18,11 @@ import kotlin.test.assertSame
 
 class WindowsSurfaceBackendTest {
     private fun redrawerClass(name: String): Class<*> =
-        Class.forName("org.jetbrains.skiko.redrawer.$name", false, javaClass.classLoader)
+        runCatching { Class.forName("org.jetbrains.skiko.redrawer.$name", false, javaClass.classLoader) }
+            .getOrElse {
+                Class.forName("org.jetbrains.skiko.renderer.${name.removeSuffix("Redrawer")}Renderer",
+                    false, javaClass.classLoader)
+            }
 
     @Test
     fun `wait for a redrawer instead of guessing the Windows backend`() {

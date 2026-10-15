@@ -9,6 +9,7 @@
 package org.openani.mediamp.mpv
 
 import kotlin.test.Test
+import org.openani.mediamp.mpv.utils.SkiaDirectContextAccess
 import kotlin.test.assertTrue
 
 class SkikoLinuxOpenGLReflectionLayoutTest {
@@ -16,7 +17,7 @@ class SkikoLinuxOpenGLReflectionLayoutTest {
     fun `Skiko Linux OpenGL reflection layout matches the production provider`() {
         val result = probeSkikoLinuxOpenGLReflectionLayout()
         System.err.println("[LinuxOpenGLValidation] Skiko reflection preflight: ${result.message}")
-        assertTrue(result.compatible, "Skiko 0.9.37.4 reflection layout changed: ${result.message}")
+        assertTrue(result.compatible, "Skiko reflection layout changed: ${result.message}")
     }
 }
 
@@ -27,6 +28,15 @@ private fun probeSkikoLinuxOpenGLReflectionLayout(): ReflectionLayoutResult {
     val classLoader = SkikoLinuxOpenGLReflectionLayoutTest::class.java.classLoader
     val layer = runCatching { Class.forName("org.jetbrains.skiko.SkiaLayer", false, classLoader) }
         .getOrElse { return ReflectionLayoutResult(false, "SkiaLayer is not on the classpath: $it") }
+    if (layer.methods.any { it.name == "getFrameDriver\$skiko" }) {
+        return runCatching {
+            val renderer = Class.forName("org.jetbrains.skiko.renderer.LinuxOpenGLRenderer", false, classLoader)
+            SkiaDirectContextAccess(renderer)
+            check(renderer.getDeclaredField("context").type == java.lang.Long.TYPE)
+            layer.getMethod("getBackedLayer\$skiko")
+            ReflectionLayoutResult(true, "${renderer.name}; FrameDriver; inherited glContext")
+        }.getOrElse { ReflectionLayoutResult(false, it.toString()) }
+    }
     val redrawer = runCatching {
         Class.forName("org.jetbrains.skiko.redrawer.LinuxOpenGLRedrawer", false, classLoader)
     }.getOrElse { return ReflectionLayoutResult(false, "LinuxOpenGLRedrawer is not on the classpath: $it") }

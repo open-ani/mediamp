@@ -9,6 +9,7 @@
 package org.openani.mediamp.mpv
 
 import kotlin.test.Test
+import org.openani.mediamp.mpv.utils.SkiaDirectContextAccess
 import kotlin.test.assertTrue
 
 class SkikoWindowsOpenGLReflectionLayoutTest {
@@ -16,7 +17,7 @@ class SkikoWindowsOpenGLReflectionLayoutTest {
     fun `Skiko Windows OpenGL reflection layout matches the production interop`() {
         val result = probeSkikoWindowsOpenGLReflectionLayout()
         System.err.println("[WindowsOpenGLValidation] Skiko reflection preflight: ${result.message}")
-        assertTrue(result.compatible, "Skiko 0.9.37.4 reflection layout changed: ${result.message}")
+        assertTrue(result.compatible, "Skiko reflection layout changed: ${result.message}")
     }
 }
 
@@ -30,6 +31,14 @@ private fun probeSkikoWindowsOpenGLReflectionLayout(): WindowsReflectionLayoutRe
     val classLoader = SkikoWindowsOpenGLReflectionLayoutTest::class.java.classLoader
     val layer = runCatching { Class.forName("org.jetbrains.skiko.SkiaLayer", false, classLoader) }
         .getOrElse { return WindowsReflectionLayoutResult(false, "SkiaLayer is not on the classpath: $it") }
+    if (layer.methods.any { it.name == "getFrameDriver\$skiko" }) {
+        return runCatching {
+            val renderer = Class.forName("org.jetbrains.skiko.renderer.WindowsOpenGLRenderer", false, classLoader)
+            SkiaDirectContextAccess(renderer)
+            check(renderer.getDeclaredField("context").type == java.lang.Long.TYPE)
+            WindowsReflectionLayoutResult(true, "${renderer.name}; FrameDriver; inherited glContext")
+        }.getOrElse { WindowsReflectionLayoutResult(false, it.toString()) }
+    }
     val redrawer = runCatching {
         Class.forName("org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer", false, classLoader)
     }.getOrElse { return WindowsReflectionLayoutResult(false, "WindowsOpenGLRedrawer is not on the classpath: $it") }

@@ -37,26 +37,7 @@ internal class SkiaMetalInterop(private val layerRedrawer: SkiaLayerRedrawer) : 
             .apply { isAccessible = true }
         val adapterPtrMethod: Method = adapterField.type.getMethod("getPtr")
 
-        // MetalRedrawer keeps the DirectContext inside its ContextHandler; MetalSwingRedrawer
-        // holds it directly in a `context` field.
-        val contextHandlerField: Field? = runCatching {
-            redrawerClass.getDeclaredField("contextHandler").apply { isAccessible = true }
-        }.getOrNull()
-        val contextHandlerContextField: Field? = contextHandlerField?.let {
-            Class.forName("org.jetbrains.skiko.context.ContextHandler")
-                .getDeclaredField("context")
-                .apply { isAccessible = true }
-        }
-        val directContextField: Field? = runCatching {
-            redrawerClass.getDeclaredField("context").apply { isAccessible = true }
-        }.getOrNull()
-
-        init {
-            check(contextHandlerField != null || directContextField != null) {
-                "Unsupported Skiko redrawer ${redrawerClass.name}. " +
-                    "The mpv Metal render path requires Skiko's Metal backend (macOS default)."
-            }
-        }
+        val directContext = SkiaDirectContextAccess(redrawerClass)
     }
 
     private var cachedAccess: RedrawerAccess? = null
@@ -89,19 +70,14 @@ internal class SkiaMetalInterop(private val layerRedrawer: SkiaLayerRedrawer) : 
             val redrawer = layerRedrawer.redrawerOrNull ?: return null
             if (!isSkikoMetalRedrawer(redrawer.javaClass)) return null
             val access = accessFor(redrawer)
-            return when {
-                access.contextHandlerField != null ->
-                    access.contextHandlerContextField!!
-                        .get(access.contextHandlerField.get(redrawer)) as DirectContext?
-
-                else -> access.directContextField!!.get(redrawer) as DirectContext?
-            }
+            return access.directContext.get(redrawer)
         }
 }
 
 /** Whether [redrawerClass] is one of Skiko's Metal renderers, whose MTLDevice the ring can share. */
 internal fun isSkikoMetalRedrawer(redrawerClass: Class<*>): Boolean = when (redrawerClass.name) {
     "org.jetbrains.skiko.redrawer.MetalRedrawer",
+    "org.jetbrains.skiko.renderer.MetalRenderer",
     "org.jetbrains.skiko.swing.MetalSwingRedrawer",
     -> true
 

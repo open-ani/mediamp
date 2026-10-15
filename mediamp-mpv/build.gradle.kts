@@ -55,8 +55,14 @@ kotlin {
         }
         getByName("desktopTest").dependencies {
             implementation(kotlin("test"))
-            // The live-redrawer regression test constructs a real SkiaLayer.
-            runtimeOnly(compose.desktop.currentOs)
+            // Test Skiko compatibility independently of the CMP baseline.
+            val testSkikoVersion = providers.gradleProperty("mediamp.test.skiko.version").orNull
+            if (testSkikoVersion == null) {
+                runtimeOnly(compose.desktop.currentOs)
+            } else {
+                runtimeOnly("org.jetbrains.skiko:skiko-awt:$testSkikoVersion")
+                runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-all:$testSkikoVersion")
+            }
             // RenderPathMatrixTest prints the window through Win32 on Windows.
             implementation(libs.jna.platform)
         }

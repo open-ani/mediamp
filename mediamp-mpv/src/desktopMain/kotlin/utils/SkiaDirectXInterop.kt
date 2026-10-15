@@ -28,12 +28,7 @@ internal class SkiaDirectXInterop(private val layerRedrawer: SkiaLayerRedrawer) 
     private class RedrawerAccess(redrawerClass: Class<*>) {
         val deviceField: Field = redrawerClass.getDeclaredField("device")
             .apply { isAccessible = true }
-        val contextHandlerField: Field = redrawerClass.getDeclaredField("contextHandler")
-            .apply { isAccessible = true }
-        val contextHandlerContextField: Field =
-            Class.forName("org.jetbrains.skiko.context.ContextHandler")
-                .getDeclaredField("context")
-                .apply { isAccessible = true }
+        val directContext = SkiaDirectContextAccess(redrawerClass)
 
         init {
             check(deviceField.type == java.lang.Long.TYPE) {
@@ -47,7 +42,10 @@ internal class SkiaDirectXInterop(private val layerRedrawer: SkiaLayerRedrawer) 
 
     private fun currentRedrawer(): Any {
         val redrawer = layerRedrawer.redrawer
-        check(redrawer.javaClass.name == "org.jetbrains.skiko.redrawer.Direct3DRedrawer") {
+        check(redrawer.javaClass.name in setOf(
+            "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
+            "org.jetbrains.skiko.renderer.Direct3DRenderer",
+        )) {
             "Unsupported Skiko redrawer ${redrawer.javaClass.name}. The mpv D3D11 render " +
                 "path requires Skiko's Direct3DRedrawer. Recreate the player if Skiko changed " +
                 "its render backend."
@@ -75,7 +73,6 @@ internal class SkiaDirectXInterop(private val layerRedrawer: SkiaLayerRedrawer) 
         get() {
             val redrawer = currentRedrawer()
             val access = accessFor(redrawer)
-            return access.contextHandlerContextField
-                .get(access.contextHandlerField.get(redrawer)) as DirectContext?
+            return access.directContext.get(redrawer)
         }
 }

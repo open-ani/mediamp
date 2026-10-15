@@ -9,9 +9,13 @@
 package org.openani.mediamp.mpv
 
 import org.jetbrains.skiko.SkiaLayer
+import org.jetbrains.skiko.GraphicsApi
+import org.junit.Assume.assumeFalse
+import javax.swing.JFrame
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaMetalInterop
 import org.openani.mediamp.mpv.utils.isSkikoMetalRedrawer
+import java.awt.GraphicsEnvironment
 import java.lang.reflect.Proxy
 import javax.swing.SwingUtilities
 import kotlin.test.Test
@@ -27,13 +31,20 @@ class MacosSurfaceBackendTest {
 
     @Test
     fun `Metal redrawers share their device with the IOSurface ring`() {
-        assertTrue(isSkikoMetalRedrawer(redrawerClass("redrawer.MetalRedrawer")))
-        assertTrue(isSkikoMetalRedrawer(redrawerClass("swing.MetalSwingRedrawer")))
+        if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+            assertTrue(isSkikoMetalRedrawer(redrawerClass("renderer.MetalRenderer")))
+        } else {
+            assertTrue(isSkikoMetalRedrawer(redrawerClass("redrawer.MetalRedrawer")))
+            assertTrue(isSkikoMetalRedrawer(redrawerClass("swing.MetalSwingRedrawer")))
+        }
     }
 
     @Test
     fun `software redrawers have no Metal device`() {
-        for (name in listOf("redrawer.SoftwareRedrawer", "swing.SoftwareSwingRedrawer")) {
+        val names = if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+            listOf("renderer.SoftwareRenderer", "renderer.WindowsSoftwareRenderer")
+        } else listOf("redrawer.SoftwareRedrawer", "swing.SoftwareSwingRedrawer")
+        for (name in names) {
             assertFalse(isSkikoMetalRedrawer(redrawerClass(name)), name)
         }
     }
@@ -45,7 +56,24 @@ class MacosSurfaceBackendTest {
      */
     @Test
     fun `Metal interop reports no device for a non-Metal redrawer instead of throwing`() {
+        assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
         SwingUtilities.invokeAndWait {
+            if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+                val layer = SkiaLayer(renderApi = GraphicsApi.SOFTWARE_COMPAT)
+                val window = JFrame("Mediamp software interop test")
+                try {
+                    window.contentPane.add(layer)
+                    window.setSize(160, 120)
+                    window.isVisible = true
+                    val interop = SkiaMetalInterop(SkiaLayerRedrawer(layer))
+                    assertEquals(0L, interop.renderDevicePtr)
+                    assertNull(interop.directContext)
+                } finally {
+                    layer.dispose()
+                    window.dispose()
+                }
+                return@invokeAndWait
+            }
             val layer = SkiaLayer()
             val managerField = SkiaLayer::class.java.getDeclaredField("redrawerManager")
                 .apply { isAccessible = true }
