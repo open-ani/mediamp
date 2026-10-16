@@ -43,6 +43,8 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
     private val skiaBitmap: Bitmap = Bitmap()
     private val composeBitmap = mutableStateOf<ImageBitmap?>(null)
 
+
+
     public val enableRendering: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
     /**
@@ -109,8 +111,13 @@ public class SkiaBitmapVideoSurface : VideoSurface(VideoSurfaceAdapters.getVideo
             SwingUtilities.invokeLater {
                 nativeBuffers[0].rewind()
                 nativeBuffers[0].get(frameBytes)
+                // 复用同一个 skiaBitmap 对象，更新其内容
                 skiaBitmap.installPixels(imageInfo, frameBytes, bufferFormat.width * 4)
-                composeBitmap.value = skiaBitmap.asComposeImageBitmap()
+                // 每次都创建新的 ImageBitmap，确保显示最新图像
+                val newImageBitmap = skiaBitmap.asComposeImageBitmap()
+                // 先置空再赋值，强制触发 Compose 重组
+                composeBitmap.value = null
+                composeBitmap.value = newImageBitmap
             }
         }
     }

@@ -338,7 +338,10 @@ private open class ComposeMediaPlayerComponent @JvmOverloads constructor(
 
         override fun onDisplay(mediaPlayer: MediaPlayer, buffer: IntArray) {
             image?.let {
-                composeImage = it.toComposeImageBitmap()
+                // 每次都创建新的 ImageBitmap，确保显示最新图像
+                val newImage = it.toComposeImageBitmap()
+                // 直接赋值，触发 Compose 重组
+                composeImage = newImage
             }
 //            videoSurfaceComponent!!.repaint()
         }
