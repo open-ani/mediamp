@@ -345,9 +345,9 @@ D3D12 设备 (Compose Windows 默认后端, Skiko `Direct3DRedrawer`) 上打开�
 渲染线程是唯一渲染方, 帧完成用 `D3D11_QUERY_EVENT` CPU 等待 (glFinish 等价) 后才
 publish + notify; UI 侧只读打包 frame state 并采样。immediate context 开启
 multithread-protected, 截图读回 (staging + WIC PNG) 可在 JNI 线程安全执行。
-Skia 侧的 `ID3D12Device` 从 Skiko `Direct3DRedrawer.device`(原生 `DirectXDevice`
-结构指针, Kotlin 反射见 `utils/SkiaDirectXInterop.kt`) 提取, 原生侧做槽位等值校验 +
-`QueryInterface` 验证后才使用 (`render_d3d11.cpp` 内 `open_skia_d3d12_device`)。
+Skia 侧的 `ID3D12Device` 从 Skiko `Direct3DRedrawer.device` / `Direct3DRenderer.device`
+(原生 `DirectXDevice` 结构指针, Kotlin 反射见 `utils/SkiaDirectXInterop.kt`) 提取, 原生侧做前缀读取与
+`QueryInterface` + Adapter/Device LUID 关联验证后才使用 (`skiko_directx_device.cpp` 内 `open_skia_d3d12_device`)。
 包装颜色类型为 `RGBA_8888`(`RGB_888x` 不可 wrap 为 render target; mpv d3d11
 渲染器对不透明视频输出 alpha=1, 已经像素验证)。
 
