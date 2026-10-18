@@ -120,8 +120,8 @@ actual class MpvMediampPlayer(
      *
      * macOS creates the render context when the player is constructed. On Windows this
      * creates a windowless D3D11 context; the player cannot attach an OpenGL surface later.
-     * On Linux the producer context must join the GLX share group of an attached surface,
-     * so opening media still waits for one.
+     * On Linux this returns false: the producer context must join the GLX share group of an
+     * attached surface, so media opened before one attaches plays with `vo=null` until then.
      */
     fun createRenderContext(): Boolean {
         if (surfaceTeardownStarted) return false
@@ -151,9 +151,9 @@ actual class MpvMediampPlayer(
 
     /**
      * Selects the backend for Skiko's live redrawer — again whenever Skiko replaced it — and
-     * returns its interop. Returns null until Skiko has chosen its redrawer (loading waits for
-     * that selection), and when the backend would have to change during playback
-     * ([MpvBackendChange.REFUSE_DURING_PLAYBACK]).
+     * returns its interop. Returns null until Skiko has chosen its redrawer (files loaded
+     * before that play with `vo=null`), and when the backend would have to change during
+     * playback ([MpvBackendChange.REFUSE_DURING_PLAYBACK]).
      */
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
         if (surfaceTeardownStarted) return null
