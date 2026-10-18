@@ -48,9 +48,12 @@
 #include <mpv/render_d3d11.h>
 
 #include "surface_ring.h"
+#include "skiko_directx_device.h"
 #include "log.h"
 
 namespace {
+
+using mediampv::open_skia_d3d12_device;
 
 template <typename T>
 void safe_release(T *&object) {
@@ -58,75 +61,6 @@ void safe_release(T *&object) {
         object->Release();
         object = nullptr;
     }
-}
-
-// Extracts the ID3D12Device from Skiko's native DirectXDevice struct (the value of the
-// Direct3DRedrawer.device field, reflected on the Kotlin side).
-//
-// Expected x64 layout (skiko 0.9.37, awtMain/cpp/windows/directXRedrawer.cc):
-//   slot 0 (byte  0): HWND hWnd
-//   slot 2 (byte 16): backendContext.fDevice   (gr_cp<ID3D12Device>)
-//   slot 3 (byte 24): backendContext.fQueue    (gr_cp<ID3D12CommandQueue>)
-//   slot 6 (byte 48): device                   (gr_cp<ID3D12Device>)
-//   slot 8 (byte 64): queue                    (gr_cp<ID3D12CommandQueue>)
-//
-// These offsets are inferred from member order, not an ABI guarantee, so we only trust
-// them when two independent slots agree on the same pointer (fDevice == device and
-// fQueue == queue — skiko stores the same COM pointers in both places), and even then
-// the result must survive QueryInterface(ID3D12Device) before it is used.
-ID3D12Device *open_skia_d3d12_device(const void *instance_handle, int64_t skiko_device_ptr) {
-    if (skiko_device_ptr == 0) return nullptr;
-
-    // Defense-in-depth around trusting a reflected pointer plus an inferred struct layout.
-    // We build with MinGW g++, which has no MSVC __try/__except, so we validate reads with
-    // IsBadReadPtr instead of catching an access violation. This cannot detect a
-    // mapped-but-wrong region, so the two-slot agreement and the final QueryInterface stay
-    // as the real validation — IsBadReadPtr only turns the most likely upgrade failure (a
-    // shrunk/moved struct whose slots land on unmapped memory) into a graceful null.
-
-    // A real DirectXDevice* is at least pointer-aligned; a misaligned value is not one.
-    if (skiko_device_ptr & static_cast<int64_t>(sizeof(void *) - 1)) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device pointer %lld is misaligned; not a DirectXDevice",
-            static_cast<long long>(skiko_device_ptr));
-        return nullptr;
-    }
-    auto *slots = reinterpret_cast<void *const *>(static_cast<uintptr_t>(skiko_device_ptr));
-    // Need slots[0..8] readable (9 pointers).
-    if (IsBadReadPtr(slots, 9 * sizeof(void *))) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device pointer span is not readable; not a DirectXDevice");
-        return nullptr;
-    }
-
-    void *device_a = slots[2], *device_b = slots[6];
-    void *queue_a = slots[3], *queue_b = slots[8];
-    if (!device_a || device_a != device_b || !queue_a || queue_a != queue_b) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
-            "video will not be wrapped for Skia",
-            device_a, device_b, queue_a, queue_b);
-        return nullptr;
-    }
-
-    // Before the virtual QueryInterface call, verify device_a has a readable vtable slot,
-    // so a non-COM but coincidentally-agreeing pointer does not jump through garbage.
-    if (IsBadReadPtr(device_a, sizeof(void *)) ||
-        IsBadReadPtr(*reinterpret_cast<void *const *>(device_a), sizeof(void *))) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device candidate has no readable vtable; not a COM object");
-        return nullptr;
-    }
-
-    ID3D12Device *device = nullptr;
-    HRESULT hr = static_cast<IUnknown *>(device_a)
-                     ->QueryInterface(__uuidof(ID3D12Device), reinterpret_cast<void **>(&device));
-    if (FAILED(hr) || !device) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)", hr);
-        return nullptr;
-    }
-    return device;  // AddRef'd by QueryInterface; caller owns.
 }
 
 bool same_luid(const LUID &a, const LUID &b) {
