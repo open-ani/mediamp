@@ -392,9 +392,10 @@ for a saved-position-at-end resume).
   video), so the Linux and Windows backends declare `surface-independent-open` degraded: `setMediaData`
   before first surface attach holds in Opening until the render context becomes available (or
   stop/close); conformance gates the load-before-UI scenarios on this capability. (Upgrade
-  path for Linux: EGL/dmabuf interop.) Windows headless capture tests explicitly create a
-  windowless D3D11 context with `createRenderContext()` before loading media. They cannot
-  later attach an OpenGL consumer to that player. Other headless CI uses a declared
+  path for Linux: EGL/dmabuf interop.) Headless players on Windows (capture tests, tools
+  without a window) create a windowless D3D11 context with the public
+  `MpvMediampPlayer.createRenderContext()` before loading media. They cannot later attach an
+  OpenGL consumer to that player. Other headless CI uses a declared
   video-disabled mode (`vo=null`). v1's defer-loadfile-to-resume (deferral to `play()`) is abolished everywhere —
   deferral, where unavoidable, lives inside Opening, never after Ready.
 - **Speed**: `setRateImpl` is part of the SPI. Feature `PlaybackSpeed.set` goes through the
