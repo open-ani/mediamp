@@ -21,7 +21,7 @@ internal interface MpvRenderContextHost {
     /** True while a playback session is active; see `JvmMpvMediampPlayer`. */
     fun hasActivePlaybackSession(): Boolean
 
-    /** Completes a load deferred until the render context became ready. */
+    /** Restores the video output of a load that ran before the render context was ready. */
     fun onRenderContextReady()
 
     /** Drops consumer-side Skia wraps before the producer replaces its render environment. */
@@ -44,11 +44,11 @@ internal fun interface MpvRenderContextProvisioning {
  * [MpvSurfaceBackend.createRenderContext] may run. Backends that own their producer
  * device ([EagerRenderContextLifecycle]) create it when the backend is selected; backends whose
  * producer context must join an externally owned render environment
- * (`OpenGLRenderContextLifecycle`) create it only once that environment has been attached
- * and gate `loadfile` on it. Chosen by [MpvSurfaceBackend], so the shared player and
- * composable contain no platform checks — and platform-specific operations (such as the
- * Linux GLX attach) exist only on the platform implementation, where other platforms
- * cannot call them by mistake.
+ * (`OpenGLRenderContextLifecycle`) create it only once that environment has been attached;
+ * files loaded before that play with `vo=null`. Chosen by [MpvSurfaceBackend], so the
+ * shared player and composable contain no platform checks — and platform-specific
+ * operations (such as the Linux GLX attach) exist only on the platform implementation,
+ * where other platforms cannot call them by mistake.
  */
 internal interface MpvRenderContextLifecycle {
     /**
