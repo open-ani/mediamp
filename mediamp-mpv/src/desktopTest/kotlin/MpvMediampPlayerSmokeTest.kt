@@ -161,7 +161,7 @@ class MpvMediampPlayerSmokeTest {
     /**
      * With vo=libmpv, frames are only consumed when a render context drains them; without
      * one, playback never advances. The native render thread does all rendering; this
-     * just configures a headless buffer ring (device ptr 0 = system default MTLDevice on
+     * just configures a headless buffer ring (device ptr 0 = the CPU readback mode on
      * macOS, a D3D11-only ring on Windows) so the real native render path is exercised.
      */
     @OptIn(InternalMediampApi::class)

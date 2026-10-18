@@ -12,14 +12,16 @@
 // IOSurface is also wrapped as an MTLTexture on the consumer-provided MTLDevice (Skia's
 // device), so Compose/Skia can sample the video frames zero-copy.
 //
-// Threading model: the render thread owns the CGL context (current for its lifetime)
-// and is the only thread that touches GL or mutates the buffer ring. mpv's update
-// callback, buffer reconfiguration (resize) and consumer acks are requests posted under
-// render_mutex_; consumers read the packed frame_state_ and sample the latest buffer.
+// Threading model: the shared ring protocol (surface_ring.h). The render thread keeps
+// the CGL context current for its lifetime and is the only thread that touches GL.
 // Because rendering never happens on the UI thread, buffer reallocation and glFinish
 // cost the video pipeline nothing user-visible: during a resize the consumer keeps
 // drawing the previous generation (kept alive until acked), and swaps to the new ring
 // the first time it observes a frame in it.
+//
+// Consumers without a Metal device (Skiko's software redrawers, after it fell back from
+// Metal) take the CPU readback mode instead: the render thread also copies each frame
+// out of its IOSurface into system memory, as RGBA, for copy_latest_frame.
 
 #ifdef __APPLE__
 
@@ -33,17 +35,16 @@
 #include <OpenGL/gl3.h>
 #include <OpenGL/CGLIOSurface.h>
 
-#include <CoreGraphics/CoreGraphics.h>
-#include <ImageIO/ImageIO.h>
-
 #include <dlfcn.h>
-#include <thread>
+
+#include <cstring>
+#include <vector>
 
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
 
-#include "mpv_handle_t.h"
+#include "surface_ring.h"
 #include "log.h"
 
 #ifndef GL_BGRA
@@ -65,12 +66,70 @@ void *macos_get_proc_address(void *, const char *name) {
 
 namespace mediampv {
 
-bool mpv_handle_t::create_render_context() {
-    if (!handle_) {
-        LOG(this, LOG_LEVEL_ERROR, "create_render_context: mpv handle is null");
+namespace {
+
+struct macos_buffer {
+    void *io_surface = nullptr;   // IOSurfaceRef
+    void *mtl_texture = nullptr;  // retained id<MTLTexture>
+    uint32_t texture = 0;         // GL_TEXTURE_RECTANGLE bound to the IOSurface
+    uint32_t fbo = 0;
+};
+
+class macos_renderer final : public surface_ring<macos_buffer> {
+public:
+    explicit macos_renderer(mpv_handle_t &owner) : surface_ring(owner, "Metal") {}
+    ~macos_renderer() override { shutdown(); }
+
+    bool create();
+
+    bool set_readback_surface_config(int width, int height) override {
+        return request_config(width, height, 0, true);
+    }
+    uint64_t copy_latest_frame(void *dest, int width, int height) override;
+    bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
+
+protected:
+    // The render thread keeps the CGL context current for its whole lifetime.
+    bool on_thread_start() override {
+        CGLSetCurrentContext(cgl_context_);
+        return true;
+    }
+    void on_thread_exit() override { CGLSetCurrentContext(nullptr); }
+    void after_shutdown() override;
+    // MTLTextures are created on the consumer-provided MTLDevice (0 = system default,
+    // or none when the system has no Metal device).
+    bool prepare_device_locked(int64_t consumer_device, bool changed) override;
+    void release_device_locked() override { mtl_device_ = nil; }
+    bool allocate_buffer(macos_buffer &buffer, int width, int height) override;
+    void destroy_buffer(macos_buffer &buffer) override;
+    int64_t texture_handle(const macos_buffer &buffer) const override {
+        return (int64_t) (uintptr_t) buffer.mtl_texture;
+    }
+    bool render_into(const macos_buffer &buffer) override;
+    // The IOSurfaces are CPU-mappable, so readback needs no staging resources.
+    bool setup_readback_locked() override { return true; }
+    bool read_back(const macos_buffer &buffer) override;
+    void publish_readback_locked() override { readback_scratch_.swap(readback_latest_); }
+    void release_readback_locked() override {
+        std::vector<uint8_t>().swap(readback_scratch_);
+        std::vector<uint8_t>().swap(readback_latest_);
+    }
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) override;
+
+private:
+    CGLContextObj cgl_context_ = nullptr;
+    id<MTLDevice> mtl_device_ = nil;  // strong (ARC)
+    // CPU readback: the render thread owns readback_scratch_; readback_latest_ is swapped
+    // in and copied out under mutex_.
+    std::vector<uint8_t> readback_scratch_, readback_latest_;
+};
+
+bool macos_renderer::create() {
+    mpv_handle *mpv = owner_.mpv();
+    if (!mpv) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "create_macos_renderer: mpv handle is null");
         return false;
     }
-    if (render_context_) return true;
 
     CGLPixelFormatAttribute attrs[] = {
         kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute) kCGLOGLPVersion_3_2_Core,
@@ -82,19 +141,20 @@ bool mpv_handle_t::create_render_context() {
     GLint num_pixel_formats = 0;
     CGLError cgl_err = CGLChoosePixelFormat(attrs, &pixel_format, &num_pixel_formats);
     if (cgl_err != kCGLNoError || !pixel_format) {
-        LOG(this, LOG_LEVEL_ERROR, "CGLChoosePixelFormat failed: %d", cgl_err);
+        LOG(&owner_, LOG_LEVEL_ERROR, "CGLChoosePixelFormat failed: %d", cgl_err);
         return false;
     }
     CGLContextObj context = nullptr;
     cgl_err = CGLCreateContext(pixel_format, nullptr, &context);
     CGLDestroyPixelFormat(pixel_format);
     if (cgl_err != kCGLNoError || !context) {
-        LOG(this, LOG_LEVEL_ERROR, "CGLCreateContext failed: %d", cgl_err);
+        LOG(&owner_, LOG_LEVEL_ERROR, "CGLCreateContext failed: %d", cgl_err);
         return false;
     }
+    cgl_context_ = context;
 
     CGLSetCurrentContext(context);
-    LOG(this, LOG_LEVEL_INFO, "mpv render GL: %s / %s",
+    LOG(&owner_, LOG_LEVEL_INFO, "mpv render GL: %s / %s",
         (const char *) glGetString(GL_VERSION), (const char *) glGetString(GL_RENDERER));
 
     mpv_opengl_init_params gl_init_params{
@@ -106,238 +166,46 @@ bool mpv_handle_t::create_render_context() {
         {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init_params},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-    int create_result = mpv_render_context_create(&render_context_, handle_, params);
+    const int create_result = mpv_render_context_create(&render_context_, mpv, params);
     CGLSetCurrentContext(nullptr);
     if (create_result < 0) {
-        LOG(this, LOG_LEVEL_ERROR,
+        LOG(&owner_, LOG_LEVEL_ERROR,
             "mpv_render_context_create failed: %s", mpv_error_string(create_result));
         render_context_ = nullptr;
-        CGLDestroyContext(context);
         return false;
     }
+    attach_update_callback();
+    return start_render_thread();
+}
 
-    cgl_context_ = context;
-    mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
-    start_render_thread();
+void macos_renderer::after_shutdown() {
+    detach_update_callback();
+    if (render_context_) {
+        if (cgl_context_) CGLSetCurrentContext(cgl_context_);
+        mpv_render_context_free(render_context_);
+        if (cgl_context_) CGLSetCurrentContext(nullptr);
+        render_context_ = nullptr;
+    }
+    if (cgl_context_) {
+        CGLDestroyContext(cgl_context_);
+        cgl_context_ = nullptr;
+    }
+    mtl_device_ = nil;
+}
+
+bool macos_renderer::prepare_device_locked(int64_t consumer_device, bool) {
+    if (consumer_device != 0) {
+        mtl_device_ = (__bridge id<MTLDevice>) (void *) (uintptr_t) consumer_device;
+        return mtl_device_ != nil;
+    }
+    // A consumer-less ring (CPU readback, headless capture) never samples the
+    // MTLTextures, and Skiko may have left Metal precisely because the system has no
+    // usable Metal device: go without them then.
+    mtl_device_ = MTLCreateSystemDefaultDevice();
     return true;
 }
 
-bool mpv_handle_t::destroy_render_context() {
-    cleanup_render_resources();
-    return true;
-}
-
-bool mpv_handle_t::set_surface_config(int width, int height, int64_t mtl_device_ptr) {
-    if (!render_thread_) return false;
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        pending_width_ = width;
-        pending_height_ = height;
-        pending_device_ptr_ = mtl_device_ptr;
-        config_pending_ = true;
-    }
-    render_cv_.notify_all();
-    return true;
-}
-
-uint64_t mpv_handle_t::get_frame_state() {
-    return frame_state_.load(std::memory_order_acquire);
-}
-
-int64_t mpv_handle_t::get_buffer_texture(int index) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    if (!buffers_allocated_ || index < 0 || index >= kMacosBufferCount) return 0;
-    return (int64_t) (uintptr_t) buffers_[index].mtl_texture;
-}
-
-bool mpv_handle_t::ack_retired_buffers() {
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        retire_ack_pending_ = true;
-    }
-    render_cv_.notify_all();
-    return true;
-}
-
-bool mpv_handle_t::has_metal_surface() {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    return buffers_allocated_;
-}
-
-// ---- render thread ----
-
-void mpv_handle_t::signal_render_update() {
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        render_pending_ = true;
-    }
-    render_cv_.notify_all();
-}
-
-void mpv_handle_t::start_render_thread() {
-    if (render_thread_) return;
-    render_quit_ = false;
-    render_thread_ = new std::thread([this] { render_thread_loop(); });
-}
-
-void mpv_handle_t::stop_render_thread() {
-    if (!render_thread_) return;
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        render_quit_ = true;
-    }
-    render_cv_.notify_all();
-    auto *thread = (std::thread *) render_thread_;
-    if (thread->joinable()) thread->join();
-    delete thread;
-    render_thread_ = nullptr;
-}
-
-void mpv_handle_t::render_thread_loop() {
-    // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
-    // attach/detach pair.
-    JNIEnv *thread_env = nullptr;
-    bool attached = jvm_ &&
-        jvm_->AttachCurrentThread(reinterpret_cast<void **>(&thread_env), nullptr) == JNI_OK;
-    auto context = (CGLContextObj) cgl_context_;
-    CGLSetCurrentContext(context);
-
-    std::unique_lock<std::mutex> lock(render_mutex_);
-    while (!render_quit_) {
-        render_cv_.wait(lock, [this] {
-            return render_quit_ || render_pending_ || config_pending_ || retire_ack_pending_;
-        });
-        if (render_quit_) break;
-
-        if (retire_ack_pending_) {
-            retire_ack_pending_ = false;
-            if (has_retired_buffers_) {
-                destroy_buffer_ring(retired_buffers_);
-                has_retired_buffers_ = false;
-            }
-        }
-
-        // A reconfig retires the current ring; never stack a second retirement on top
-        // of an unacked one (the consumer may still be sampling it) — postpone until
-        // the ack arrives.
-        bool configured = false;
-        if (config_pending_ && !has_retired_buffers_) {
-            config_pending_ = false;
-            configured = apply_config_locked();
-        }
-
-        bool want_render = render_pending_;
-        render_pending_ = false;
-
-        if (!buffers_allocated_) {
-            // With vo=libmpv, playback stalls unless someone consumes video frames.
-            // While no surface is configured (headless probing, surface not composed
-            // yet), discard them so the playback clock keeps advancing.
-            if (want_render) {
-                lock.unlock();
-                drain_one_frame();
-                lock.lock();
-            }
-            continue;
-        }
-
-        bool has_new_frame = false;
-        if (want_render && render_context_) {
-            has_new_frame =
-                (mpv_render_context_update(render_context_) & MPV_RENDER_UPDATE_FRAME) != 0;
-        }
-        // After a reconfig, redraw the current frame into the new ring even if mpv has
-        // nothing new (e.g. resizing while paused).
-        if (!has_new_frame && !configured) continue;
-
-        int next = (latest_index_ + 1) % kMacosBufferCount;
-        macos_buffer target = buffers_[next];
-        lock.unlock();
-        bool rendered = render_into(target);
-        lock.lock();
-        if (rendered) {
-            latest_index_ = next;
-            ++frame_serial_;
-            publish_state_locked();
-            lock.unlock();
-            // Notify only after the frame is actually in the IOSurface, so a consumer
-            // waking on this never samples a stale buffer.
-            notify_render_update();
-            lock.lock();
-        }
-    }
-    lock.unlock();
-    CGLSetCurrentContext(nullptr);
-    if (attached) jvm_->DetachCurrentThread();
-}
-
-bool mpv_handle_t::apply_config_locked() {
-    const int width = pending_width_, height = pending_height_;
-    const int64_t device_ptr = pending_device_ptr_;
-
-    if (width <= 0 || height <= 0) {
-        // Deactivate. The consumer drops all texture references before requesting
-        // this, so both generations can be freed immediately.
-        if (has_retired_buffers_) {
-            destroy_buffer_ring(retired_buffers_);
-            has_retired_buffers_ = false;
-        }
-        if (buffers_allocated_) {
-            destroy_buffer_ring(buffers_);
-            buffers_allocated_ = false;
-        }
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        ++buffer_generation_;
-        publish_state_locked();
-        return false;
-    }
-    if (buffers_allocated_ && width == buffer_width_ && height == buffer_height_ &&
-        device_ptr == buffer_device_ptr_) {
-        return false;
-    }
-
-    if (buffers_allocated_) {
-        for (int i = 0; i < kMacosBufferCount; ++i) {
-            retired_buffers_[i] = buffers_[i];
-            buffers_[i] = macos_buffer{};
-        }
-        has_retired_buffers_ = true;
-        buffers_allocated_ = false;
-    }
-
-    id<MTLDevice> device = device_ptr != 0
-        ? (__bridge id<MTLDevice>) (void *) (uintptr_t) device_ptr
-        : MTLCreateSystemDefaultDevice();
-    bool ok = device != nil;
-    for (int i = 0; i < kMacosBufferCount && ok; ++i) {
-        ok = allocate_buffer(buffers_[i], width, height, (__bridge void *) device);
-    }
-    if (!ok) {
-        LOG(this, LOG_LEVEL_ERROR, "buffer ring allocation failed (%dx%d)", width, height);
-        destroy_buffer_ring(buffers_);
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        ++buffer_generation_;
-        publish_state_locked();
-        return false;
-    }
-
-    buffers_allocated_ = true;
-    buffer_width_ = width;
-    buffer_height_ = height;
-    buffer_device_ptr_ = device_ptr;
-    latest_index_ = -1;
-    ++buffer_generation_;
-    publish_state_locked();
-    LOG(this, LOG_LEVEL_INFO,
-        "buffer ring allocated %dx%d gen=%u", width, height, buffer_generation_);
-    return true;
-}
-
-bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, void *mtl_device) {
+bool macos_renderer::allocate_buffer(macos_buffer &buffer, int width, int height) {
     NSDictionary *surface_props = @{
         (id) kIOSurfaceWidth: @(width),
         (id) kIOSurfaceHeight: @(height),
@@ -346,20 +214,19 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
     };
     IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) surface_props);
     if (!surface) {
-        LOG(this, LOG_LEVEL_ERROR, "IOSurfaceCreate failed (%dx%d)", width, height);
+        LOG(&owner_, LOG_LEVEL_ERROR, "IOSurfaceCreate failed (%dx%d)", width, height);
         return false;
     }
 
-    auto context = (CGLContextObj) cgl_context_;
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_RECTANGLE, texture);
     CGLError cgl_err = CGLTexImageIOSurface2D(
-        context, GL_TEXTURE_RECTANGLE, GL_RGBA, width, height,
+        cgl_context_, GL_TEXTURE_RECTANGLE, GL_RGBA, width, height,
         GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, surface, 0);
     glBindTexture(GL_TEXTURE_RECTANGLE, 0);
     if (cgl_err != kCGLNoError) {
-        LOG(this, LOG_LEVEL_ERROR, "CGLTexImageIOSurface2D failed: %d", cgl_err);
+        LOG(&owner_, LOG_LEVEL_ERROR, "CGLTexImageIOSurface2D failed: %d", cgl_err);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
         return false;
@@ -372,62 +239,49 @@ bool mpv_handle_t::allocate_buffer(macos_buffer &buffer, int width, int height, 
     GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
-        LOG(this, LOG_LEVEL_ERROR, "IOSurface FBO incomplete: 0x%x", fbo_status);
+        LOG(&owner_, LOG_LEVEL_ERROR, "IOSurface FBO incomplete: 0x%x", fbo_status);
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
         CFRelease(surface);
         return false;
     }
 
-    id<MTLDevice> device = (__bridge id<MTLDevice>) mtl_device;
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                     width:(NSUInteger) width
-                                    height:(NSUInteger) height
-                                 mipmapped:NO];
-    descriptor.usage = MTLTextureUsageShaderRead;
-    descriptor.storageMode = MTLStorageModeShared;
-    id<MTLTexture> metal_texture = [device newTextureWithDescriptor:descriptor
-                                                          iosurface:surface
-                                                              plane:0];
-    if (!metal_texture) {
-        LOG(this, LOG_LEVEL_ERROR, "newTextureWithDescriptor:iosurface: failed");
-        glDeleteFramebuffers(1, &fbo);
-        glDeleteTextures(1, &texture);
-        CFRelease(surface);
-        return false;
+    id<MTLTexture> metal_texture = nil;
+    if (mtl_device_) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                         width:(NSUInteger) width
+                                        height:(NSUInteger) height
+                                     mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModeShared;
+        metal_texture = [mtl_device_ newTextureWithDescriptor:descriptor
+                                                    iosurface:surface
+                                                        plane:0];
+        if (!metal_texture) {
+            LOG(&owner_, LOG_LEVEL_ERROR, "newTextureWithDescriptor:iosurface: failed");
+            glDeleteFramebuffers(1, &fbo);
+            glDeleteTextures(1, &texture);
+            CFRelease(surface);
+            return false;
+        }
     }
 
     buffer.io_surface = (void *) surface;
     buffer.texture = texture;
     buffer.fbo = fbo;
-    buffer.mtl_texture = (void *) CFBridgingRetain(metal_texture);
+    buffer.mtl_texture = metal_texture ? (void *) CFBridgingRetain(metal_texture) : nullptr;
     return true;
 }
 
-void mpv_handle_t::destroy_buffer_ring(macos_buffer *ring) {
-    for (int i = 0; i < kMacosBufferCount; ++i) {
-        macos_buffer &buffer = ring[i];
-        if (buffer.fbo) glDeleteFramebuffers(1, &buffer.fbo);
-        if (buffer.texture) glDeleteTextures(1, &buffer.texture);
-        if (buffer.mtl_texture) CFRelease(buffer.mtl_texture);
-        if (buffer.io_surface) CFRelease((IOSurfaceRef) buffer.io_surface);
-        buffer = macos_buffer{};
-    }
+void macos_renderer::destroy_buffer(macos_buffer &buffer) {
+    if (buffer.fbo) glDeleteFramebuffers(1, &buffer.fbo);
+    if (buffer.texture) glDeleteTextures(1, &buffer.texture);
+    if (buffer.mtl_texture) CFRelease(buffer.mtl_texture);
+    if (buffer.io_surface) CFRelease((IOSurfaceRef) buffer.io_surface);
 }
 
-void mpv_handle_t::publish_state_locked() {
-    uint64_t index_bits = latest_index_ < 0 ? 0xFull : (uint64_t) latest_index_;
-    frame_state_.store(
-        ((uint64_t) (buffer_generation_ & 0xFFFFu) << 48) |
-        (index_bits << 44) |
-        ((uint64_t) (buffer_width_ & 0x3FFF) << 30) |
-        ((uint64_t) (buffer_height_ & 0x3FFF) << 16) |
-        (frame_serial_ & 0xFFFFu),
-        std::memory_order_release);
-}
-
-bool mpv_handle_t::render_into(const macos_buffer &buffer) {
+bool macos_renderer::render_into(const macos_buffer &buffer) {
     if (!render_context_ || !buffer.fbo) return false;
 
     mpv_opengl_fbo fbo{(int) buffer.fbo, buffer_width_, buffer_height_, 0};
@@ -456,66 +310,62 @@ bool mpv_handle_t::render_into(const macos_buffer &buffer) {
     return render_result >= 0;
 }
 
-void mpv_handle_t::drain_one_frame() {
-    if (!render_context_) return;
-    mpv_render_context_update(render_context_);
-    int skip = 1;
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_SKIP_RENDERING, &skip},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-    mpv_render_context_render(render_context_, params);
+// Render thread, unlocked: render_into already waited for the GPU (glFinish), so the
+// IOSurface holds the complete frame. Copied out as RGBA8, top-down, alpha opaque.
+bool macos_renderer::read_back(const macos_buffer &buffer) {
+    auto surface = (IOSurfaceRef) buffer.io_surface;
+    if (!surface) return false;
+    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "read_back: IOSurfaceLock failed");
+        return false;
+    }
+    const auto *base = (const uint8_t *) IOSurfaceGetBaseAddress(surface);
+    const size_t bpr = IOSurfaceGetBytesPerRow(surface);
+    const size_t width = (size_t) buffer_width_;
+    const size_t height = (size_t) buffer_height_;
+    readback_scratch_.resize(width * height * 4);
+    for (size_t y = 0; y < height; ++y) {
+        const auto *src = (const uint32_t *) (base + y * bpr);
+        auto *dst = (uint32_t *) (readback_scratch_.data() + y * width * 4);
+        // BGRA bytes read as a little-endian word are 0xAARRGGBB; RGBA bytes are
+        // 0xAABBGGRR: swap the red and blue bytes.
+        for (size_t x = 0; x < width; ++x) {
+            const uint32_t pixel = src[x];
+            dst[x] = 0xFF000000u | (pixel & 0x0000FF00u) |
+                ((pixel >> 16) & 0xFFu) | ((pixel & 0xFFu) << 16);
+        }
+    }
+    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
+    return true;
 }
 
-void mpv_handle_t::cleanup_render_resources() {
-    stop_render_thread();
-
-    auto context = (CGLContextObj) cgl_context_;
-    if (context) {
-        CGLSetCurrentContext(context);
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        if (has_retired_buffers_) {
-            destroy_buffer_ring(retired_buffers_);
-            has_retired_buffers_ = false;
-        }
-        if (buffers_allocated_) {
-            destroy_buffer_ring(buffers_);
-            buffers_allocated_ = false;
-        }
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        publish_state_locked();
-        CGLSetCurrentContext(nullptr);
+uint64_t macos_renderer::copy_latest_frame(void *dest, int width, int height) {
+    if (!dest || width <= 0 || height <= 0) return 0;
+    std::lock_guard<std::mutex> guard(mutex_);
+    // latest_index_ is reset on every reconfig and set again only after a frame of the
+    // new size was read back, so a published frame always has the buffer size.
+    if (!cpu_readback_ || latest_index_ < 0 || width != buffer_width_ || height != buffer_height_) {
+        return 0;
     }
-
-    if (render_context_) {
-        mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
-        if (context) CGLSetCurrentContext(context);
-        mpv_render_context_free(render_context_);
-        if (context) CGLSetCurrentContext(nullptr);
-        render_context_ = nullptr;
-    }
-
-    if (cgl_context_) {
-        CGLDestroyContext((CGLContextObj) cgl_context_);
-        cgl_context_ = nullptr;
-    }
+    const size_t size = (size_t) width * height * 4;
+    if (readback_latest_.size() < size) return 0;
+    std::memcpy(dest, readback_latest_.data(), size);
+    return frame_state();
 }
 
 // Copies the latest rendered frame (BGRA IOSurface) into ARGB_8888 ints. BGRA words
 // read as little-endian uint32 are already 0xAARRGGBB; alpha is forced opaque because
-// mpv leaves it undefined for opaque video. Holds render_mutex_ so the render thread
-// cannot cycle the ring back onto this buffer mid-read.
-bool mpv_handle_t::read_surface_pixels(
+// mpv leaves it undefined for opaque video. Holds mutex_ so the render thread cannot
+// cycle the ring back onto this buffer mid-read.
+bool macos_renderer::read_surface_pixels(
     std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
+    std::lock_guard<std::mutex> guard(mutex_);
     if (!buffers_allocated_ || latest_index_ < 0) return false;
     auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
     if (!surface) return false;
 
     if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
-        LOG(this, LOG_LEVEL_ERROR, "read_surface_pixels: IOSurfaceLock failed");
+        LOG(&owner_, LOG_LEVEL_ERROR, "read_surface_pixels: IOSurfaceLock failed");
         return false;
     }
     const auto *base = (const uint8_t *) IOSurfaceGetBaseAddress(surface);
@@ -534,54 +384,62 @@ bool mpv_handle_t::read_surface_pixels(
     return true;
 }
 
-// Writes the latest rendered frame (BGRA IOSurface) as PNG. Independent of mpv's
-// screenshot pipeline, which cannot convert hwdec (videotoolbox) frames without a GPU
-// download. Holds render_mutex_ for the whole save so the render thread cannot cycle
-// the ring back onto this buffer mid-read.
-bool mpv_handle_t::save_surface_png(const char *path) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    if (!buffers_allocated_ || latest_index_ < 0 || !path) {
-        LOG(this, LOG_LEVEL_WARN, "save_surface_png: no surface/frame available");
-        return false;
+// A private FBO of the requested size on the render thread's CGL context: mpv redraws
+// the current frame into it (the ring and its consumer are untouched). Same orientation
+// contract as the ring (no FLIP_Y: mpv writes row 0 = top), and glReadPixels returns rows
+// from row 0, so the readback is top-down as is.
+bool macos_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) {
+    if (!render_context_) return false;
+    GLuint texture = 0, fbo = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    const GLenum fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    bool ok = fbo_status == GL_FRAMEBUFFER_COMPLETE;
+    if (!ok) LOG(&owner_, LOG_LEVEL_ERROR, "frame request FBO incomplete: 0x%x", fbo_status);
+    if (ok) {
+        mpv_opengl_fbo target{(int) fbo, width, height, 0};
+        mpv_render_param params[] = {
+            {MPV_RENDER_PARAM_OPENGL_FBO, &target},
+            {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+        ok = mpv_render_context_render(render_context_, params) >= 0;
+        glFinish();
     }
-    auto surface = (IOSurfaceRef) buffers_[latest_index_].io_surface;
-    if (!surface) {
-        LOG(this, LOG_LEVEL_ERROR, "save_surface_png: IOSurface is null");
-        return false;
-    }
-
-    if (IOSurfaceLock(surface, kIOSurfaceLockReadOnly, nullptr) != kIOReturnSuccess) {
-        LOG(this, LOG_LEVEL_ERROR, "IOSurfaceLock failed");
-        return false;
-    }
-    bool ok = false;
-    void *base = IOSurfaceGetBaseAddress(surface);
-    size_t bpr = IOSurfaceGetBytesPerRow(surface);
-    size_t width = IOSurfaceGetWidth(surface);
-    size_t height = IOSurfaceGetHeight(surface);
-
-    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
-    CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, base, bpr * height, nullptr);
-    CGImageRef image = CGImageCreate(
-        width, height, 8, 32, bpr, color_space,
-        kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst, // BGRA in memory, alpha ignored
-        provider, nullptr, false, kCGRenderingIntentDefault);
-    if (image) {
-        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
-        CGImageDestinationRef dest = CGImageDestinationCreateWithURL(
-            (__bridge CFURLRef) url, CFSTR("public.png"), 1, nullptr);
-        if (dest) {
-            CGImageDestinationAddImage(dest, image, nullptr);
-            ok = CGImageDestinationFinalize(dest);
-            CFRelease(dest);
+    if (ok) {
+        const size_t pixel_count = (size_t) width * height;
+        std::vector<uint8_t> rgba(pixel_count * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ok = glGetError() == GL_NO_ERROR;
+        if (ok) {
+            pixels.resize(pixel_count);
+            for (size_t i = 0; i < pixel_count; ++i) {
+                pixels[i] = 0xFF000000u | ((uint32_t) rgba[i * 4] << 16) |
+                    ((uint32_t) rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+            }
         }
-        CGImageRelease(image);
     }
-    CGDataProviderRelease(provider);
-    CGColorSpaceRelease(color_space);
-    IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, nullptr);
-    if (!ok) LOG(this, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &texture);
     return ok;
+}
+
+} // namespace
+
+std::shared_ptr<desktop_renderer> create_macos_renderer(mpv_handle_t &owner) {
+    auto renderer = std::make_shared<macos_renderer>(owner);
+    if (!renderer->create()) return nullptr;  // the destructor cleans up
+    return renderer;
 }
 
 } // namespace mediampv

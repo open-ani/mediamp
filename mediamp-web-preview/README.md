@@ -101,3 +101,7 @@ player.setMediaData(
 The wasm implementation is backed by the browser's `HTMLVideoElement`. Media
 format support, CORS, Range requests, and autoplay behavior therefore follow the
 current browser's rules.
+
+Video frames now use Compose's WebGL render-target texture API, so clipping and
+Compose overlays work without a native DOM video layer. The same HTML video
+still handles decoding, audio, and playback state.

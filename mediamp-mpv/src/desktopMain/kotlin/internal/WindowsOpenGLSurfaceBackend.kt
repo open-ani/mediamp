@@ -15,7 +15,7 @@ import org.openani.mediamp.mpv.nDestroyRenderContextWindowsOpenGL
 import org.openani.mediamp.mpv.nGetFrameStateWindowsOpenGL
 import org.openani.mediamp.mpv.nHasWindowsOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsWindowsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePngWindowsOpenGL
+import org.openani.mediamp.mpv.nRenderFramePixelsWindowsOpenGL
 import org.openani.mediamp.mpv.nSetSurfaceConfigWindowsOpenGL
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
@@ -36,7 +36,7 @@ import org.openani.mediamp.mpv.utils.SkiaWindowsOpenGLInterop
  * context freely.
  */
 @OptIn(InternalMediampApi::class)
-internal object WindowsOpenGLSurfaceBackend : MpvSurfaceBackend {
+internal object WindowsOpenGLSurfaceBackend : MpvReadbackBackend {
     override fun createRenderContext(ptr: Long) = nCreateRenderContextWindowsOpenGL(ptr)
     override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextWindowsOpenGL(ptr)
 
@@ -46,15 +46,11 @@ internal object WindowsOpenGLSurfaceBackend : MpvSurfaceBackend {
 
     override fun getFrameState(ptr: Long) = nGetFrameStateWindowsOpenGL(ptr)
     override fun hasSurface(ptr: Long) = nHasWindowsOpenGLSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngWindowsOpenGL(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsWindowsOpenGL(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsWindowsOpenGL(ptr, dims)
 
-    /** See [nCopyLatestFrameWindowsOpenGL]. */
-    fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =
+    override fun copyLatestFrame(ptr: Long, destAddr: Long, width: Int, height: Int): Long =
         nCopyLatestFrameWindowsOpenGL(ptr, destAddr, width, height)
-
-    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer =
-        MpvReadbackSurface(handlePtr, this)
 
     override val rendererName: String get() = "OpenGL/WGL readback"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop =
@@ -75,8 +71,16 @@ internal class WindowsOpenGLRenderContextLifecycle(
     private val eager: EagerRenderContextLifecycle,
     private val host: MpvRenderContextHost,
 ) : MpvRenderContextLifecycle by eager {
+    private var replacedHwdec: String? = null
+
     override fun initialize() {
+        replacedHwdec = host.handle.getPropertyString("hwdec")
         check(host.handle.setPropertyString("hwdec", "d3d11va-copy,auto-safe"))
         eager.initialize()
+    }
+
+    // The D3D11 backends decode zero-copy into their own device again.
+    override fun detach() {
+        replacedHwdec?.let { host.handle.setPropertyString("hwdec", it) }
     }
 }

@@ -139,13 +139,14 @@ internal fun Project.wireDesktopRuntimeDependencyConstraints(
     dependencyNotations: List<String>,
     configurationNames: List<String> = listOf("desktopApiElements", "desktopRuntimeElements"),
 ) {
+    // Outgoing variants are non-declarable in Kotlin 2.4.
+    val constraints = configurations.dependencyScope("desktopNativeRuntimeConstraints").get()
+    dependencyNotations.forEach { notation ->
+        constraints.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
+    }
     afterEvaluate {
         configurationNames.forEach { configName ->
-            configurations.findByName(configName)?.let { config ->
-                dependencyNotations.forEach { notation ->
-                    config.dependencyConstraints.add(dependencies.constraints.create("$notation!!"))
-                }
-            }
+            configurations.findByName(configName)?.extendsFrom(constraints)
         }
     }
 }

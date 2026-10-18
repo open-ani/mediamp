@@ -29,24 +29,13 @@ import org.jetbrains.skia.DirectContext
 internal class SkiaWindowsOpenGLInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
 
     private class RedrawerAccess(redrawerClass: Class<*>) {
-        val contextHandlerField: Field = redrawerClass.getDeclaredField("contextHandler")
-            .apply { isAccessible = true }
         val contextField: Field = redrawerClass.getDeclaredField("context")
             .apply { isAccessible = true }
-        val directContextField: Field = Class.forName("org.jetbrains.skiko.context.ContextHandler")
-            .getDeclaredField("context")
-            .apply { isAccessible = true }
+        val directContext = SkiaDirectContextAccess(redrawerClass)
 
         init {
-            check(contextHandlerField.type.name == "org.jetbrains.skiko.context.OpenGLContextHandler") {
-                "Unexpected WindowsOpenGLRedrawer.contextHandler type ${contextHandlerField.type.name}; " +
-                    "Skiko 0.9.37.4 OpenGL interop layout changed."
-            }
             check(contextField.type == java.lang.Long.TYPE) {
-                "Unexpected WindowsOpenGLRedrawer.context type ${contextField.type}; expected long."
-            }
-            check(DirectContext::class.java.isAssignableFrom(directContextField.type)) {
-                "Unexpected ContextHandler.context type ${directContextField.type}; expected DirectContext."
+                "Unexpected Skiko OpenGL context type ${contextField.type}; expected long."
             }
         }
     }
@@ -56,7 +45,10 @@ internal class SkiaWindowsOpenGLInterop(private val layerRedrawer: SkiaLayerRedr
 
     private fun currentRedrawer(): Any {
         val redrawer = layerRedrawer.redrawer
-        check(redrawer.javaClass.name == WINDOWS_OPENGL_REDRAWER) {
+        check(redrawer.javaClass.name in setOf(
+            WINDOWS_OPENGL_REDRAWER,
+            "org.jetbrains.skiko.renderer.WindowsOpenGLRenderer",
+        )) {
             "Unsupported Skiko redrawer ${redrawer.javaClass.name}. The mpv OpenGL fallback " +
                 "on Windows requires Skiko's WindowsOpenGLRedrawer. Recreate the player if " +
                 "Skiko changed its render backend."
@@ -85,7 +77,7 @@ internal class SkiaWindowsOpenGLInterop(private val layerRedrawer: SkiaLayerRedr
         get() {
             val redrawer = currentRedrawer()
             val access = accessFor(redrawer)
-            return access.directContextField.get(access.contextHandlerField.get(redrawer)) as DirectContext?
+            return access.directContext.get(redrawer)
         }
 
     companion object {

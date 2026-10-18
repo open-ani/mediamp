@@ -236,7 +236,8 @@ internal class MpvFramePreview(
             }
 
             val counterBefore = renderCounter.value
-            val timePosBeforeMillis = (handle.getPropertyDouble("time-pos") * 1000).toLong()
+            // Null while mpv cannot report a position; "unknown" must not count as moved.
+            val timePosBeforeMillis = handle.getPropertyDoubleOrNull("time-pos")?.let { (it * 1000).toLong() }
             unsettled = true
             if (!handle.command("seek", formatSecondsForMpv(target / 1000.0), "absolute+keyframes")) {
                 return null
@@ -256,8 +257,8 @@ internal class MpvFramePreview(
                 while (true) {
                     if (renderCounter.value > counterBefore) break
                     val seeking = handle.getPropertyBoolean("seeking")
-                    val timePosMillis = (handle.getPropertyDouble("time-pos") * 1000).toLong()
-                    if (timePosMillis != timePosBeforeMillis) moved = true
+                    val timePosMillis = handle.getPropertyDoubleOrNull("time-pos")?.let { (it * 1000).toLong() }
+                    if (timePosMillis != null && timePosMillis != timePosBeforeMillis) moved = true
                     if (seeking) sawSeeking = true
                     if (!seeking && (sawSeeking || moved)) break
                     if (!seeking && ++quietPolls >= 15) break

@@ -10,11 +10,12 @@ package org.openani.mediamp.mpv
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.mpv.internal.MpvBackendChange
+import org.openani.mediamp.mpv.internal.MpvBackendSelection
 import org.openani.mediamp.mpv.internal.MpvRenderContextHost
 import org.openani.mediamp.mpv.internal.MpvRenderContextLifecycle
 import org.openani.mediamp.mpv.internal.MpvSurfaceBackend
@@ -24,6 +25,7 @@ import org.openani.mediamp.mpv.internal.currentSurfaceBackend
 import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
 import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
+import org.openani.mediamp.mpv.internal.writeFramePng
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
@@ -55,8 +57,12 @@ actual class MpvMediampPlayer(
 
     @Volatile
     private var rendering: Rendering? = null
+    private val backendSelection = MpvBackendSelection()
     internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
     private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
+
+    /** What Compose draws the video with right now (see [MpvSurfaceConsumer.rendererName]). UI thread only. */
+    internal val rendererName: String? get() = surfaceRing?.rendererName
     internal val renderContextLifecycle: MpvRenderContextLifecycle? get() = rendering?.lifecycle
 
     /**
@@ -74,8 +80,7 @@ actual class MpvMediampPlayer(
     private fun attachBackend(backend: MpvSurfaceBackend) {
         rendering?.let {
             check(it.backend === backend) {
-                "Skiko changed the mpv surface backend from ${it.backend.rendererName} to ${backend.rendererName}. " +
-                    "Recreate the player to use the new renderer."
+                "Attaching ${backend.rendererName} over ${it.backend.rendererName}; detach the current backend first"
             }
             return
         }
@@ -99,8 +104,26 @@ actual class MpvMediampPlayer(
         renderContextBecameReady()
     }
 
-    /** Explicitly creates a windowless render context for headless capture. Idempotent. */
-    internal fun createRenderContext(): Boolean {
+    /** Releases the current backend's consumer and producer; see [MpvBackendChange.REPLACE]. */
+    private fun detachBackend() {
+        val current = rendering ?: return
+        rendering = null
+        current.surface.release()
+        current.lifecycle.detach()
+        current.backend.destroyRenderContext(handle.ptr)
+    }
+
+    /**
+     * Creates a render context without a surface, so a player that never shows video in a
+     * window can still open media, play it and capture frames. Idempotent; returns whether
+     * the render context exists. Call it on [mainDispatcher] before opening media.
+     *
+     * macOS creates the render context when the player is constructed. On Windows this
+     * creates a windowless D3D11 context; the player cannot attach an OpenGL surface later.
+     * On Linux this returns false: the producer context must join the GLX share group of an
+     * attached surface, so media opened before one attaches plays with `vo=null` until then.
+     */
+    fun createRenderContext(): Boolean {
         if (surfaceTeardownStarted) return false
         if (rendering == null) headlessSurfaceBackend()?.let { attachBackend(it) }
         return ringBackend?.createRenderContext(handle.ptr) ?: false
@@ -113,14 +136,69 @@ actual class MpvMediampPlayer(
         !surfaceTeardownStarted && (renderContextLifecycle?.ensureReadyForLoad() ?: !supportsSurfaceBackend())
 
     /**
-     * Returns null until Skiko has chosen its redrawer; files loaded before that play with
-     * `vo=null`.
+     * The backend for Skiko's live redrawer, or null while it has none. On Windows this
+     * follows the redrawer, which Skiko replaces whenever one fails (including on its first
+     * frame); elsewhere it is fixed.
+     */
+    internal fun surfaceBackendFor(layerRedrawer: SkiaLayerRedrawer): MpvSurfaceBackend? =
+        currentSurfaceBackend(layerRedrawer)?.let(backendSelection::resolve)
+
+    /** Whether the current backend is the one for Skiko's live redrawer, so its interop may be drawn with. */
+    internal fun rendersFor(layerRedrawer: SkiaLayerRedrawer): Boolean {
+        val current = rendering?.backend ?: return false
+        return current === surfaceBackendFor(layerRedrawer)
+    }
+
+    /**
+     * Selects the backend for Skiko's live redrawer — again whenever Skiko replaced it — and
+     * returns its interop. Returns null until Skiko has chosen its redrawer (files loaded
+     * before that play with `vo=null`), and when the backend would have to change during
+     * playback ([MpvBackendChange.REFUSE_DURING_PLAYBACK]).
      */
     internal fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop? {
         if (surfaceTeardownStarted) return null
-        val backend = currentSurfaceBackend(layerRedrawer) ?: return null
+        val backend = surfaceBackendFor(layerRedrawer) ?: return null
+        val current = rendering?.backend
+        when (MpvBackendSelection.change(current, backend, hasActivePlaybackSession())) {
+            MpvBackendChange.KEEP -> {}
+            MpvBackendChange.REPLACE -> {
+                MPVLog.info(
+                    handle.ptr,
+                    "switching the mpv render path from ${current?.rendererName} to ${backend.rendererName}",
+                )
+                detachBackend()
+            }
+
+            MpvBackendChange.REFUSE_DURING_PLAYBACK -> {
+                MPVLog.error(
+                    handle.ptr,
+                    "Skiko switched its renderer during playback; the ${current?.rendererName} render path " +
+                        "cannot follow it to ${backend.rendererName} without reopening the media, video stays black",
+                )
+                return null
+            }
+        }
+        // Without a producer vo=libmpv cannot show video at all, so a producer that cannot come
+        // up on this machine hands over to its fallback before it is attached, which is when a
+        // load waiting for the selection may start. Probed only with no other producer
+        // installed: native creation reports success while any renderer exists.
+        if (MpvBackendSelection.fallbackWhenUnavailable(backend) != null && !backend.createRenderContext(handle.ptr)) {
+            backendSelection.markUnavailable(backend)?.let { fallback ->
+                MPVLog.warn(
+                    handle.ptr,
+                    "${backend.rendererName} render context unavailable; using ${fallback.rendererName} instead",
+                )
+                return createSkiaInterop(layerRedrawer)
+            }
+        }
+        val interop = backend.createSkiaInterop(layerRedrawer)
+        if (rendering == null) {
+            // Before attachBackend: eager lifecycles create the producer device there.
+            runCatching { interop.renderDevicePtr }.getOrNull()
+                ?.let { backend.hintConsumerDevice(handle.ptr, it) }
+        }
         attachBackend(backend)
-        return backend.createSkiaInterop(layerRedrawer)
+        return interop
     }
 
     /** See [MpvSurfaceConsumer.requestSurface]. */
@@ -133,7 +211,7 @@ actual class MpvMediampPlayer(
     }
 
     /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
-    internal fun currentFrameImage(directContext: DirectContext): Image? =
+    internal fun currentFrameImage(directContext: DirectContext?): Image? =
         if (surfaceTeardownStarted) null else surfaceRing?.currentFrameImage(directContext)
 
     /** See [MpvSurfaceConsumer.release]. */
@@ -172,37 +250,23 @@ actual class MpvMediampPlayer(
     }
 
     /**
-     * Reads the frame back from our own surface ring (mpv's screenshot pipeline cannot
-     * convert hwdec videotoolbox/d3d11va frames without zimg). When no surface is
-     * attached (headless capture), configures an ephemeral video-sized ring and waits
-     * for the render thread to produce a frame in it.
+     * Renders the current frame once more at the video's display size (`dwidth` x
+     * `dheight`: rotation and sample aspect ratio applied) on the render thread and writes
+     * it as PNG. The ring, sized to the consumer, is not involved: the image is the video
+     * at its own resolution and has no letterbox margins, and headless capture needs no
+     * ring either. mpv's own screenshot command is the fallback; it cannot convert hwdec
+     * frames without zimg.
      */
     override suspend fun takeScreenshotImpl(path: String): Boolean {
-        val backend = ringBackend ?: return super.takeScreenshotImpl(path)
-        val ptr = handle.ptr
-        val hadSurface = backend.hasSurface(ptr)
-        var configured = false
-        if (!hadSurface) {
-            val width = handle.getPropertyInt("width")
-            val height = handle.getPropertyInt("height")
-            if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
-            configured = backend.setSurfaceConfig(ptr, width, height, 0L)
-            if (!configured) return super.takeScreenshotImpl(path)
-            val rendered = withTimeoutOrNull(2_000) {
-                while (((backend.getFrameState(ptr) ushr 44) and 0xF).toInt() == 0xF) {
-                    delay(10)
-                }
-                true
-            } ?: false
-            if (!rendered) {
-                backend.setSurfaceConfig(ptr, 0, 0, 0L)
-                return super.takeScreenshotImpl(path)
-            }
+        val backend = ringBackend?.takeUnless { surfaceTeardownStarted } ?: return super.takeScreenshotImpl(path)
+        val width = handle.getPropertyInt("dwidth")
+        val height = handle.getPropertyInt("dheight")
+        if (width <= 0 || height <= 0) return super.takeScreenshotImpl(path)
+        val saved = withContext(Dispatchers.IO) {
+            val pixels = backend.renderFramePixels(handle.ptr, width, height) ?: return@withContext false
+            writeFramePng(pixels, width, height, path)
         }
-        val saved = backend.saveSurfacePng(ptr, path)
-        if (configured) backend.setSurfaceConfig(ptr, 0, 0, 0L)
-        if (saved) return true
-        return super.takeScreenshotImpl(path)
+        return saved || super.takeScreenshotImpl(path)
     }
 
     companion object {

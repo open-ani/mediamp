@@ -188,7 +188,6 @@ state.isBuffering   // data availability — show a spinner when state.isLoading
 ```
 
 ```kotlin
-// Play/pause button: never dead, no flicker during buffering.
 Button(onClick = { player.togglePlayWhenReady() }) {
     Icon(if (state.playWhenReady) PauseIcon else PlayIcon)
 }

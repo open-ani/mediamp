@@ -32,6 +32,17 @@ external fun nDestroyRenderContextMacos(ptr: Long): Boolean
 external fun nSetSurfaceConfigMacos(ptr: Long, width: Int, height: Int, mtlDevicePtr: Long): Boolean
 
 /**
+ * [nSetSurfaceConfigMacos] for consumers without a Metal device: the render thread also
+ * copies every frame to system memory, taken with [nCopyLatestFrameMacos].
+ */
+@InternalMediampApi
+external fun nSetReadbackSurfaceConfigMacos(ptr: Long, width: Int, height: Int): Boolean
+
+/** macOS readback equivalent of [nCopyLatestFrameWindowsOpenGL]. */
+@InternalMediampApi
+external fun nCopyLatestFrameMacos(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
+/**
  * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
  * height(14) | serial(16). Any change means a new frame or a new buffer ring.
  */
@@ -49,9 +60,9 @@ external fun nAckRetiredBuffersMacos(ptr: Long): Boolean
 @InternalMediampApi
 external fun nHasMetalSurface(ptr: Long): Boolean
 
-/** Saves the latest rendered frame (IOSurface contents) as PNG. */
+/** Metal/IOSurface path equivalent of [nRenderFramePixelsD3D11]. */
 @InternalMediampApi
-external fun nSaveSurfacePng(ptr: Long, path: String): Boolean
+external fun nRenderFramePixelsMacos(ptr: Long, width: Int, height: Int): IntArray?
 
 /**
  * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
@@ -72,6 +83,24 @@ external fun nCreateRenderContextD3D11(ptr: Long): Boolean
 external fun nDestroyRenderContextD3D11(ptr: Long): Boolean
 
 /**
+ * Records Skiko's DirectXDevice pointer (see [nSetSurfaceConfigD3D11]) so the next
+ * [nCreateRenderContextD3D11] creates mpv's D3D11 device on the same adapter as Skia.
+ */
+@InternalMediampApi
+external fun nSetConsumerDeviceHintD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
+
+/**
+ * [nSetSurfaceConfigD3D11] for consumers without a D3D12 device: the render thread
+ * also copies every frame to system memory, taken with [nCopyLatestFrameD3D11].
+ */
+@InternalMediampApi
+external fun nSetReadbackSurfaceConfigD3D11(ptr: Long, width: Int, height: Int): Boolean
+
+/** D3D11 readback equivalent of [nCopyLatestFrameWindowsOpenGL]. */
+@InternalMediampApi
+external fun nCopyLatestFrameD3D11(ptr: Long, destAddr: Long, width: Int, height: Int): Long
+
+/**
  * Asks the render thread to (re)allocate the buffer ring at [width] x [height], opening
  * each texture on the ID3D12Device inside [skikoDevicePtr] (a pointer to Skiko's native
  * DirectXDevice struct; 0 = D3D11-only ring without a Skia side, used headless).
@@ -80,6 +109,15 @@ external fun nDestroyRenderContextD3D11(ptr: Long): Boolean
  */
 @InternalMediampApi
 external fun nSetSurfaceConfigD3D11(ptr: Long, width: Int, height: Int, skikoDevicePtr: Long): Boolean
+
+/**
+ * Whether the ring textures of the current render context can be opened on the
+ * ID3D12Device inside [skikoDevicePtr]: only when both devices are on one adapter. When
+ * not, the reason is logged and frames must be taken through
+ * [nSetReadbackSurfaceConfigD3D11]. False without a render context.
+ */
+@InternalMediampApi
+external fun nCanShareFramesD3D11(ptr: Long, skikoDevicePtr: Long): Boolean
 
 /**
  * Packed frame state: generation(16) | latestIndex(4, 0xF = none) | width(14) |
@@ -99,9 +137,15 @@ external fun nAckRetiredBuffersD3D11(ptr: Long): Boolean
 @InternalMediampApi
 external fun nHasD3D11Surface(ptr: Long): Boolean
 
-/** Saves the latest rendered frame (shared texture contents) as PNG. */
+/**
+ * Renders the current frame once more into a temporary [width] x [height] target and
+ * returns it as ARGB_8888 pixels (`0xAARRGGBB`, row-major, top-down, alpha forced
+ * opaque): the video at the requested size instead of the consumer's. Needs no surface,
+ * only a frame mpv can redraw. Blocks until the render thread served the request
+ * (bounded); returns `null` when it could not.
+ */
 @InternalMediampApi
-external fun nSaveSurfacePngD3D11(ptr: Long, path: String): Boolean
+external fun nRenderFramePixelsD3D11(ptr: Long, width: Int, height: Int): IntArray?
 
 // Windows OpenGL fallback render path (render_opengl_win.cpp): used when Compose
 // renders with Skiko's OpenGL backend (SKIKO_RENDER_API=OPENGL) instead of the
@@ -140,9 +184,9 @@ external fun nGetFrameStateWindowsOpenGL(ptr: Long): Long
 @InternalMediampApi
 external fun nHasWindowsOpenGLSurface(ptr: Long): Boolean
 
-/** Saves the latest rendered frame (CPU copy) as PNG via WIC. */
+/** Windows OpenGL fallback equivalent of [nRenderFramePixelsD3D11]. */
 @InternalMediampApi
-external fun nSaveSurfacePngWindowsOpenGL(ptr: Long, path: String): Boolean
+external fun nRenderFramePixelsWindowsOpenGL(ptr: Long, width: Int, height: Int): IntArray?
 
 /** Windows OpenGL fallback equivalent of [nReadSurfacePixelsD3D11]. */
 @InternalMediampApi
@@ -211,9 +255,9 @@ external fun nAckRetiredBuffersOpenGL(ptr: Long): Boolean
 @InternalMediampApi
 external fun nHasOpenGLSurface(ptr: Long): Boolean
 
-/** Saves the latest producer texture through native debug readback. */
+/** Linux OpenGL equivalent of [nRenderFramePixelsD3D11]. */
 @InternalMediampApi
-external fun nSaveSurfacePngOpenGL(ptr: Long, path: String): Boolean
+external fun nRenderFramePixelsOpenGL(ptr: Long, width: Int, height: Int): IntArray?
 
 /**
  * Creates a consumer-context FBO and attaches [textureName]. This must be called only

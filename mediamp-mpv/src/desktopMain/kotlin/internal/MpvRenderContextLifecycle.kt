@@ -89,6 +89,12 @@ internal interface MpvRenderContextLifecycle {
      * first attach) — the decoder cannot be created then.
      */
     fun captureProvisioning(): MpvRenderContextProvisioning?
+
+    /**
+     * Undoes what [initialize] changed on the handle, when the player moves to another
+     * backend (see `MpvBackendChange.REPLACE`). The caller destroys the producer context.
+     */
+    fun detach() {}
 }
 
 /**

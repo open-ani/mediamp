@@ -8,18 +8,21 @@
 
 package org.openani.mediamp.mpv
 
+import org.openani.mediamp.mpv.internal.D3D11ReadbackSurfaceBackend
 import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
 import org.openani.mediamp.mpv.internal.WindowsOpenGLSurfaceBackend
 import org.openani.mediamp.mpv.internal.windowsSurfaceBackend
 import kotlin.test.Test
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
-import kotlin.test.assertTrue
 
 class WindowsSurfaceBackendTest {
     private fun redrawerClass(name: String): Class<*> =
-        Class.forName("org.jetbrains.skiko.redrawer.$name", false, javaClass.classLoader)
+        runCatching { Class.forName("org.jetbrains.skiko.redrawer.$name", false, javaClass.classLoader) }
+            .getOrElse {
+                Class.forName("org.jetbrains.skiko.renderer.${name.removeSuffix("Redrawer")}Renderer",
+                    false, javaClass.classLoader)
+            }
 
     @Test
     fun `wait for a redrawer instead of guessing the Windows backend`() {
@@ -44,9 +47,9 @@ class WindowsSurfaceBackendTest {
     }
 
     @Test
-    fun `unsupported redrawers fail with the actual class name`() {
-        val redrawer = redrawerClass("SoftwareRedrawer")
-        val error = assertFailsWith<IllegalStateException> { windowsSurfaceBackend(redrawer) }
-        assertTrue(error.message.orEmpty().contains(redrawer.name))
+    fun `software and ANGLE redrawers select D3D11 readback`() {
+        for (name in listOf("WindowsSoftwareRedrawer", "SoftwareRedrawer", "AngleRedrawer")) {
+            assertSame(D3D11ReadbackSurfaceBackend, windowsSurfaceBackend(redrawerClass(name)), name)
+        }
     }
 }

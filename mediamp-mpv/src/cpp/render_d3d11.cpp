@@ -14,27 +14,32 @@
 // zero-copy. Mirrors the macOS path (render_macos.mm): IOSurface ring -> shared texture
 // ring, CGL context -> D3D11 device, glFinish -> event-query wait.
 //
-// Threading model: the render thread is the only thread that renders or mutates the
-// buffer ring. mpv's update callback, buffer reconfiguration (resize) and consumer acks
-// are requests posted under render_mutex_; consumers read the packed frame_state_ and
-// sample the latest buffer. The immediate context is put in multithread-protected mode
-// so the screenshot readback (JNI thread) can CopyResource/Map while the render thread
-// is inside mpv_render_context_render.
+// The ring protocol and threading model are shared with the other GPU paths
+// (surface_ring.h). This path additionally supports CPU readback consumers (Skiko's
+// software and ANGLE redrawers), which take frames from system memory instead of
+// sampling ring textures.
 //
-// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm); the
-// consumer ignores it by wrapping the texture with an opaque color type (RGB_888X), and
-// the CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
+// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm). Its
+// d3d11 renderer writes alpha=1 in practice, so the consumer wraps the texture as
+// RGBA_8888 (Skia's D3D backend rejects the opaque RGB_888x for render targets), and the
+// CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
 
 #ifdef _WIN32
+
+// COM methods returning a struct (ID3D12Device::GetAdapterLuid) use a hidden result
+// pointer in the MSVC ABI; MinGW's default by-value declarations do not match it. The
+// explicit form declares that pointer, so it is correct under both g++ and clang.
+#define WIDL_EXPLICIT_AGGREGATE_RETURNS
 
 #include <initguid.h>
 #include <windows.h>
 #include <d3d11_4.h>
 #include <d3d12.h>
-#include <dxgi1_2.h>
+#include <dxgi1_6.h>
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -42,11 +47,13 @@
 #include <mpv/render.h>
 #include <mpv/render_d3d11.h>
 
-#include "mpv_handle_t.h"
+#include "surface_ring.h"
+#include "skiko_directx_device.h"
 #include "log.h"
-#include "png_writer_win.h"
 
 namespace {
+
+using mediampv::open_skia_d3d12_device;
 
 template <typename T>
 void safe_release(T *&object) {
@@ -56,385 +63,460 @@ void safe_release(T *&object) {
     }
 }
 
-// Extracts the ID3D12Device from Skiko's native DirectXDevice struct (the value of the
-// Direct3DRedrawer.device field, reflected on the Kotlin side).
+bool same_luid(const LUID &a, const LUID &b) {
+    return a.LowPart == b.LowPart && a.HighPart == b.HighPart;
+}
+
+LUID d3d12_adapter_luid(ID3D12Device *device) {
+    LUID luid{};
+    device->GetAdapterLuid(&luid);
+    return luid;
+}
+
+std::string adapter_name(const DXGI_ADAPTER_DESC &desc) {
+    char name[256] = {};
+    WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+    return name;
+}
+
+// The adapter an ID3D11Device was created on; false when DXGI cannot tell.
+bool d3d11_adapter_desc(ID3D11Device *device, DXGI_ADAPTER_DESC &desc) {
+    IDXGIDevice *dxgi_device = nullptr;
+    if (FAILED(device->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgi_device)))) {
+        return false;
+    }
+    IDXGIAdapter *adapter = nullptr;
+    HRESULT hr = dxgi_device->GetAdapter(&adapter);
+    dxgi_device->Release();
+    if (FAILED(hr) || !adapter) return false;
+    hr = adapter->GetDesc(&desc);
+    adapter->Release();
+    return SUCCEEDED(hr);
+}
+
+// The DXGI adapter with `luid`; caller owns it.
+IDXGIAdapter *adapter_by_luid(const void *instance_handle, const LUID &luid) {
+    IDXGIFactory4 *factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory4), reinterpret_cast<void **>(&factory));
+    if (FAILED(hr) || !factory) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "CreateDXGIFactory1(IDXGIFactory4) failed: 0x%lx", hr);
+        return nullptr;
+    }
+    IDXGIAdapter *adapter = nullptr;
+    hr = factory->EnumAdapterByLuid(luid, __uuidof(IDXGIAdapter), reinterpret_cast<void **>(&adapter));
+    factory->Release();
+    if (FAILED(hr) || !adapter) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "EnumAdapterByLuid(%08lx:%08lx) failed: 0x%lx", luid.HighPart, luid.LowPart, hr);
+        return nullptr;
+    }
+    return adapter;
+}
+
+// Adapter name for logs; "unknown" when DXGI cannot resolve the LUID.
+std::string adapter_name_for_luid(const void *instance_handle, const LUID &luid) {
+    IDXGIAdapter *adapter = adapter_by_luid(instance_handle, luid);
+    if (!adapter) return "unknown";
+    DXGI_ADAPTER_DESC desc{};
+    const HRESULT hr = adapter->GetDesc(&desc);
+    adapter->Release();
+    return SUCCEEDED(hr) ? adapter_name(desc) : "unknown";
+}
+
+// The adapter Skia renders on, from Skiko's DirectXDevice pointer; caller owns it.
+IDXGIAdapter *skia_adapter(const void *instance_handle, int64_t skiko_device_ptr) {
+    ID3D12Device *skia_device = open_skia_d3d12_device(instance_handle, skiko_device_ptr);
+    if (!skia_device) return nullptr;
+    const LUID luid = d3d12_adapter_luid(skia_device);
+    skia_device->Release();
+    return adapter_by_luid(instance_handle, luid);
+}
+
+// Debug overrides that reproduce other GPU environments on the machine at hand: the render
+// path matrix scenarios, and diagnosing a user's machine without their hardware. Read once
+// per process; every renderer logs the active ones.
 //
-// Expected x64 layout (skiko 0.9.37, awtMain/cpp/windows/directXRedrawer.cc):
-//   slot 0 (byte  0): HWND hWnd
-//   slot 2 (byte 16): backendContext.fDevice   (gr_cp<ID3D12Device>)
-//   slot 3 (byte 24): backendContext.fQueue    (gr_cp<ID3D12CommandQueue>)
-//   slot 6 (byte 48): device                   (gr_cp<ID3D12Device>)
-//   slot 8 (byte 64): queue                    (gr_cp<ID3D12CommandQueue>)
-//
-// These offsets are inferred from member order, not an ABI guarantee, so we only trust
-// them when two independent slots agree on the same pointer (fDevice == device and
-// fQueue == queue — skiko stores the same COM pointers in both places), and even then
-// the result must survive QueryInterface(ID3D12Device) before it is used.
-ID3D12Device *open_skia_d3d12_device(const void *instance_handle, int64_t skiko_device_ptr) {
-    if (skiko_device_ptr == 0) return nullptr;
+//   MEDIAMP_D3D11_ADAPTER: where mpv's device is created. `auto` (Skia's adapter, then the
+//     default hardware adapter, then WARP), `default` (ignore Skia's adapter, the behaviour
+//     before devices followed Skia), `warp`, `minimum-power` / `high-performance` (that GPU
+//     of a hybrid machine).
+//   MEDIAMP_D3D11_MAX_FEATURE_LEVEL: hardware devices behave as on a GPU supporting at most
+//     this level (e.g. `10_1`, a DX10.1-class GPU), so creation fails where it would fail
+//     there and the WARP fallback runs. WARP is unaffected, as on a real machine.
+enum class adapter_override { automatic, system_default, warp, minimum_power, high_performance };
 
-    // Defense-in-depth around trusting a reflected pointer plus an inferred struct layout.
-    // We build with MinGW g++, which has no MSVC __try/__except, so we validate reads with
-    // IsBadReadPtr instead of catching an access violation. This cannot detect a
-    // mapped-but-wrong region, so the two-slot agreement and the final QueryInterface stay
-    // as the real validation — IsBadReadPtr only turns the most likely upgrade failure (a
-    // shrunk/moved struct whose slots land on unmapped memory) into a graceful null.
+struct d3d11_overrides {
+    adapter_override adapter = adapter_override::automatic;
+    std::string adapter_text;  // raw value, empty when unset
+    D3D_FEATURE_LEVEL max_level = static_cast<D3D_FEATURE_LEVEL>(0);  // 0 = no cap
+    std::string max_level_text;
+    std::string ignored;  // unknown values, reported with the active overrides
+};
 
-    // A real DirectXDevice* is at least pointer-aligned; a misaligned value is not one.
-    if (skiko_device_ptr & static_cast<int64_t>(sizeof(void *) - 1)) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device pointer %lld is misaligned; not a DirectXDevice",
-            static_cast<long long>(skiko_device_ptr));
+std::string environment_value(const char *name) {
+    char value[64] = {};
+    const DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+    return length > 0 && length < sizeof(value) ? std::string(value, length) : std::string();
+}
+
+const d3d11_overrides &overrides() {
+    static const d3d11_overrides parsed = [] {
+        d3d11_overrides result;
+        result.adapter_text = environment_value("MEDIAMP_D3D11_ADAPTER");
+        const std::string &adapter = result.adapter_text;
+        if (adapter == "default") {
+            result.adapter = adapter_override::system_default;
+        } else if (adapter == "warp") {
+            result.adapter = adapter_override::warp;
+        } else if (adapter == "minimum-power") {
+            result.adapter = adapter_override::minimum_power;
+        } else if (adapter == "high-performance") {
+            result.adapter = adapter_override::high_performance;
+        } else if (!adapter.empty() && adapter != "auto") {
+            result.ignored += " MEDIAMP_D3D11_ADAPTER=" + adapter;
+        }
+
+        static const struct {
+            const char *name;
+            D3D_FEATURE_LEVEL level;
+        } known_levels[] = {
+            {"12_1", D3D_FEATURE_LEVEL_12_1}, {"12_0", D3D_FEATURE_LEVEL_12_0},
+            {"11_1", D3D_FEATURE_LEVEL_11_1}, {"11_0", D3D_FEATURE_LEVEL_11_0},
+            {"10_1", D3D_FEATURE_LEVEL_10_1}, {"10_0", D3D_FEATURE_LEVEL_10_0},
+            {"9_3", D3D_FEATURE_LEVEL_9_3}, {"9_2", D3D_FEATURE_LEVEL_9_2}, {"9_1", D3D_FEATURE_LEVEL_9_1},
+        };
+        result.max_level_text = environment_value("MEDIAMP_D3D11_MAX_FEATURE_LEVEL");
+        if (!result.max_level_text.empty()) {
+            for (const auto &known : known_levels) {
+                if (result.max_level_text == known.name) result.max_level = known.level;
+            }
+            if (result.max_level == 0) result.ignored += " MEDIAMP_D3D11_MAX_FEATURE_LEVEL=" + result.max_level_text;
+        }
+        return result;
+    }();
+    return parsed;
+}
+
+void log_overrides(const void *instance_handle) {
+    const d3d11_overrides &active = overrides();
+    if (!active.ignored.empty()) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "D3D11 overrides: ignoring unknown values:%s",
+            active.ignored.c_str());
+    }
+    if (active.adapter != adapter_override::automatic || active.max_level != 0) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "D3D11 overrides active: MEDIAMP_D3D11_ADAPTER=%s MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s",
+            active.adapter != adapter_override::automatic ? active.adapter_text.c_str() : "auto",
+            active.max_level != 0 ? active.max_level_text.c_str() : "none");
+    }
+}
+
+bool is_software_adapter(IDXGIAdapter *adapter) {
+    IDXGIAdapter1 *adapter1 = nullptr;
+    if (FAILED(adapter->QueryInterface(__uuidof(IDXGIAdapter1), reinterpret_cast<void **>(&adapter1)))) {
+        return false;
+    }
+    DXGI_ADAPTER_DESC1 desc{};
+    const bool software = SUCCEEDED(adapter1->GetDesc1(&desc)) && (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE);
+    adapter1->Release();
+    return software;
+}
+
+// The first hardware adapter in `preference` order (the hybrid-GPU choice); caller owns it.
+IDXGIAdapter *adapter_by_preference(const void *instance_handle, DXGI_GPU_PREFERENCE preference) {
+    IDXGIFactory6 *factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory6), reinterpret_cast<void **>(&factory));
+    if (FAILED(hr) || !factory) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+            "IDXGIFactory6 unavailable (0x%lx); cannot pick an adapter by GPU preference", hr);
         return nullptr;
     }
-    auto *slots = reinterpret_cast<void *const *>(static_cast<uintptr_t>(skiko_device_ptr));
-    // Need slots[0..8] readable (9 pointers).
-    if (IsBadReadPtr(slots, 9 * sizeof(void *))) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device pointer span is not readable; not a DirectXDevice");
-        return nullptr;
+    IDXGIAdapter *found = nullptr;
+    for (UINT index = 0; !found; ++index) {
+        IDXGIAdapter *candidate = nullptr;
+        if (FAILED(factory->EnumAdapterByGpuPreference(
+                index, preference, __uuidof(IDXGIAdapter), reinterpret_cast<void **>(&candidate)))) {
+            break;
+        }
+        if (is_software_adapter(candidate)) {
+            candidate->Release();
+        } else {
+            found = candidate;
+        }
     }
+    factory->Release();
+    if (!found) {
+        LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "no hardware adapter for GPU preference %d", (int) preference);
+    }
+    return found;
+}
 
-    void *device_a = slots[2], *device_b = slots[6];
-    void *queue_a = slots[3], *queue_b = slots[8];
-    if (!device_a || device_a != device_b || !queue_a || queue_a != queue_b) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko DirectXDevice layout check failed (fDevice=%p device=%p fQueue=%p queue=%p); "
-            "video will not be wrapped for Skia",
-            device_a, device_b, queue_a, queue_b);
-        return nullptr;
+// VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to the
+// device; retried without it for drivers/WARP levels that reject the flag (playback then
+// falls back to software decoding but rendering still works). With an explicit adapter
+// the driver type must be UNKNOWN; without one, the default hardware adapter is tried
+// before WARP (headless CI / no GPU), unless `warp_only`.
+HRESULT create_d3d11_device(
+    const void *instance_handle, IDXGIAdapter *adapter, bool warp_only,
+    ID3D11Device **device, ID3D11DeviceContext **context) {
+    const UINT flag_sets[] = {
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    };
+    const D3D_DRIVER_TYPE default_driver_types[] = {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+    const D3D_DRIVER_TYPE adapter_driver_types[] = {D3D_DRIVER_TYPE_UNKNOWN};
+    const D3D_DRIVER_TYPE warp_driver_types[] = {D3D_DRIVER_TYPE_WARP};
+    const D3D_DRIVER_TYPE *driver_types = adapter ? adapter_driver_types
+        : warp_only ? warp_driver_types : default_driver_types;
+    const size_t driver_type_count = adapter ? ARRAYSIZE(adapter_driver_types)
+        : warp_only ? ARRAYSIZE(warp_driver_types) : ARRAYSIZE(default_driver_types);
+    const D3D_FEATURE_LEVEL wanted_levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    const D3D_FEATURE_LEVEL max_level = overrides().max_level;
+    const bool software_adapter = adapter && is_software_adapter(adapter);
+    HRESULT hr = E_FAIL;
+    for (size_t i = 0; i < driver_type_count; ++i) {
+        const D3D_DRIVER_TYPE driver_type = driver_types[i];
+        const bool capped = max_level != 0 && driver_type != D3D_DRIVER_TYPE_WARP && !software_adapter;
+        std::vector<D3D_FEATURE_LEVEL> levels;
+        for (D3D_FEATURE_LEVEL level : wanted_levels) {
+            if (!capped || level <= max_level) levels.push_back(level);
+        }
+        if (levels.empty()) {
+            // What a driver below Direct3D 11 answers for the levels mpv's renderer needs.
+            hr = DXGI_ERROR_UNSUPPORTED;
+            LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+                "D3D11CreateDevice(adapter=%p type=%d) refused: MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s",
+                adapter, (int) driver_type, overrides().max_level_text.c_str());
+            continue;
+        }
+        for (UINT flags : flag_sets) {
+            hr = D3D11CreateDevice(
+                adapter, driver_type, nullptr, flags,
+                levels.data(), (UINT) levels.size(), D3D11_SDK_VERSION, device, nullptr, context);
+            if (hr == E_INVALIDARG && levels.size() > 1 && levels[0] == D3D_FEATURE_LEVEL_11_1) {
+                // Pre-11.1 runtime rejects the 11_1 entry; retry without it.
+                hr = D3D11CreateDevice(
+                    adapter, driver_type, nullptr, flags,
+                    levels.data() + 1, (UINT) levels.size() - 1, D3D11_SDK_VERSION, device, nullptr, context);
+            }
+            if (SUCCEEDED(hr)) return hr;
+            if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
+                LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
+                    "D3D11CreateDevice(adapter=%p type=%d flags=0x%x) failed (0x%lx)",
+                    adapter, (int) driver_type, flags, hr);
+            }
+        }
     }
-
-    // Before the virtual QueryInterface call, verify device_a has a readable vtable slot,
-    // so a non-COM but coincidentally-agreeing pointer does not jump through garbage.
-    if (IsBadReadPtr(device_a, sizeof(void *)) ||
-        IsBadReadPtr(*reinterpret_cast<void *const *>(device_a), sizeof(void *))) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko device candidate has no readable vtable; not a COM object");
-        return nullptr;
-    }
-
-    ID3D12Device *device = nullptr;
-    HRESULT hr = static_cast<IUnknown *>(device_a)
-                     ->QueryInterface(__uuidof(ID3D12Device), reinterpret_cast<void **>(&device));
-    if (FAILED(hr) || !device) {
-        LOG(instance_handle, mediampv::LOG_LEVEL_ERROR,
-            "Skiko DirectXDevice candidate is not an ID3D12Device (hr=0x%lx)", hr);
-        return nullptr;
-    }
-    return device;  // AddRef'd by QueryInterface; caller owns.
+    return hr;
 }
 
 }  // namespace
 
 namespace mediampv {
 
-bool mpv_handle_t::create_render_context() {
-    if (!handle_) {
-        LOG(this, LOG_LEVEL_ERROR, "create_render_context: mpv handle is null");
+namespace {
+
+struct d3d11_buffer {
+    ID3D11Texture2D *texture = nullptr;        // render target on our device
+    HANDLE shared_handle = nullptr;            // NT handle from CreateSharedHandle
+    ID3D12Resource *d3d12_resource = nullptr;  // opened on the consumer's device, may be null
+};
+
+class d3d11_renderer final : public surface_ring<d3d11_buffer> {
+public:
+    explicit d3d11_renderer(mpv_handle_t &owner) : surface_ring(owner, "D3D11") {}
+    ~d3d11_renderer() override { shutdown(); }
+
+    bool create(int64_t consumer_device_hint);
+
+    bool set_readback_surface_config(int width, int height) override {
+        return request_config(width, height, 0, true);
+    }
+    bool can_share_with(int64_t consumer_device) override;
+    uint64_t copy_latest_frame(void *dest, int width, int height) override;
+    bool read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) override;
+
+protected:
+    bool prepare_device_locked(int64_t consumer_device, bool changed) override;
+    void release_device_locked() override { safe_release(skia_device_); }
+    bool allocate_buffer(d3d11_buffer &buffer, int width, int height) override;
+    void destroy_buffer(d3d11_buffer &buffer) override;
+    int64_t texture_handle(const d3d11_buffer &buffer) const override {
+        return static_cast<int64_t>(reinterpret_cast<uintptr_t>(buffer.d3d12_resource));
+    }
+    bool render_into(const d3d11_buffer &buffer) override;
+    bool render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) override;
+    bool setup_readback_locked() override;
+    bool read_back(const d3d11_buffer &buffer) override;
+    void publish_readback_locked() override { readback_scratch_.swap(readback_latest_); }
+    void release_readback_locked() override;
+    void after_shutdown() override;
+
+private:
+    bool wait_for_gpu();
+    bool read_texture_argb(ID3D11Texture2D *source, std::vector<uint32_t> &pixels, int &width, int &height);
+
+    // mpv renders on our own D3D11 device. Its immediate context is multithread-protected
+    // so screenshot readbacks (JNI thread) can copy/map while the render thread is inside
+    // mpv_render_context_render.
+    ID3D11Device *device_ = nullptr;
+    ID3D11DeviceContext *context_ = nullptr;
+    // device_'s adapter, set in create() and constant afterwards (read from the JNI thread).
+    DXGI_ADAPTER_DESC adapter_desc_{};
+    bool adapter_known_ = false;
+    ID3D11Query *flush_query_ = nullptr;  // D3D11_QUERY_EVENT, the glFinish equivalent
+    // Consumer-side D3D12 device (owned reference), extracted from Skiko's native
+    // DirectXDevice struct; null while the ring is headless (device 0).
+    ID3D12Device *skia_device_ = nullptr;
+    // CPU readback: the render thread owns the staging texture and readback_scratch_;
+    // readback_latest_ is swapped in and copied out under mutex_.
+    ID3D11Texture2D *readback_staging_ = nullptr;
+    std::vector<uint8_t> readback_scratch_, readback_latest_;
+};
+
+bool d3d11_renderer::create(int64_t consumer_device_hint) {
+    mpv_handle *mpv = owner_.mpv();
+    if (!mpv) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "create_d3d11_renderer: mpv handle is null");
         return false;
     }
-    if (render_context_) return true;
 
-    // VIDEO_SUPPORT is required for FFmpeg's d3d11va hwdevice_ctx (hwdec) to attach to
-    // this device; retried without it for drivers/WARP levels that reject the flag
-    // (playback then falls back to software decoding but rendering still works).
-    const UINT flag_sets[] = {
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    };
-    const D3D_DRIVER_TYPE driver_types[] = {D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
-    const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
-    ID3D11Device *device = nullptr;
-    ID3D11DeviceContext *context = nullptr;
+    // Shared textures only open on a D3D12 device of the same adapter, so follow Skia's
+    // adapter when it is known; the default adapter differs from it on hybrid-GPU
+    // machines (GPU preference settings, skiko.gpu.priority).
+    const d3d11_overrides &active = overrides();
+    log_overrides(&owner_);
     HRESULT hr = E_FAIL;
-    for (D3D_DRIVER_TYPE driver_type : driver_types) {
-        for (UINT flags : flag_sets) {
-            hr = D3D11CreateDevice(
-                nullptr, driver_type, nullptr, flags,
-                levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &device, nullptr, &context);
-            if (hr == E_INVALIDARG) {
-                // Pre-11.1 runtime rejects the 11_1 entry; retry without it.
-                hr = D3D11CreateDevice(
-                    nullptr, driver_type, nullptr, flags,
-                    levels + 1, ARRAYSIZE(levels) - 1, D3D11_SDK_VERSION, &device, nullptr, &context);
-            }
-            if (SUCCEEDED(hr)) break;
-            if (!(flags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)) {
-                // Headless CI / no GPU: WARP renders in software but supports the full
-                // API, including shared resources (Windows 8+).
-                LOG(this, LOG_LEVEL_WARN,
-                    "D3D11CreateDevice(type=%d flags=0x%x) failed (0x%lx)",
-                    (int) driver_type, flags, hr);
-            }
-        }
-        if (SUCCEEDED(hr)) break;
+    IDXGIAdapter *adapter = nullptr;
+    const char *adapter_source = "Skia's adapter";
+    switch (active.adapter) {
+        case adapter_override::automatic:
+            adapter = consumer_device_hint ? skia_adapter(&owner_, consumer_device_hint) : nullptr;
+            break;
+        case adapter_override::minimum_power:
+            adapter = adapter_by_preference(&owner_, DXGI_GPU_PREFERENCE_MINIMUM_POWER);
+            adapter_source = "the minimum-power adapter";
+            break;
+        case adapter_override::high_performance:
+            adapter = adapter_by_preference(&owner_, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE);
+            adapter_source = "the high-performance adapter";
+            break;
+        case adapter_override::system_default:
+        case adapter_override::warp:
+            break;
     }
-    if (FAILED(hr) || !device || !context) {
-        LOG(this, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
-        safe_release(context);
-        safe_release(device);
+    if (adapter) {
+        hr = create_d3d11_device(&owner_, adapter, false, &device_, &context_);
+        adapter->Release();
+        if (FAILED(hr)) {
+            LOG(&owner_, LOG_LEVEL_WARN,
+                "D3D11CreateDevice on %s failed (0x%lx); using the default adapter", adapter_source, hr);
+            safe_release(context_);
+            safe_release(device_);
+        }
+    }
+    if (!device_) {
+        hr = create_d3d11_device(
+            &owner_, nullptr, active.adapter == adapter_override::warp, &device_, &context_);
+    }
+    if (FAILED(hr) || !device_ || !context_) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "D3D11CreateDevice failed: 0x%lx", hr);
         return false;
     }
+    adapter_known_ = d3d11_adapter_desc(device_, adapter_desc_);
+    if (adapter_known_) {
+        LOG(&owner_, LOG_LEVEL_INFO, "D3D11 device on adapter '%s' (luid %08lx:%08lx)",
+            adapter_name(adapter_desc_).c_str(),
+            adapter_desc_.AdapterLuid.HighPart, adapter_desc_.AdapterLuid.LowPart);
+    }
 
-    // The screenshot readback uses the immediate context from the JNI thread while the
-    // render thread may be inside mpv; make the context internally synchronized.
     ID3D11Multithread *multithread = nullptr;
-    if (SUCCEEDED(context->QueryInterface(
+    if (SUCCEEDED(context_->QueryInterface(
             __uuidof(ID3D11Multithread), reinterpret_cast<void **>(&multithread)))) {
         multithread->SetMultithreadProtected(TRUE);
         multithread->Release();
     }
 
     D3D11_QUERY_DESC query_desc{D3D11_QUERY_EVENT, 0};
-    if (FAILED(device->CreateQuery(&query_desc, &flush_query_))) {
-        LOG(this, LOG_LEVEL_WARN, "CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
+    if (FAILED(device_->CreateQuery(&query_desc, &flush_query_))) {
+        LOG(&owner_, LOG_LEVEL_WARN, "CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
         flush_query_ = nullptr;
     }
 
-    mpv_d3d11_init_params init_params{device};
+    mpv_d3d11_init_params init_params{device_};
     mpv_render_param params[] = {
         {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_D3D11)},
         {MPV_RENDER_PARAM_D3D11_INIT_PARAMS, &init_params},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-    int create_result = mpv_render_context_create(&render_context_, handle_, params);
+    const int create_result = mpv_render_context_create(&render_context_, mpv, params);
     if (create_result < 0) {
-        LOG(this, LOG_LEVEL_ERROR,
+        LOG(&owner_, LOG_LEVEL_ERROR,
             "mpv_render_context_create(d3d11) failed: %s", mpv_error_string(create_result));
         render_context_ = nullptr;
-        safe_release(flush_query_);
-        safe_release(context);
-        safe_release(device);
         return false;
     }
+    attach_update_callback();
+    return start_render_thread();
+}
 
-    d3d_device_ = device;
-    d3d_context_ = context;
-    mpv_render_context_set_update_callback(render_context_, &mpv_handle_t::on_render_update, this);
-    start_render_thread();
+void d3d11_renderer::after_shutdown() {
+    detach_update_callback();
+    if (render_context_) {
+        mpv_render_context_free(render_context_);
+        render_context_ = nullptr;
+    }
+    safe_release(skia_device_);
+    safe_release(flush_query_);
+    safe_release(context_);
+    safe_release(device_);
+}
+
+bool d3d11_renderer::prepare_device_locked(int64_t consumer_device, bool changed) {
+    if (!changed && skia_device_) return true;
+    safe_release(skia_device_);
+    skia_device_ = open_skia_d3d12_device(&owner_, consumer_device);
+    // consumer_device == 0 (headless/readback) legitimately yields no D3D12 side; a
+    // non-zero pointer failing the layout check was already logged. Either way the ring
+    // is still allocated so playback and PNG readback keep working.
+    if (skia_device_) {
+        const LUID skia_luid = d3d12_adapter_luid(skia_device_);
+        const std::string skia_name = adapter_name_for_luid(&owner_, skia_luid);
+        DXGI_ADAPTER_DESC producer_desc{};
+        if (d3d11_adapter_desc(device_, producer_desc) && !same_luid(producer_desc.AdapterLuid, skia_luid)) {
+            // Our device is fixed for the render context's lifetime (freeing it while
+            // video is active disables video), so a Skia device that moved to another
+            // adapter cannot be followed; OpenSharedHandle below will fail.
+            LOG(&owner_, LOG_LEVEL_ERROR,
+                "Skia's D3D12 device is on adapter '%s' but mpv's D3D11 device is on '%s'; "
+                "shared video textures cannot be opened across adapters",
+                skia_name.c_str(), adapter_name(producer_desc).c_str());
+        } else {
+            LOG(&owner_, LOG_LEVEL_INFO, "Skia D3D12 device on adapter '%s'", skia_name.c_str());
+        }
+    }
     return true;
 }
 
-bool mpv_handle_t::destroy_render_context() {
-    cleanup_render_resources();
-    return true;
+bool d3d11_renderer::can_share_with(int64_t consumer_device) {
+    ID3D12Device *skia_device = open_skia_d3d12_device(&owner_, consumer_device);
+    // A device that cannot be read (already logged) could not open the textures either.
+    if (!skia_device) return false;
+    const LUID skia_luid = d3d12_adapter_luid(skia_device);
+    skia_device->Release();
+    // When DXGI cannot tell our adapter, try sharing as before.
+    if (!adapter_known_ || same_luid(adapter_desc_.AdapterLuid, skia_luid)) return true;
+    // Happens when our device could not be created on Skia's adapter (it fell back to the
+    // default adapter or WARP), or when Skia moved to another adapter after our device was
+    // created: the device is fixed for the render context's lifetime.
+    LOG(&owner_, LOG_LEVEL_WARN,
+        "Skia's D3D12 device is on adapter '%s' but mpv's D3D11 device is on '%s'; "
+        "shared video textures cannot be opened across adapters, frames go through CPU readback",
+        adapter_name_for_luid(&owner_, skia_luid).c_str(), adapter_name(adapter_desc_).c_str());
+    return false;
 }
 
-bool mpv_handle_t::set_surface_config(int width, int height, int64_t skiko_device_ptr) {
-    if (!render_thread_) return false;
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        pending_width_ = width;
-        pending_height_ = height;
-        pending_device_ptr_ = skiko_device_ptr;
-        config_pending_ = true;
-    }
-    render_cv_.notify_all();
-    return true;
-}
-
-uint64_t mpv_handle_t::get_frame_state() {
-    return frame_state_.load(std::memory_order_acquire);
-}
-
-int64_t mpv_handle_t::get_buffer_texture(int index) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    if (!buffers_allocated_ || index < 0 || index >= kD3D11BufferCount) return 0;
-    return (int64_t) (uintptr_t) buffers_[index].d3d12_resource;
-}
-
-bool mpv_handle_t::ack_retired_buffers() {
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        retire_ack_pending_ = true;
-    }
-    render_cv_.notify_all();
-    return true;
-}
-
-bool mpv_handle_t::has_d3d11_surface() {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    return buffers_allocated_;
-}
-
-// ---- render thread ----
-
-void mpv_handle_t::signal_render_update() {
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        render_pending_ = true;
-    }
-    render_cv_.notify_all();
-}
-
-void mpv_handle_t::start_render_thread() {
-    if (render_thread_) return;
-    render_quit_ = false;
-    render_thread_ = new std::thread([this] { render_thread_loop(); });
-}
-
-void mpv_handle_t::stop_render_thread() {
-    if (!render_thread_) return;
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        render_quit_ = true;
-    }
-    render_cv_.notify_all();
-    auto *thread = (std::thread *) render_thread_;
-    if (thread->joinable()) thread->join();
-    delete thread;
-    render_thread_ = nullptr;
-}
-
-void mpv_handle_t::render_thread_loop() {
-    // Pre-attach so the per-frame notify_render_update() is a cheap GetEnv, not an
-    // attach/detach pair.
-    JNIEnv *thread_env = nullptr;
-    bool attached = jvm_ &&
-        jvm_->AttachCurrentThread(reinterpret_cast<void **>(&thread_env), nullptr) == JNI_OK;
-
-    std::unique_lock<std::mutex> lock(render_mutex_);
-    while (!render_quit_) {
-        render_cv_.wait(lock, [this] {
-            return render_quit_ || render_pending_ || config_pending_ || retire_ack_pending_;
-        });
-        if (render_quit_) break;
-
-        if (retire_ack_pending_) {
-            retire_ack_pending_ = false;
-            if (has_retired_buffers_) {
-                destroy_buffer_ring(retired_buffers_);
-                has_retired_buffers_ = false;
-            }
-        }
-
-        // A reconfig retires the current ring; never stack a second retirement on top
-        // of an unacked one (the consumer may still be sampling it) — postpone until
-        // the ack arrives.
-        bool configured = false;
-        if (config_pending_ && !has_retired_buffers_) {
-            config_pending_ = false;
-            configured = apply_config_locked();
-        }
-
-        bool want_render = render_pending_;
-        render_pending_ = false;
-
-        if (!buffers_allocated_) {
-            // With vo=libmpv, playback stalls unless someone consumes video frames.
-            // While no surface is configured (headless probing, surface not composed
-            // yet), discard them so the playback clock keeps advancing.
-            if (want_render) {
-                lock.unlock();
-                drain_one_frame();
-                lock.lock();
-            }
-            continue;
-        }
-
-        bool has_new_frame = false;
-        if (want_render && render_context_) {
-            has_new_frame =
-                (mpv_render_context_update(render_context_) & MPV_RENDER_UPDATE_FRAME) != 0;
-        }
-        // After a reconfig, redraw the current frame into the new ring even if mpv has
-        // nothing new (e.g. resizing while paused).
-        if (!has_new_frame && !configured) continue;
-
-        int next = (latest_index_ + 1) % kD3D11BufferCount;
-        d3d11_buffer target = buffers_[next];
-        lock.unlock();
-        bool rendered = render_into(target);
-        lock.lock();
-        if (rendered) {
-            latest_index_ = next;
-            ++frame_serial_;
-            publish_state_locked();
-            lock.unlock();
-            // Notify only after the frame is actually complete in the shared texture,
-            // so a consumer waking on this never samples a stale buffer.
-            notify_render_update();
-            lock.lock();
-        }
-    }
-    lock.unlock();
-    if (attached) jvm_->DetachCurrentThread();
-}
-
-bool mpv_handle_t::apply_config_locked() {
-    const int width = pending_width_, height = pending_height_;
-    const int64_t device_ptr = pending_device_ptr_;
-
-    if (width <= 0 || height <= 0) {
-        // Deactivate. The consumer drops all texture references before requesting
-        // this, so both generations can be freed immediately.
-        if (has_retired_buffers_) {
-            destroy_buffer_ring(retired_buffers_);
-            has_retired_buffers_ = false;
-        }
-        if (buffers_allocated_) {
-            destroy_buffer_ring(buffers_);
-            buffers_allocated_ = false;
-        }
-        safe_release(skia_device_);
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        ++buffer_generation_;
-        publish_state_locked();
-        return false;
-    }
-    if (buffers_allocated_ && width == buffer_width_ && height == buffer_height_ &&
-        device_ptr == buffer_device_ptr_) {
-        return false;
-    }
-
-    if (buffers_allocated_) {
-        for (int i = 0; i < kD3D11BufferCount; ++i) {
-            retired_buffers_[i] = buffers_[i];
-            buffers_[i] = d3d11_buffer{};
-        }
-        has_retired_buffers_ = true;
-        buffers_allocated_ = false;
-    }
-
-    if (device_ptr != buffer_device_ptr_ || !skia_device_) {
-        safe_release(skia_device_);
-        skia_device_ = open_skia_d3d12_device(this, device_ptr);
-        // device_ptr == 0 (headless) legitimately yields no D3D12 side; a non-zero
-        // pointer failing the layout check was already logged. Either way the ring is
-        // still allocated so playback and PNG readback keep working.
-    }
-
-    bool ok = true;
-    for (int i = 0; i < kD3D11BufferCount && ok; ++i) {
-        ok = allocate_buffer(buffers_[i], width, height);
-    }
-    if (!ok) {
-        LOG(this, LOG_LEVEL_ERROR, "buffer ring allocation failed (%dx%d)", width, height);
-        destroy_buffer_ring(buffers_);
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        ++buffer_generation_;
-        publish_state_locked();
-        return false;
-    }
-
-    buffers_allocated_ = true;
-    buffer_width_ = width;
-    buffer_height_ = height;
-    buffer_device_ptr_ = device_ptr;
-    latest_index_ = -1;
-    ++buffer_generation_;
-    publish_state_locked();
-    LOG(this, LOG_LEVEL_INFO, "buffer ring allocated %dx%d gen=%u d3d12=%d",
-        width, height, buffer_generation_, skia_device_ ? 1 : 0);
-    return true;
-}
-
-bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) {
+bool d3d11_renderer::allocate_buffer(d3d11_buffer &buffer, int width, int height) {
     D3D11_TEXTURE2D_DESC desc = {};
     desc.Width = (UINT) width;
     desc.Height = (UINT) height;
@@ -451,25 +533,22 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
     ID3D11Texture2D *texture = nullptr;
-    HRESULT hr = d3d_device_->CreateTexture2D(&desc, nullptr, &texture);
+    HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &texture);
     if (FAILED(hr) || !texture) {
-        LOG(this, LOG_LEVEL_ERROR,
-            "CreateTexture2D(%dx%d shared) failed: 0x%lx", width, height, hr);
+        LOG(&owner_, LOG_LEVEL_ERROR, "CreateTexture2D(%dx%d shared) failed: 0x%lx", width, height, hr);
         return false;
     }
 
     HANDLE shared_handle = nullptr;
     IDXGIResource1 *dxgi_resource = nullptr;
-    hr = texture->QueryInterface(
-        __uuidof(IDXGIResource1), reinterpret_cast<void **>(&dxgi_resource));
+    hr = texture->QueryInterface(__uuidof(IDXGIResource1), reinterpret_cast<void **>(&dxgi_resource));
     if (SUCCEEDED(hr)) {
         hr = dxgi_resource->CreateSharedHandle(
-            nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-            nullptr, &shared_handle);
+            nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &shared_handle);
         dxgi_resource->Release();
     }
     if (FAILED(hr) || !shared_handle) {
-        LOG(this, LOG_LEVEL_ERROR, "CreateSharedHandle failed: 0x%lx", hr);
+        LOG(&owner_, LOG_LEVEL_ERROR, "CreateSharedHandle failed: 0x%lx", hr);
         texture->Release();
         return false;
     }
@@ -479,7 +558,7 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
         hr = skia_device_->OpenSharedHandle(
             shared_handle, __uuidof(ID3D12Resource), reinterpret_cast<void **>(&d3d12_resource));
         if (FAILED(hr) || !d3d12_resource) {
-            LOG(this, LOG_LEVEL_ERROR, "ID3D12Device::OpenSharedHandle failed: 0x%lx", hr);
+            LOG(&owner_, LOG_LEVEL_ERROR, "ID3D12Device::OpenSharedHandle failed: 0x%lx", hr);
             CloseHandle(shared_handle);
             texture->Release();
             return false;
@@ -492,28 +571,13 @@ bool mpv_handle_t::allocate_buffer(d3d11_buffer &buffer, int width, int height) 
     return true;
 }
 
-void mpv_handle_t::destroy_buffer_ring(d3d11_buffer *ring) {
-    for (int i = 0; i < kD3D11BufferCount; ++i) {
-        d3d11_buffer &buffer = ring[i];
-        safe_release(buffer.d3d12_resource);
-        if (buffer.shared_handle) CloseHandle(buffer.shared_handle);
-        safe_release(buffer.texture);
-        buffer = d3d11_buffer{};
-    }
+void d3d11_renderer::destroy_buffer(d3d11_buffer &buffer) {
+    safe_release(buffer.d3d12_resource);
+    if (buffer.shared_handle) CloseHandle(buffer.shared_handle);
+    safe_release(buffer.texture);
 }
 
-void mpv_handle_t::publish_state_locked() {
-    uint64_t index_bits = latest_index_ < 0 ? 0xFull : (uint64_t) latest_index_;
-    frame_state_.store(
-        ((uint64_t) (buffer_generation_ & 0xFFFFu) << 48) |
-        (index_bits << 44) |
-        ((uint64_t) (buffer_width_ & 0x3FFF) << 30) |
-        ((uint64_t) (buffer_height_ & 0x3FFF) << 16) |
-        (frame_serial_ & 0xFFFFu),
-        std::memory_order_release);
-}
-
-bool mpv_handle_t::render_into(const d3d11_buffer &buffer) {
+bool d3d11_renderer::render_into(const d3d11_buffer &buffer) {
     if (!render_context_ || !buffer.texture) return false;
 
     // D3D11 render targets are top-down (row 0 = top), matching both Skia's
@@ -523,7 +587,7 @@ bool mpv_handle_t::render_into(const d3d11_buffer &buffer) {
         {MPV_RENDER_PARAM_D3D11_FBO, &fbo},
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
-    int render_result = mpv_render_context_render(render_context_, params);
+    const int render_result = mpv_render_context_render(render_context_, params);
 
     // The glFinish equivalent: Skia samples this texture on another device right after
     // the buffer is published, so the frame must be complete, not merely submitted.
@@ -532,13 +596,13 @@ bool mpv_handle_t::render_into(const d3d11_buffer &buffer) {
     return render_result >= 0;
 }
 
-bool mpv_handle_t::wait_for_gpu() {
-    if (!d3d_context_) return false;
+bool d3d11_renderer::wait_for_gpu() {
+    if (!context_) return false;
     if (!flush_query_) {
-        d3d_context_->Flush();
+        context_->Flush();
         return true;
     }
-    d3d_context_->End(flush_query_);
+    context_->End(flush_query_);
     // Bound the spin: on a GPU hang / TDR the query never retires, and an unbounded loop
     // would peg a core forever and wedge the render thread so teardown can never join it.
     // 2s is far beyond any real frame; past it we treat the device as lost and bail.
@@ -547,15 +611,15 @@ bool mpv_handle_t::wait_for_gpu() {
     for (int spins = 0;; ++spins) {
         // GetData with flags 0 implicitly flushes; returns S_OK once the GPU has
         // retired everything submitted before End().
-        HRESULT hr = d3d_context_->GetData(flush_query_, nullptr, 0, 0);
+        const HRESULT hr = context_->GetData(flush_query_, nullptr, 0, 0);
         if (hr == S_OK) return true;
         if (FAILED(hr)) {
-            LOG(this, LOG_LEVEL_ERROR, "flush query GetData failed: 0x%lx", hr);
+            LOG(&owner_, LOG_LEVEL_ERROR, "flush query GetData failed: 0x%lx", hr);
             return false;
         }
         if (GetTickCount64() - start_tick >= timeout_ms) {
-            HRESULT removed = d3d_device_ ? d3d_device_->GetDeviceRemovedReason() : S_OK;
-            LOG(this, LOG_LEVEL_ERROR,
+            const HRESULT removed = device_ ? device_->GetDeviceRemovedReason() : S_OK;
+            LOG(&owner_, LOG_LEVEL_ERROR,
                 "wait_for_gpu timed out after %llums (device removed reason: 0x%lx)",
                 timeout_ms, removed);
             return false;
@@ -568,61 +632,71 @@ bool mpv_handle_t::wait_for_gpu() {
     }
 }
 
-void mpv_handle_t::drain_one_frame() {
-    if (!render_context_) return;
-    mpv_render_context_update(render_context_);
-    int skip = 1;
-    mpv_render_param params[] = {
-        {MPV_RENDER_PARAM_SKIP_RENDERING, &skip},
-        {MPV_RENDER_PARAM_INVALID, nullptr},
-    };
-    mpv_render_context_render(render_context_, params);
-}
-
-void mpv_handle_t::cleanup_render_resources() {
-    stop_render_thread();
-
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        if (has_retired_buffers_) {
-            destroy_buffer_ring(retired_buffers_);
-            has_retired_buffers_ = false;
-        }
-        if (buffers_allocated_) {
-            destroy_buffer_ring(buffers_);
-            buffers_allocated_ = false;
-        }
-        safe_release(skia_device_);
-        latest_index_ = -1;
-        buffer_width_ = buffer_height_ = 0;
-        buffer_device_ptr_ = 0;
-        publish_state_locked();
-    }
-
-    if (render_context_) {
-        mpv_render_context_set_update_callback(render_context_, nullptr, nullptr);
-        mpv_render_context_free(render_context_);
-        render_context_ = nullptr;
-    }
-
-    safe_release(flush_query_);
-    safe_release(d3d_context_);
-    safe_release(d3d_device_);
-}
-
-// Staging-texture readback of the latest rendered frame (RGBA shared texture) into
-// ARGB_8888 ints (0xAARRGGBB, which is BGRA byte order in little-endian memory) with
-// alpha forced opaque (mpv leaves it undefined). The caller holds render_mutex_ so the
-// render thread cannot cycle the ring back onto this buffer mid-read; the immediate
-// context is multithread-protected, so using it here while the render thread renders
-// is safe.
-bool mpv_handle_t::read_frame_argb_locked(
-    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
-    if (!buffers_allocated_ || latest_index_ < 0 || !d3d_device_ || !d3d_context_) {
+bool d3d11_renderer::setup_readback_locked() {
+    D3D11_TEXTURE2D_DESC desc{};
+    buffers_[0].texture->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+    const HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &readback_staging_);
+    if (FAILED(hr) || !readback_staging_) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "readback staging texture creation failed: 0x%lx", hr);
+        readback_staging_ = nullptr;
         return false;
     }
-    ID3D11Texture2D *source = buffers_[latest_index_].texture;
-    if (!source) return false;
+    return true;
+}
+
+void d3d11_renderer::release_readback_locked() {
+    safe_release(readback_staging_);
+    std::vector<uint8_t>().swap(readback_scratch_);
+    std::vector<uint8_t>().swap(readback_latest_);
+}
+
+bool d3d11_renderer::read_back(const d3d11_buffer &buffer) {
+    if (!readback_staging_ || !buffer.texture) return false;
+    context_->CopyResource(readback_staging_, buffer.texture);
+    // Blocks this render thread only until the copy retires; the frame itself is
+    // already complete (render_into waited for it).
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hr = context_->Map(readback_staging_, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "Map(readback staging) failed: 0x%lx", hr);
+        return false;
+    }
+    // RGBA8 top-down, like the render target; the consumer ignores alpha (opaque).
+    const size_t stride = static_cast<size_t>(buffer_width_) * 4;
+    readback_scratch_.resize(stride * buffer_height_);
+    for (int y = 0; y < buffer_height_; ++y) {
+        std::memcpy(
+            readback_scratch_.data() + static_cast<size_t>(y) * stride,
+            static_cast<const uint8_t *>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch,
+            stride);
+    }
+    context_->Unmap(readback_staging_, 0);
+    return true;
+}
+
+uint64_t d3d11_renderer::copy_latest_frame(void *dest, int width, int height) {
+    if (!dest || width <= 0 || height <= 0) return 0;
+    std::lock_guard<std::mutex> guard(mutex_);
+    // latest_index_ is reset on every reconfig and set again only after a frame of the
+    // new size was read back, so a published frame always has the buffer size.
+    if (!cpu_readback_ || latest_index_ < 0 || width != buffer_width_ || height != buffer_height_) {
+        return 0;
+    }
+    const size_t size = static_cast<size_t>(width) * height * 4;
+    if (readback_latest_.size() < size) return 0;
+    std::memcpy(dest, readback_latest_.data(), size);
+    return frame_state();
+}
+
+// Copies a rendered texture into ARGB_8888 ints through a staging texture; independent
+// of mpv's screenshot pipeline, which cannot convert hwdec (d3d11va) frames without zimg.
+bool d3d11_renderer::read_texture_argb(
+    ID3D11Texture2D *source, std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
+    if (!source || !device_ || !context_) return false;
 
     D3D11_TEXTURE2D_DESC desc = {};
     source->GetDesc(&desc);
@@ -632,15 +706,15 @@ bool mpv_handle_t::read_frame_argb_locked(
     desc.MiscFlags = 0;
 
     ID3D11Texture2D *staging = nullptr;
-    if (FAILED(d3d_device_->CreateTexture2D(&desc, nullptr, &staging)) || !staging) {
-        LOG(this, LOG_LEVEL_ERROR, "staging texture creation failed");
+    if (FAILED(device_->CreateTexture2D(&desc, nullptr, &staging)) || !staging) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "staging texture creation failed");
         return false;
     }
-    d3d_context_->CopyResource(staging, source);
+    context_->CopyResource(staging, source);
 
     D3D11_MAPPED_SUBRESOURCE mapped = {};
-    if (FAILED(d3d_context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
-        LOG(this, LOG_LEVEL_ERROR, "Map(staging) failed");
+    if (FAILED(context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "Map(staging) failed");
         staging->Release();
         return false;
     }
@@ -655,37 +729,61 @@ bool mpv_handle_t::read_frame_argb_locked(
                 ((uint32_t) src[x * 4 + 1] << 8) | src[x * 4 + 2];
         }
     }
-    d3d_context_->Unmap(staging, 0);
+    context_->Unmap(staging, 0);
     staging->Release();
     out_width = (int) width;
     out_height = (int) height;
     return true;
 }
 
-bool mpv_handle_t::read_surface_pixels(
-    std::vector<uint32_t> &out_pixels, int &out_width, int &out_height) {
-    std::lock_guard<std::mutex> guard(render_mutex_);
-    return read_frame_argb_locked(out_pixels, out_width, out_height);
+// mutex_ keeps the render thread from cycling the ring onto the buffer being read.
+bool d3d11_renderer::read_surface_pixels(std::vector<uint32_t> &pixels, int &width, int &height) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!buffers_allocated_ || latest_index_ < 0) return false;
+    return read_texture_argb(buffers_[latest_index_].texture, pixels, width, height);
 }
 
-// Writes the latest rendered frame as PNG via the staging-texture readback and WIC
-// (png_writer_win.cpp). Independent of mpv's screenshot pipeline, which cannot convert
-// hwdec (d3d11va) frames without zimg. render_mutex_ is only held for the readback;
-// the encode works on our own copy.
-bool mpv_handle_t::save_surface_png(const char *path) {
-    if (!path) return false;
-    std::vector<uint32_t> pixels;
-    int width = 0, height = 0;
-    {
-        std::lock_guard<std::mutex> guard(render_mutex_);
-        if (!read_frame_argb_locked(pixels, width, height)) return false;
+// A private render target of the requested size: mpv redraws the current frame into it
+// (the ring and its consumer are untouched); the GPU wait and the staging copy follow
+// the ring's own protocol.
+bool d3d11_renderer::render_frame_pixels_on_render_thread(int width, int height, std::vector<uint32_t> &pixels) {
+    if (!render_context_ || !device_) return false;
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = (UINT) width;
+    desc.Height = (UINT) height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D *target = nullptr;
+    const HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &target);
+    if (FAILED(hr) || !target) {
+        LOG(&owner_, LOG_LEVEL_ERROR, "CreateTexture2D(%dx%d frame request) failed: 0x%lx", width, height, hr);
+        return false;
     }
-
-    const bool ok = write_argb_png_wic(path, width, height, pixels);
-    if (!ok) LOG(this, LOG_LEVEL_ERROR, "save_surface_png failed for %s", path);
+    mpv_d3d11_fbo fbo{target, width, height};
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_D3D11_FBO, &fbo},
+        {MPV_RENDER_PARAM_INVALID, nullptr},
+    };
+    bool ok = mpv_render_context_render(render_context_, params) >= 0;
+    ok = wait_for_gpu() && ok;
+    int read_width = 0, read_height = 0;
+    if (ok) ok = read_texture_argb(target, pixels, read_width, read_height);
+    target->Release();
     return ok;
 }
 
-}  // namespace mediampv
+} // namespace
 
-#endif  // _WIN32
+std::shared_ptr<desktop_renderer> create_d3d11_renderer(mpv_handle_t &owner, int64_t consumer_device_hint) {
+    auto renderer = std::make_shared<d3d11_renderer>(owner);
+    if (!renderer->create(consumer_device_hint)) return nullptr;  // the destructor cleans up
+    return renderer;
+}
+
+} // namespace mediampv
+
+#endif // _WIN32

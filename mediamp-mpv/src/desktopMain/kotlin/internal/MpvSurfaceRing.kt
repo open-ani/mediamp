@@ -45,9 +45,10 @@ import org.openani.mediamp.mpv.nHasOpenGLSurface
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
-import org.openani.mediamp.mpv.nSaveSurfacePng
-import org.openani.mediamp.mpv.nSaveSurfacePngD3D11
-import org.openani.mediamp.mpv.nSaveSurfacePngOpenGL
+import org.openani.mediamp.mpv.nRenderFramePixelsMacos
+import org.openani.mediamp.mpv.nRenderFramePixelsD3D11
+import org.openani.mediamp.mpv.nRenderFramePixelsOpenGL
+import org.openani.mediamp.mpv.nSetConsumerDeviceHintD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigD3D11
 import org.openani.mediamp.mpv.nSetSurfaceConfigMacos
 import org.openani.mediamp.mpv.nSetSurfaceConfigOpenGL
@@ -107,12 +108,15 @@ internal fun headlessSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
 
 internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend? = when (redrawerClass?.name) {
     null -> null
-    "org.jetbrains.skiko.redrawer.Direct3DRedrawer" -> D3D11SurfaceRingBackend
-    "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer" -> WindowsOpenGLSurfaceBackend
-    else -> error(
-        "Unsupported Skiko redrawer ${redrawerClass.name}. The mpv Windows render path " +
-            "requires Direct3DRedrawer or WindowsOpenGLRedrawer.",
-    )
+    "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
+    "org.jetbrains.skiko.renderer.Direct3DRenderer",
+    -> D3D11SurfaceRingBackend
+    "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer",
+    "org.jetbrains.skiko.renderer.WindowsOpenGLRenderer",
+    -> WindowsOpenGLSurfaceBackend
+    // Software (WindowsSoftwareRedrawer, SoftwareRedrawer), ANGLE and any future
+    // redrawer: the readback path needs nothing from Skiko's renderer.
+    else -> D3D11ReadbackSurfaceBackend
 }
 
 /**
@@ -140,6 +144,13 @@ internal interface MpvSurfaceBackend {
         EagerRenderContextLifecycle(this, host)
 
     /**
+     * Passes the consumer render device ([setSurfaceConfig]'s `devicePtr`) before the
+     * producer context is created, for backends whose producer device must live on the
+     * same GPU. No-op by default.
+     */
+    fun hintConsumerDevice(ptr: Long, devicePtr: Long) {}
+
+    /**
      * [devicePtr] is the consumer-side render device: an MTLDevice pointer on macOS or a
      * pointer to Skiko's native DirectXDevice struct on Windows/D3D11. The OpenGL
      * backends ignore this value (Linux attaches its GLX environment separately; the
@@ -149,7 +160,6 @@ internal interface MpvSurfaceBackend {
     fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long): Boolean
     fun getFrameState(ptr: Long): Long
     fun hasSurface(ptr: Long): Boolean
-    fun saveSurfacePng(ptr: Long, path: String): Boolean
 
     /**
      * Reads the latest rendered frame as ARGB_8888 pixels (`0xAARRGGBB`, row-major,
@@ -157,6 +167,15 @@ internal interface MpvSurfaceBackend {
      * is available.
      */
     fun readSurfacePixels(ptr: Long, dims: IntArray): IntArray?
+
+    /**
+     * Renders the current frame once more into a temporary [width] x [height] target and
+     * returns it as ARGB_8888 pixels (`0xAARRGGBB`, row-major, top-down, alpha opaque):
+     * the video at the requested size instead of the consumer's. Needs no surface, only a
+     * frame mpv can redraw. Blocks until the render thread served the request (bounded);
+     * returns `null` when it could not.
+     */
+    fun renderFramePixels(ptr: Long, width: Int, height: Int): IntArray?
 
     /** Creates the consumer state machine matching this backend's publication model. */
     fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer
@@ -193,7 +212,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureMacos(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePng(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsMacos(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) =
@@ -202,6 +221,9 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.BGRA_8888
     override val rendererName: String get() = "Metal"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaMetalInterop(layerRedrawer)
+
+    // Without a Metal device (Skiko's software redrawers) the same producer serves CPU frames.
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer = MacosSurfaceConsumer(handlePtr)
 }
 
 @OptIn(InternalMediampApi::class)
@@ -210,6 +232,12 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
 
     override fun createRenderContext(ptr: Long) = nCreateRenderContextD3D11(ptr)
     override fun destroyRenderContext(ptr: Long) = nDestroyRenderContextD3D11(ptr)
+
+    // NT-handle textures cannot be opened on another adapter's D3D12 device.
+    override fun hintConsumerDevice(ptr: Long, devicePtr: Long) {
+        nSetConsumerDeviceHintD3D11(ptr, devicePtr)
+    }
+
     override fun setSurfaceConfig(ptr: Long, width: Int, height: Int, devicePtr: Long) =
         nSetSurfaceConfigD3D11(ptr, width, height, devicePtr)
 
@@ -217,7 +245,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureD3D11(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersD3D11(ptr)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngD3D11(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsD3D11(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
 
     override fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long) = MpvConsumerRenderTarget(
@@ -241,6 +269,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     // Skiko's D3D12 device.
     override val rendererName: String get() = "D3D12"
     override fun createSkiaInterop(layerRedrawer: SkiaLayerRedrawer): SkiaRenderDeviceInterop = SkiaDirectXInterop(layerRedrawer)
+    override fun createSurfaceConsumer(handlePtr: Long): MpvSurfaceConsumer = D3D11SurfaceConsumer(handlePtr)
 }
 
 /**
@@ -262,7 +291,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureOpenGL(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersOpenGL(ptr)
     override fun hasSurface(ptr: Long) = nHasOpenGLSurface(ptr)
-    override fun saveSurfacePng(ptr: Long, path: String) = nSaveSurfacePngOpenGL(ptr, path)
+    override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsOpenGL(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsOpenGL(ptr, dims)
 
     fun attachRenderEnvironment(ptr: Long, environment: OpenGLRenderEnvironment): Boolean =
@@ -335,6 +364,8 @@ internal class MpvSurfaceRing(
     private var requestedHeight = 0
     private var requestedDevicePtr = 0L
 
+    override val rendererName: String get() = backend.rendererName
+
     /**
      * Asks the native render thread to size the buffer ring to [width] x [height]
      * (physical pixels, normally the composable size — mpv then scales, letterboxes and
@@ -386,7 +417,9 @@ internal class MpvSurfaceRing(
      * returned until the new ring has content, so resizes never flash black. Do NOT
      * close the returned image — it is owned by this ring.
      */
-    override fun currentFrameImage(directContext: DirectContext): Image? {
+    override fun currentFrameImage(directContext: DirectContext?): Image? {
+        // The ring textures can only be wrapped on Skia's GPU context.
+        if (directContext == null) return null
         val state = backend.getFrameState(handlePtr)
         if (state == cachedState && surfaceContext === directContext) {
             cachedFrame?.let { return it }
@@ -415,7 +448,7 @@ internal class MpvSurfaceRing(
         // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
         // texture), so blit into a Skia-owned GPU surface and snapshot that. The snapshot
         // is a GPU image on the current DirectContext; the caller draws it straight onto
-        // the Compose canvas with nativeCanvas.drawImage (see MpvMediampPlayerSurface),
+        // the Compose canvas with skiaCanvas.drawImageRect (see MpvMediampPlayerSurface),
         // a zero-copy GPU->GPU draw. Do NOT convert it with toComposeImageBitmap(): that
         // reads the GPU image back to a CPU bitmap every frame, which both costs a full
         // GPU->CPU transfer (a ~20ms stall at 4K that pins the whole Compose scene, and
@@ -453,7 +486,15 @@ internal class MpvSurfaceRing(
                 closeWraps()
                 return false
             }
-            val consumerTarget = backend.makeConsumerRenderTarget(width, height, texture)
+            // This runs inside the Compose draw pass: a failure (e.g. the Linux consumer
+            // FBO cannot be created) must not propagate into the UI as an exception.
+            val consumerTarget = runCatching { backend.makeConsumerRenderTarget(width, height, texture) }
+                .onFailure { logOnce("creating the consumer render target for buffer $i failed", MPVLog.ERROR, it) }
+                .getOrNull()
+            if (consumerTarget == null) {
+                closeWraps()
+                return false
+            }
             val surface = runCatching {
                 Surface.makeFromBackendRenderTarget(
                     context = directContext,
@@ -465,7 +506,7 @@ internal class MpvSurfaceRing(
             }.onFailure { logOnce("wrapping buffer $i as Skia surface failed", MPVLog.ERROR, it) }.getOrNull()
             if (surface == null) {
                 logOnce("Surface.makeFromBackendRenderTarget returned null (format=${backend.wrapColorFormat})", MPVLog.ERROR)
-                consumerTarget.close()
+                closeConsumerTarget(consumerTarget)
                 closeWraps()
                 return false
             }
@@ -507,6 +548,13 @@ internal class MpvSurfaceRing(
         clearWraps(abandonOwnedResources = true)
     }
 
+    // Also reached from the draw pass: a failed release (e.g. deleting the Linux consumer
+    // FBO) is logged rather than thrown into Compose.
+    private fun closeConsumerTarget(target: MpvConsumerRenderTarget) {
+        runCatching { target.close() }
+            .onFailure { logOnce("releasing a consumer render target failed", MPVLog.ERROR, it) }
+    }
+
     private fun clearWraps(abandonOwnedResources: Boolean) {
         for (i in 0 until SURFACE_RING_BUFFER_COUNT) {
             wrappedSurfaces[i]?.close()
@@ -514,7 +562,7 @@ internal class MpvSurfaceRing(
             if (abandonOwnedResources) {
                 consumerTargets[i]?.abandon()
             } else {
-                consumerTargets[i]?.close()
+                consumerTargets[i]?.let(::closeConsumerTarget)
             }
             consumerTargets[i] = null
         }
@@ -535,7 +583,11 @@ internal class MpvSurfaceRing(
         closeWraps()
         surfaceContext = null
         // All texture references are dropped, so the render thread may free both
-        // generations immediately; frames go back to being drained.
+        // generations immediately; frames go back to being drained. Without the ack, a
+        // generation retired by a resize this consumer never drew would hold back every
+        // later config, including the one of a consumer taking over (D3D11SurfaceConsumer,
+        // MacosSurfaceConsumer).
+        backend.ackRetiredBuffers(handlePtr)
         backend.setSurfaceConfig(handlePtr, 0, 0, 0L)
         requestedWidth = 0
         requestedHeight = 0

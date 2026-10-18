@@ -20,7 +20,8 @@ internal interface SkiaRenderDeviceInterop {
     /**
      * The device Skia renders with: an MTLDevice pointer on macOS
      * ([SkiaMetalInterop]), a pointer to Skiko's native DirectXDevice struct on
-     * Windows ([SkiaDirectXInterop]).
+     * Windows ([SkiaDirectXInterop]). 0 when Skia renders without one to share
+     * (Skiko's software redrawers).
      */
     val renderDevicePtr: Long
 

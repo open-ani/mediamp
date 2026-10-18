@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024-2025 OpenAni and contributors.
+ * Copyright (C) 2024-2026 OpenAni and contributors.
  *
  * Use of this source code is governed by the Apache License version 2 license, which can be found at the following link.
  *
@@ -8,6 +8,7 @@
 
 package org.openani.mediamp.exoplayer.compose
 
+import android.view.SurfaceView
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,6 +27,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import org.openani.mediamp.exoplayer.ExoPlayerMediampPlayer
+import org.openani.mediamp.exoplayer.internal.StillFrameBufferSize
 import org.openani.mediamp.exoplayer.internal.videoDisplaySizeOrNull
 import org.openani.mediamp.features.AspectRatioMode
 import org.openani.mediamp.features.VideoAspectRatio
@@ -80,6 +82,13 @@ fun ExoPlayerMediampPlayerSurface(
             // Tracks may already be known by the time the view exists.
             applyVideoAspectRatioFallback(view, player)
             onDispose { player.removeListener(listener) }
+        }
+        val surfaceView = view.videoSurfaceView as? SurfaceView
+        if (surfaceView != null) {
+            DisposableEffect(surfaceView, player) {
+                val stillFrameBufferSize = StillFrameBufferSize(surfaceView, player)
+                onDispose { stillFrameBufferSize.release() }
+            }
         }
     }
 }

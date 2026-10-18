@@ -1,11 +1,11 @@
 [versions]
 gradle-maven-publish-plugin = "0.36.0"
-kotlin = "2.3.20"
+kotlin = "2.4.20"
 
 ### KOTLINX ###
 kotlinx-coroutines = "1.10.2" # https://github.com/Kotlin/kotlinx.coroutines/releases
 kotlinx-atomicfu = "0.31.0" # https://github.com/Kotlin/kotlinx-atomicfu/releases
-kotlinx-io = "0.8.2" # https://github.com/Kotlin/kotlinx-io/releases
+kotlinx-io = "0.9.1" # https://github.com/Kotlin/kotlinx-io/releases
 kotlinx-browser = "0.3" # https://kotlinlang.org/docs/wasm-js-interop.html#web-related-browser-apis
 
 #
@@ -24,7 +24,7 @@ compose-material = "1.7.3"
 jetpack-compose = "1.10.3"
 # https://github.com/JetBrains/compose-multiplatform/releases
 # https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-compatibility-and-versioning.html#use-a-developer-version-of-compose-multiplatform-compiler
-compose-multiplatform = "1.12.0"
+compose-multiplatform = "1.13.0-alpha02"
 
 vlcj = "4.8.2"
 androidx-test-ext-junit = "1.1.2"

@@ -29,7 +29,12 @@ description = "Core API for MediaMP"
 kotlin {
     explicitApi()
     wasmJs {
-        browser()
+        browser {
+            testTask {
+                inputs.dir(layout.projectDirectory.dir("src/wasmJsTest/resources"))
+                useKarma { useChromeHeadless() }
+            }
+        }
         // Compose UI tests need webpack to bundle the Skiko runtime.
         binaries.executable()
     }

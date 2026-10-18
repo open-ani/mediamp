@@ -8,7 +8,8 @@
 #ifndef MEDIAMP_GLX_CONTEXT_PROVIDER_H
 #define MEDIAMP_GLX_CONTEXT_PROVIDER_H
 
-#ifdef __linux__
+#include "platform.h"
+#ifdef MEDIAMPV_LINUX_DESKTOP
 
 #include <GL/glx.h>
 
@@ -88,6 +89,6 @@ private:
 
 } // namespace mediampv
 
-#endif // __linux__
+#endif // MEDIAMPV_LINUX_DESKTOP
 
 #endif // MEDIAMP_GLX_CONTEXT_PROVIDER_H

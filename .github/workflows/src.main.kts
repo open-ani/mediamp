@@ -57,6 +57,7 @@ import io.github.typesafegithub.workflows.domain.RunnerType
 import io.github.typesafegithub.workflows.domain.actions.CustomAction
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
 import io.github.typesafegithub.workflows.domain.triggers.Push
+import io.github.typesafegithub.workflows.domain.triggers.WorkflowDispatch
 import io.github.typesafegithub.workflows.dsl.JobBuilder
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.GitHubContext
 import io.github.typesafegithub.workflows.dsl.expressions.contexts.SecretsContext
@@ -324,6 +325,15 @@ sealed class Runner(
         labels = setOf("self-hosted", "Windows", "X64"),
     )
 
+    // Optimus laptop for the GPU render matrix (docs/gpu-test-runner.md).
+    object SelfHostedWindowsHybridGpu : SelfHosted(
+        id = "self-hosted-windows-gpu-hybrid",
+        displayName = "Windows x86_64 hybrid GPU (Self-Hosted)",
+        os = OS.WINDOWS,
+        arch = Arch.X64,
+        labels = setOf("self-hosted", "Windows", "X64", "gpu-hybrid"),
+    )
+
     object SelfHostedMacOS15 : SelfHosted(
         id = "self-hosted-macos-15",
         displayName = "macOS 15 AArch64 (Self-Hosted)",
@@ -438,6 +448,7 @@ fun getBuildJobBody(matrix: MatrixInstance): JobBuilder<BuildJobOutputs>.() -> U
         setupGradle()
 
         gradleCheck()
+        renderPathMatrix()
         buildFfmpegArtifacts()
         uploadWindowsArm64Runtime()
         verifyAppleXcframeworkPublication()
@@ -494,6 +505,82 @@ workflow(
             outputs = BuildJobOutputs(),
             block = getBuildJobBody(matrix),
         )
+    }
+}
+
+// The GPU test machine (a hybrid-GPU laptop, docs/gpu-test-runner.md): runs only the render path matrix.
+val gpuRenderMatrixInstance = MatrixInstance(
+    runner = Runner.SelfHostedWindowsHybridGpu,
+    uploadApk = false,
+    composeResourceTriple = "windows-x64",
+    uploadDesktopInstallers = false,
+    ffmpegBuildVariant = "windows",
+    mpvBuildVariant = "windows",
+    extraGradleArgs = listOf(
+        "-P$ANI_ANDROID_ABIS=x86_64",
+        "-Pmediamp.mpv.test.required=true",
+    ),
+    buildAllAndroidAbis = false,
+    gradleParallel = false,
+)
+
+workflow(
+    name = "GPU Render Matrix",
+    on = listOf(
+        // One machine: branches run only once they have a PR (pull_request), so a commit is not run twice.
+        Push(branches = listOf("main"), pathsIgnore = listOf("**/*.md")),
+        PullRequest(pathsIgnore = listOf("**/*.md")),
+        WorkflowDispatch(
+            inputs = mapOf(
+                "tier" to WorkflowDispatch.Input(
+                    description = "Highest render path scenario tier to run",
+                    required = true,
+                    type = WorkflowDispatch.Type.Choice,
+                    options = listOf("ci", "gpu", "hybrid"),
+                    default = "hybrid",
+                ),
+            ),
+        ),
+    ),
+    // As in Build: a new push to a PR cancels the run it supersedes; every commit on main gets
+    // its own group and waits for the machine.
+    concurrency = Concurrency(
+        group = "gpu-render-matrix-" + expr { "github.event_name" } + "-" +
+                expr { "github.ref == 'refs/heads/main' && github.run_id || github.ref" },
+        cancelInProgress = true,
+    ),
+    sourceFile = __FILE__,
+    targetFileName = "gpu-render-matrix.yml",
+    consistencyCheckJobConfig = ConsistencyCheckJobConfig.Disabled,
+) {
+    val matrix = gpuRenderMatrixInstance
+    job(
+        id = "render_path_matrix",
+        name = "Render path matrix (${matrix.name})",
+        runsOn = RunnerType.Labelled(matrix.runsOn),
+        permissions = mapOf(
+            Permission.Actions to Mode.Write, // Upload artifacts
+        ),
+        // Pull requests from forks run too: their changes need the GPU coverage as much as ours.
+        // The runner is a personal machine with a signed-in desktop, so the repository's fork
+        // pull request approval setting is what keeps unreviewed code off it.
+        `if` = expr { github.isAnimekoRepository },
+        // Keep the machine's global git config from starting fsmonitor daemons: they outlive the
+        // job and hold its directories open.
+        env = mapOf(
+            "GIT_CONFIG_COUNT" to "1",
+            "GIT_CONFIG_KEY_0" to "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0" to "false",
+        ),
+    ) {
+        uses(action = Checkout(submodules_Untyped = "recursive", lfs = true))
+        with(WithMatrix(matrix)) {
+            installJbr21()
+            installDependencies()
+            setupGradle()
+            // push and pull_request runs have no inputs.
+            renderPathMatrix(tier = expr("inputs.tier || 'hybrid'"), strict = true, continueOnError = false)
+        }
     }
 }
 
@@ -728,9 +815,11 @@ class WithMatrix(
         `if`: String? = null,
         @Language("shell", prefix = "./gradlew ") vararg tasks: String,
         env: Map<String, String> = emptyMap(),
+        continueOnError: Boolean? = null,
     ): CommandStep = run(
         name = name,
         `if` = `if`,
+        continueOnError = continueOnError,
         command = shell(
             buildString {
                 append("./gradlew ")
@@ -975,8 +1064,56 @@ class WithMatrix(
         }
         if (matrix.isWindows && matrix.isX64 && matrix.hasMpvBuildVariant("windows")) {
             // mpv 的 Windows 构建走 MSYS2 UCRT64 (packages 与 MpvSupport.windowsTarget 对齐)
+            val packages = listOf(
+                "git",
+                "mingw-w64-ucrt-x86_64-ca-certificates",
+                "mingw-w64-ucrt-x86_64-gcc",
+                "mingw-w64-ucrt-x86_64-libass",
+                "mingw-w64-ucrt-x86_64-libplacebo",
+                "mingw-w64-ucrt-x86_64-meson",
+                "mingw-w64-ucrt-x86_64-ninja",
+                "mingw-w64-ucrt-x86_64-pkgconf",
+                "mingw-w64-ucrt-x86_64-python-certifi",
+                "mingw-w64-ucrt-x86_64-python",
+                "mingw-w64-ucrt-x86_64-shaderc",
+                "mingw-w64-ucrt-x86_64-spirv-cross",
+            ).joinToString(" ")
+            // A machine whose own MSYS2 at C:\msys64 (the build's default msys2.dir) already has these
+            // packages builds with it: installing a fresh MSYS2 per run fails whenever a mirror stalls,
+            // as on the GPU laptop. GitHub's image ships C:\msys64 without them, so hosted runners
+            // still install one. FFmpeg and dav1d add their own packages in the build either way.
+            val existingMsys2 = run(
+                name = "Find MSYS2 ucrt64 for mpv",
+                command = buildList {
+                    add(
+                        $$"""
+                        $pacman = 'C:\msys64\usr\bin\pacman.exe'
+                        $found = $false
+                        if (Test-Path $pacman) {
+                            # Missing packages are reported on stderr.
+                            & $pacman -Q @('$${packages}' -split ' ') | Out-Null
+                            $found = $LASTEXITCODE -eq 0
+                        }
+                        "found=$("$found".ToLower())" >> $env:GITHUB_OUTPUT
+                        """.trimIndent(),
+                    )
+                    // Tells whoever maintains the machine how to make the next runs skip the install.
+                    if (matrix.selfHosted) {
+                        add(
+                            $$"""
+                            if (-not $found) {
+                                Write-Host "::notice::C:\msys64 is missing or lacks some of: $${packages}. This run installs a temporary MSYS2; to build with C:\msys64 instead, install them there once: pacman -S --needed --noconfirm $${packages}"
+                            }
+                            """.trimIndent(),
+                        )
+                    }
+                    add("exit 0") // the probe's exit code is not the step's
+                }.joinToString("\n"),
+            )
+            val installMsys2 = "${existingMsys2.outputs["found"]} != 'true'"
             val msys2 = uses(
                 name = "Setup MSYS2 ucrt64 for mpv",
+                `if` = installMsys2,
                 action = CustomAction(
                     actionOwner = "msys2",
                     actionName = "setup-msys2",
@@ -984,25 +1121,13 @@ class WithMatrix(
                     inputs = mapOf(
                         "msystem" to "UCRT64",
                         "update" to "true",
-                        "install" to """
-                            git
-                            mingw-w64-ucrt-x86_64-ca-certificates
-                            mingw-w64-ucrt-x86_64-gcc
-                            mingw-w64-ucrt-x86_64-libass
-                            mingw-w64-ucrt-x86_64-libplacebo
-                            mingw-w64-ucrt-x86_64-meson
-                            mingw-w64-ucrt-x86_64-ninja
-                            mingw-w64-ucrt-x86_64-pkgconf
-                            mingw-w64-ucrt-x86_64-python-certifi
-                            mingw-w64-ucrt-x86_64-python
-                            mingw-w64-ucrt-x86_64-shaderc
-                            mingw-w64-ucrt-x86_64-spirv-cross
-                        """.trimIndent(),
+                        "install" to packages,
                     ),
                 ),
             )
             run(
                 name = "Configure MSYS2 root",
+                `if` = installMsys2,
                 command = shell(
                     $$"""
                     $msys2Dir = '$${expr { msys2.outputs["msys2-location"] }}'.Replace('\', '/')
@@ -1057,6 +1182,44 @@ class WithMatrix(
                 ),
             )
         }
+    }
+
+    /**
+     * Render path matrix: one JVM per scenario plays a clip of known colours in a real Compose
+     * window and checks the captured frames. The result table goes to the job summary, the
+     * captures to an artifact.
+     * GitHub's Windows runners have no GPU and run only the ci tier; Skiko usually falls back from
+     * the requested API there, and the table shows where each scenario actually landed.
+     * Non-blocking on hosted runners until the results are stable; the GPU test machine
+     * ([gpuRenderMatrixInstance]) runs every scenario in strict mode.
+     */
+    fun JobBuilder<*>.renderPathMatrix(
+        tier: String? = null,
+        strict: Boolean = false,
+        continueOnError: Boolean = true,
+    ) {
+        if (!matrix.isWindows || !matrix.runTests || matrix.mpvBuildVariant == null) return
+        runGradle(
+            name = "Render path matrix",
+            tasks = listOfNotNull(
+                "--continue",
+                // Pre-quoted: PowerShell splits an unquoted -Pa.b=c into separate arguments.
+                tier?.let { "\"-Pmediamp.mpv.renderpath.tier=$it\"" },
+                "\"-Pmediamp.mpv.renderpath.strict=true\"".takeIf { strict },
+                ":mediamp-mpv:renderPathMatrix",
+            ).toTypedArray(),
+            continueOnError = true.takeIf { continueOnError },
+        )
+        uses(
+            name = "Upload render path matrix",
+            `if` = "always()",
+            action = UploadArtifact(
+                name = "render-path-matrix-${matrix.runner.id}",
+                path_Untyped = "mediamp-mpv/build/render-path-matrix/",
+                overwrite = true,
+                ifNoFilesFound = UploadArtifact.BehaviorIfNoFilesFound.Warn,
+            ),
+        )
     }
 
     fun JobBuilder<*>.buildFfmpegArtifacts() {
@@ -1182,7 +1345,12 @@ class WithMatrix(
             tasks = arrayOf(
                 // 预引号: PowerShell 会把未引号的 -Dmaven.repo.local=... 分词拆坏
                 "\"-Dmaven.repo.local=mediamp-mpv/build/maven-local\"",
-                ":mediamp-mpv:publishToMavenLocal",
+                if (matrix.isWindowsAArch64) {
+                    // windows-11-arm does not provide an Android SDK; validate only the ARM64 runtime publication.
+                    ":mediamp-mpv:publishMpvRuntimeWindowsArm64PublicationToMavenLocal"
+                } else {
+                    ":mediamp-mpv:publishToMavenLocal"
+                },
             ),
         )
     }
@@ -1230,9 +1398,6 @@ object Secrets {
 
 val GitHubContext.isAnimekoRepository
     get() = """$repository == 'open-ani/mediamp'"""
-
-val GitHubContext.isPullRequest
-    get() = """$event_name == 'pull_request'"""
 
 val MatrixInstance.isX64 get() = arch == Arch.X64
 val MatrixInstance.isAArch64 get() = arch == Arch.AARCH64

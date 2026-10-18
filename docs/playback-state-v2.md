@@ -395,12 +395,13 @@ for a saved-position-at-end resume).
   deselected and then reselects it: a plain runtime `vo` change would restart the decoder
   mid-GOP, where hardware decoding fails and mpv decodes the rest of the file in software,
   while track selection refreshes the demuxer from a keyframe. Video then appears
-  mid-session. (Upgrade path for Linux: EGL/dmabuf interop.) Windows headless capture tests
-  explicitly create a windowless D3D11 context with `createRenderContext()` before loading
-  media. They cannot later attach an OpenGL consumer to that player. Other headless CI uses a
-  declared video-disabled mode (`vo=null`). v1's defer-loadfile-to-resume (deferral to
-  `play()`) is abolished everywhere — deferral, where unavoidable, lives inside Opening,
-  never after Ready.
+  mid-session. (Upgrade path for Linux: EGL/dmabuf interop.) Headless players on Windows
+  (capture tests, tools without a window) create a windowless D3D11 context with the public
+  `MpvMediampPlayer.createRenderContext()` before loading media, so they render video
+  frames instead of opening with `vo=null`. They cannot later attach an OpenGL consumer to
+  that player. Other headless CI uses a declared video-disabled mode (`vo=null`). v1's
+  defer-loadfile-to-resume (deferral to `play()`) is abolished everywhere — deferral, where
+  unavoidable, lives inside Opening, never after Ready.
 - **Speed**: `setRateImpl` is part of the SPI. Feature `PlaybackSpeed.set` goes through the
   machine: while not playing it only stores the rate (fixes avkit `setRate`-starts-playback);
   the machine (re)applies the stored rate on every transition to playing and after an accepted
