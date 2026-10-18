@@ -64,10 +64,11 @@ overrides what the scenarios are testing.
 
 ## Running the matrix
 
-- The workflow runs at the `hybrid` tier for every push to `main` and every pull request
-  from a branch of this repository; *Actions → GPU Render Matrix → Run workflow* runs it for
-  any branch and tier. Pull requests from forks never run here: the runner is a personal
-  machine with a signed-in desktop.
+- The workflow runs at the `hybrid` tier for every push to `main` and every pull request,
+  including pull requests from forks; *Actions → GPU Render Matrix → Run workflow* runs it
+  for any branch and tier. A fork's code then runs on a personal machine with a signed-in
+  desktop, and the only gate in front of it is the repository's approval setting for fork
+  pull request workflows (*Settings → Actions → General*).
 - It is not a required check. While the laptop is offline, runs wait in the queue, and
   GitHub cancels them after 24 hours.
 - Results are in the job summary (one row per scenario, with the adapters Skia and mpv

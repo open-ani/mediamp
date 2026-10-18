@@ -40,7 +40,7 @@ jobs:
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: 'core.fsmonitor'
       GIT_CONFIG_VALUE_0: 'false'
-    if: '${{ github.repository == ''open-ani/mediamp'' && (!(github.event_name == ''pull_request'') || github.event.pull_request.head.repo.full_name == github.repository) }}'
+    if: '${{ github.repository == ''open-ani/mediamp'' }}'
     steps:
     - id: 'step-0'
       uses: 'actions/checkout@v4'
