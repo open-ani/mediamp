@@ -113,8 +113,17 @@ actual class MpvMediampPlayer(
         current.backend.destroyRenderContext(handle.ptr)
     }
 
-    /** Explicitly creates a windowless render context for headless capture. Idempotent. */
-    internal fun createRenderContext(): Boolean {
+    /**
+     * Creates a render context without a surface, so a player that never shows video in a
+     * window can still open media, play it and capture frames. Idempotent; returns whether
+     * the render context exists. Call it on [mainDispatcher] before opening media.
+     *
+     * macOS creates the render context when the player is constructed. On Windows this
+     * creates a windowless D3D11 context; the player cannot attach an OpenGL surface later.
+     * On Linux the producer context must join the GLX share group of an attached surface,
+     * so opening media still waits for one.
+     */
+    fun createRenderContext(): Boolean {
         if (surfaceTeardownStarted) return false
         if (rendering == null) headlessSurfaceBackend()?.let { attachBackend(it) }
         return ringBackend?.createRenderContext(handle.ptr) ?: false
