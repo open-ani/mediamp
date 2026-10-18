@@ -561,11 +561,10 @@ workflow(
         permissions = mapOf(
             Permission.Actions to Mode.Write, // Upload artifacts
         ),
-        // The runner is a personal machine with a signed-in desktop: never run pull requests from forks.
-        `if` = expr {
-            "${github.isAnimekoRepository} && (!(${github.isPullRequest}) || " +
-                "github.event.pull_request.head.repo.full_name == github.repository)"
-        },
+        // Pull requests from forks run too: their changes need the GPU coverage as much as ours.
+        // The runner is a personal machine with a signed-in desktop, so the repository's fork
+        // pull request approval setting is what keeps unreviewed code off it.
+        `if` = expr { github.isAnimekoRepository },
         // Keep the machine's global git config from starting fsmonitor daemons: they outlive the
         // job and hold its directories open.
         env = mapOf(
@@ -1399,9 +1398,6 @@ object Secrets {
 
 val GitHubContext.isAnimekoRepository
     get() = """$repository == 'open-ani/mediamp'"""
-
-val GitHubContext.isPullRequest
-    get() = """$event_name == 'pull_request'"""
 
 val MatrixInstance.isX64 get() = arch == Arch.X64
 val MatrixInstance.isAArch64 get() = arch == Arch.AARCH64
