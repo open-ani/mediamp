@@ -12,9 +12,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
 import org.openani.mediamp.io.SeekableInput
+import org.openani.mediamp.mpv.internal.AsyncClosingFramePreview
 import org.openani.mediamp.source.MediaData
 import org.openani.mediamp.source.MediaExtraFiles
 import org.openani.mediamp.source.SeekableInputMediaData
@@ -24,9 +26,11 @@ import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Integration test for [MpvFramePreview] against a real libmpv (dev-native JNI build).
@@ -209,6 +213,27 @@ class MpvFramePreviewTest {
             } finally {
                 player.close()
             }
+        }
+    }
+
+    /**
+     * The player's native teardown waits for the preview decoder's teardown (see
+     * [AsyncClosingFramePreview]): the signal it waits on must complete once a used preview's
+     * player is closed, or every close would sit out the full timeout.
+     */
+    @Test
+    fun `close completes the preview teardown signal`() {
+        if (!prepareOrSkip()) return
+        val video = generateColorVideo()!!
+        runBlocking(Dispatchers.Default) {
+            val player = createHeadlessPlayer(coroutineContext)
+            player.setMediaData(UriMediaData(video.absolutePath, emptyMap(), MediaExtraFiles.EMPTY))
+            val preview = assertIs<AsyncClosingFramePreview>(player.features[FramePreview.Key])
+            assertNotNull(preview.getPreviewFrame(1_000, 160, 160), "no frame at 1s")
+
+            player.close()
+            val finished = withContext(Dispatchers.IO) { preview.awaitClosed(10.seconds) }
+            assertTrue(finished, "preview teardown did not finish after player.close()")
         }
     }
 

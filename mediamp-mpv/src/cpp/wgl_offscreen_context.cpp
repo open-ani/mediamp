@@ -296,9 +296,11 @@ void wgl_offscreen_context::shutdown_window_thread() {
     if (window_) {
         // WM_CLOSE -> DefWindowProc -> DestroyWindow (on the window thread, as
         // required) -> WM_DESTROY -> PostQuitMessage ends the pump loop.
+        LOGI("WGL fallback window pump: closing window");
         PostMessageW(window_, WM_CLOSE, 0, 0);
     }
     if (window_thread_.joinable()) window_thread_.join();
+    LOGI("WGL fallback window pump thread joined");
     window_ = nullptr;
     device_context_ = nullptr;
 }
@@ -314,6 +316,7 @@ void wgl_offscreen_context::destroy() {
         }
         wglDeleteContext(context_);
         context_ = nullptr;
+        LOGI("WGL fallback context deleted");
     }
     shutdown_window_thread();
 }

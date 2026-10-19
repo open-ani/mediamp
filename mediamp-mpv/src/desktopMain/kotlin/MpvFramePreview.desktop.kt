@@ -8,6 +8,7 @@
 
 package org.openani.mediamp.mpv
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -22,12 +23,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.openani.mediamp.features.FramePreview
 import org.openani.mediamp.features.PreviewFrame
+import org.openani.mediamp.mpv.internal.AsyncClosingFramePreview
 import org.openani.mediamp.mpv.internal.MpvPreviewDecoder
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
 import org.openani.mediamp.source.MediaData
@@ -36,6 +39,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.time.Duration
 
 internal actual fun createMpvFramePreview(
     player: JvmMpvMediampPlayer,
@@ -60,13 +64,16 @@ internal class MpvFramePreview(
     private val mainPlayer: JvmMpvMediampPlayer,
     private val context: Any,
     parentCoroutineContext: CoroutineContext,
-) : FramePreview, AutoCloseable {
+) : AsyncClosingFramePreview {
     private val scope = CoroutineScope(
         parentCoroutineContext + SupervisorJob(parentCoroutineContext[Job.Key]),
     )
     private val mutex = Mutex()
     private var session: PreviewSession? = null
     private var closed = false
+
+    /** Completed once the teardown launched by [close] has run, with or without a session. */
+    private val teardownFinished = CompletableDeferred<Unit>()
 
     init {
         scope.launch {
@@ -140,15 +147,24 @@ internal class MpvFramePreview(
 
     override fun close() {
         // Called from the main player's closeImpl (main thread): do the actual native teardown
-        // off-thread, serialized behind the mutex against any in-flight grab.
+        // off-thread, serialized behind the mutex against any in-flight grab. The player's
+        // teardown thread waits for it through awaitClosed.
         scope.launch(NonCancellable) {
-            mutex.withLock {
-                if (closed) return@withLock
-                closed = true
-                discardSessionLocked()
+            try {
+                mutex.withLock {
+                    if (closed) return@withLock
+                    closed = true
+                    discardSessionLocked()
+                }
+            } finally {
+                teardownFinished.complete(Unit)
+                scope.cancel()
             }
-            scope.cancel()
         }
+    }
+
+    override fun awaitClosed(timeout: Duration): Boolean = runBlocking {
+        withTimeoutOrNull(timeout) { teardownFinished.await() } != null
     }
 
     private class PreviewSession(
