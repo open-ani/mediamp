@@ -1,12 +1,12 @@
 package nativebuild
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
-import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
@@ -21,16 +21,23 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
     abstract val sourceDir: DirectoryProperty
 
     /**
-     * Optional patch applied to the snapshot. The submodule working tree is only mutated
+     * Patches applied to the snapshot, in order. The submodule working tree is only mutated
      * for the duration of this task's action (apply -> copy -> revert in a finally
      * block), so [sourceDir]'s input fingerprint — taken before execution — always
-     * describes the clean checkout, and the patch participates in up-to-date checks as
-     * its own content-hashed input.
+     * describes the clean checkout, and the patches participate in up-to-date checks as
+     * their own content-hashed inputs.
      */
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.NONE)
-    @get:Optional
-    abstract val patchFile: RegularFileProperty
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract val patchFiles: ConfigurableFileCollection
+
+    /**
+     * File collection fingerprints ignore order, but later patches may build on earlier
+     * ones. Names identify patches because [validatePatchSeries] keeps them unique.
+     */
+    @get:Input
+    val patchOrder: List<String>
+        get() = patchFiles.map { it.name }
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -70,19 +77,15 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
         val src = sourceDir.get().asFile
         val dst = outputDir.get().asFile
         val marker = markerFileRelativePath.get()
-        val patch = patchFile.orNull?.asFile
+        val patches = patchFiles.toList()
 
         require(src.resolve(marker).isFile) {
             missingSourceMessage.orNull
                 ?: "${sourceDisplayName.get()} source tree is missing $marker at ${src.absolutePath}"
         }
 
-        if (patch != null) {
-            execOperations.exec {
-                commandLine("git", "apply", patch.absolutePath)
-                workingDir = src
-            }
-        }
+        val git = execOperations.gitPatchRunner(src)
+        applyPatchSeries(patches, git)
         try {
             recreateDirectory(dst)
             if (preserveSymbolicLinks.get()) {
@@ -94,12 +97,7 @@ abstract class PrepareSourceTreeTask : DefaultTask() {
                 restoreExecutablePermissions(src, dst)
             }
         } finally {
-            if (patch != null) {
-                execOperations.exec {
-                    commandLine("git", "apply", "--reverse", patch.absolutePath)
-                    workingDir = src
-                }
-            }
+            revertPatchSeries(patches, git)
         }
 
         logger.lifecycle("Prepared ${sourceDisplayName.get()} source from ${src.absolutePath} to ${dst.absolutePath}")

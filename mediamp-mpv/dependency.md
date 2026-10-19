@@ -335,7 +335,7 @@ Windows 后端根据已挂载 `SkiaLayer` 的实际 redrawer 类型选择：`Dir
 
 Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
 **D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
-以 `mpv.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除对应补丁)在我们自建的
+以 `render_d3d11.patch` 打进本仓库的 mpv 源码构建, PR 合并进 0.42 后可移除)在我们自建的
 `ID3D11Device` 上渲染进三重缓冲的共享纹理环 (`DXGI_FORMAT_R8G8B8A8_UNORM`,
 `D3D11_RESOURCE_MISC_SHARED | SHARED_NTHANDLE`), 每块纹理经 NT 共享句柄在 Skia 的
 D3D12 设备 (Compose Windows 默认后端, Skiko `Direct3DRedrawer`) 上打开为
@@ -386,3 +386,11 @@ brew install mpv
 ```
 
 发布构建仍走 `mpvAssembleMacosArm64`(meson 源码构建 libmpv + ffmpeg, 打包 runtime jar)。
+
+CoreAudio 声道映射 (`coreaudio-channel-map.patch`, 见 [animeko#3494](https://github.com/open-ani/animeko/issues/3494)):
+上游 `ao_coreaudio` 把 `AudioChannelLayout` 传给要求 `SInt32` 源声道索引数组的
+`kAudioOutputUnitProperty_ChannelMap`, macOS 27.2 上 Studio Display XDR 和 MacBook Pro 内置扬声器都会返回 `-50`,
+导致音频初始化失败。
+patch 只在声道数相同、扬声器集合相同的已知布局下设置显式映射, 其余情况保留 CoreAudio 默认映射,
+并把可选的查询/设置失败降级为警告。上游修复后可移除。Homebrew libmpv 不含此 patch, 只有本仓库
+源码构建的 libmpv 生效。
