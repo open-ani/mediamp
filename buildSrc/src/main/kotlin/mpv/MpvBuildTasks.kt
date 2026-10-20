@@ -23,11 +23,10 @@ internal fun registerHostMpvTasks(context: MpvBuildContext) {
             taskNameInfix = "Mpv",
             taskGroup = "mpv",
             sourceDisplayName = "mpv",
-            patchFile = context.mpvPatch,
+            patchFiles = context.mpvPatches,
             sourceDir = context.mpvSrcDir,
             outputDir = sourceTemplateDir,
             markerFileRelativePath = "meson.build",
-            revertCommand = listOf("git", "apply", "--reverse", context.mpvPatch.absolutePath),
             preserveSymbolicLinks = true,
         ),
     )
