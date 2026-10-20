@@ -39,6 +39,7 @@ import org.openani.mediamp.internal.IO_
 import org.openani.mediamp.internal.Platform
 import org.openani.mediamp.internal.currentPlatform
 import org.openani.mediamp.metadata.MediaProperties
+import org.openani.mediamp.mpv.internal.AsyncClosingFramePreview
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_EOF
 import org.openani.mediamp.mpv.internal.MPV_END_FILE_REASON_ERROR
 import org.openani.mediamp.mpv.internal.MpvSessionAdapter
@@ -49,8 +50,13 @@ import org.openani.mediamp.source.SeekableInputMediaData
 import org.openani.mediamp.source.UriMediaData
 import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.measureTimedValue
 
 private const val SEEKABLE_INPUT_LOAD_TARGET_PREFIX = "mediamp://seekble_input_media/"
+
+/** How long [JvmMpvMediampPlayer.closeImpl] waits for the frame preview's teardown before its own. */
+private val FRAME_PREVIEW_TEARDOWN_TIMEOUT = 10.seconds
 
 private fun buildSeekableInputLoadTarget(data: SeekableInputMediaData): String {
     return SEEKABLE_INPUT_LOAD_TARGET_PREFIX + data.uri
@@ -783,6 +789,7 @@ abstract class JvmMpvMediampPlayer(
         // thread completes normally, and once the JVM is exiting anyway the OS reclaims
         // whatever a killed teardown would have released.
         thread(name = "mediamp-mpv-teardown", isDaemon = true) {
+            awaitFramePreviewTeardown(instanceHandle)
             runNativeTeardownSequence(
                 prepare = { prepareNativeTeardown() },
                 stop = { handle.command("stop") },
@@ -795,6 +802,29 @@ abstract class JvmMpvMediampPlayer(
                         it,
                     )
                 },
+            )
+        }
+    }
+
+    /**
+     * Waits for the frame preview's native teardown (started by its `close()` in [closeImpl])
+     * before this player's own. The preview decoder is a second mpv instance with its own
+     * render context; tearing both down concurrently is the suspected trigger of a native
+     * deadlock on the Windows OpenGL fallback path (two WGL producers destroying their hidden
+     * windows while Skiko renders on the AWT thread). Bounded so a wedged preview teardown
+     * cannot keep this player's teardown from ever running; either outcome is logged so a
+     * hang report shows which teardown stalled.
+     */
+    private fun awaitFramePreviewTeardown(instanceHandle: Long) {
+        val preview = framePreview as? AsyncClosingFramePreview ?: return
+        val (finished, elapsed) = measureTimedValue { preview.awaitClosed(FRAME_PREVIEW_TEARDOWN_TIMEOUT) }
+        if (finished) {
+            MPVLog.info(instanceHandle, "frame preview teardown finished in $elapsed; starting player teardown")
+        } else {
+            MPVLog.error(
+                instanceHandle,
+                "frame preview teardown did not finish within $FRAME_PREVIEW_TEARDOWN_TIMEOUT; " +
+                    "starting player teardown anyway",
             )
         }
     }
