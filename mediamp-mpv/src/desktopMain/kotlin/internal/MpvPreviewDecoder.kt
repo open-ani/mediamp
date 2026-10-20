@@ -152,6 +152,7 @@ internal class MpvPreviewDecoder(
         // threads (a blocked read holds the native stream lock).
         inputAwaitJob.cancel()
         val instanceHandle = handle.ptr
+        MPVLog.info(instanceHandle, "preview decoder teardown: starting")
         val renderTeardownSucceeded = runNativeTeardownSequence(
             prepare = {
                 val releaseRenderResources = {
@@ -186,5 +187,6 @@ internal class MpvPreviewDecoder(
             }
             openInput = null
         }
+        MPVLog.info(instanceHandle, "preview decoder teardown: finished (handle destroyed=$renderTeardownSucceeded)")
     }
 }

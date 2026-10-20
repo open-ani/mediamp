@@ -253,8 +253,12 @@ void win_gl_renderer::shutdown() {
     }
     if (!thread) return;
     s->cv.notify_all();
+    // Bracketed with logs: a hang report must show whether the render thread's own exit
+    // sequence (render context free, WGL/window destruction) or this join is what stalls.
+    LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: stop requested, joining");
     if (thread->joinable()) thread->join();
     delete thread;
+    LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: joined");
     // The state itself stays alive with this object: consumers may still be polling
     // frame_state or copy_latest_frame concurrently with this teardown, and they check
     // has_frame/thread under the mutex.
@@ -486,12 +490,16 @@ void win_gl_renderer::render_thread_loop() {
     // update callback, and that callback takes the state mutex.
     if (s->render_context) {
         mpv_render_context_set_update_callback(s->render_context, nullptr, nullptr);
+        LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: freeing mpv render context");
         mpv_render_context_free(s->render_context);
         s->render_context = nullptr;
+        LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: mpv render context freed");
     }
+    LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: destroying WGL context and window");
     s->gl->destroy();
     delete s->gl;
     s->gl = nullptr;
+    LOG(&owner_, LOG_LEVEL_INFO, "OpenGL fallback render thread: exiting");
     if (attached) owner_.jvm()->DetachCurrentThread();
 }
 
