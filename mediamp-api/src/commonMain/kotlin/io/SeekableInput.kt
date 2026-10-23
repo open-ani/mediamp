@@ -14,7 +14,7 @@ import org.openani.mediamp.internal.Range
 import kotlin.concurrent.Volatile
 
 /**
- * A **asynchronous** source of bytes from which you can seek to a position and read sequentially.
+ * An **asynchronous** source of bytes from which you can seek to a position and read sequentially.
  *
  * Note: this class is not thread-safe.
  */
@@ -65,19 +65,19 @@ public interface SeekableInput : AutoCloseable {
      * and attempts to return as soon as possible after completing one read.
      * Read below for detailed explanation.
      *
-     * This function moves moves the current position by the number of bytes read.
+     * This function moves the current position by the number of bytes read.
      *
      * ## Behaviour of asynchronous reading
      *
      * This function performs the read as soon as possible when there is at least one byte available,
-     * and tries to read as much as possible (caped at [length]).
+     * and tries to read as much as possible (capped at [length]).
      *
      * **It is not guaranteed to read [length] bytes even if it does not reach the EOF.**
      *
      * If the length of the returned array is less than [length],
      * it does not necessarily mean that the EOF has been reached.
-     * It may be because the underlying source just have that many bytes available **now**,
-     * so this function read that available bytes and returns immediately without waiting for more bytes.
+     * It may be because the underlying source just has that many bytes available **now**,
+     * so this function reads those available bytes and returns immediately without waiting for more bytes.
      *
      * @return the number of bytes read, or `-1` if the end of the input source has been reached.
      *
