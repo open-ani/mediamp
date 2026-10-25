@@ -16,7 +16,7 @@ import java.lang.reflect.Method
 internal class SkiaRendererAccess(layerClass: Class<*>) {
     private val legacyGetter = layerClass.methods.firstOrNull { it.name == "getRedrawer\$skiko" }
     private val driverGetter = if (legacyGetter == null) {
-        layerClass.getMethod("getFrameDriver\$skiko")
+        layerClass.methods.first { it.name.startsWith("getFrameDriver\$") && it.parameterCount == 0 }
     } else null
     private var rendererGetter: Method? = null
     private var driverClass: Class<*>? = null
