@@ -57,7 +57,9 @@ internal data class OpenGLRenderSnapshot(
  * same single dereference as Skiko's makeCurrent/destroyContext JNI implementations.
  */
 internal class SkiaOpenGLInterop(private val layerRedrawer: SkiaLayerRedrawer) : SkiaRenderDeviceInterop {
-    private val getBackedLayerMethod: Method = SkiaLayer::class.java.getMethod("getBackedLayer\$skiko")
+    private val getBackedLayerMethod: Method = SkiaLayer::class.java.methods.first {
+        it.name.startsWith("getBackedLayer\$") && it.parameterCount == 0
+    }
     private val getContentHandleMethod: Method = SkiaLayer::class.java.getMethod("getContentHandle")
     private val getWindowHandleMethod: Method = SkiaLayer::class.java.getMethod("getWindowHandle")
 
