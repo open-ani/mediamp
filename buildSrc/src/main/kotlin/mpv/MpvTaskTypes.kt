@@ -765,7 +765,8 @@ private fun bundleAppleExternalDependencies(
     if (!libDir.isDirectory) return
 
     fun listDylibs(): List<File> =
-        libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".dylib") }.orEmpty()
+        libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".dylib") }
+            .orEmpty().map(File::getCanonicalFile).distinct()
 
     fun dependencyPaths(machO: File): List<String> {
         val output = java.io.ByteArrayOutputStream()
@@ -781,10 +782,33 @@ private fun bundleAppleExternalDependencies(
             .toList()
     }
 
+    fun resolveDependency(dep: String, source: File): File? {
+        val candidates = if (dep.startsWith("@rpath/")) {
+            val output = ByteArrayOutputStream()
+            execOperations.exec {
+                commandLine("xcrun", "otool", "-l", source.absolutePath)
+                standardOutput = output
+            }
+            // LC_RPATH is the load command with a `path ... (offset N)` field.
+            Regex("(?m)^\\s*path (.+) \\(offset \\d+\\)$")
+                .findAll(output.toString())
+                .map { "${it.groupValues[1]}/${dep.removePrefix("@rpath/")}" }
+                .toList()
+        } else listOf(dep)
+        return candidates.asSequence()
+            .map { it.replace("@loader_path", source.parent) }
+            .filter { it.startsWith("/") }
+            .map(::File)
+            .firstOrNull(File::isFile)?.canonicalFile
+    }
+
     // System libraries and frameworks stay external; anything else must be bundled.
     fun isExternal(path: String): Boolean =
-        path.startsWith("/") && !path.startsWith("/usr/lib/") && !path.startsWith("/System/")
+        !path.startsWith("/usr/lib/") && !path.startsWith("/System/")
 
+    // Relative load commands must be resolved in the original Homebrew directory,
+    // not in the flattened runtime directory where LC_RPATH may no longer be valid.
+    val origins = mutableMapOf<File, File>()
     val copied = mutableSetOf<String>()
     var changed = true
     while (changed) {
@@ -792,13 +816,17 @@ private fun bundleAppleExternalDependencies(
         listDylibs().forEach { machO ->
             dependencyPaths(machO).forEach inner@{ dep ->
                 if (!isExternal(dep)) return@inner
-                val real = File(dep).canonicalFile
-                require(real.isFile) {
-                    "Dylib dependency '$dep' of ${machO.name} does not exist on this machine."
-                }
+                val source = origins[machO] ?: machO
+                val existing = libDir.resolve(File(dep).name).takeIf(File::isFile)
+                val real = existing?.canonicalFile
+                    ?: resolveDependency(dep, source)
+                    ?: error("Cannot resolve dylib dependency '$dep' of ${source.absolutePath}.")
+                // otool -L includes the dylib's own install name.
+                if (real == machO) return@inner
                 val bundled = libDir.resolve(real.name)
                 if (!bundled.exists()) {
                     real.copyTo(bundled)
+                    origins[bundled.canonicalFile] = real
                     bundled.setReadable(true, false)
                     bundled.setWritable(true, true) // install_name_tool needs write access
                     bundled.setExecutable(true, false)
