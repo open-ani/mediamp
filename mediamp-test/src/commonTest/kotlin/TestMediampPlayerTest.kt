@@ -415,7 +415,7 @@ class TestMediampPlayerTest {
 
     @Test
     fun `playback speed lowered while stalled is applied natively when playback resumes`(): TestResult = runTest {
-        // regression: open-ani/animeko#3368, #3664 — releasing long-press acceleration while
+        // regression: open-ani/animeko#3368, #3664. Releasing long-press acceleration while
         // the video was buffering left the backend at the fast rate. The machine only stored
         // the 1x while stalled, then skipped applying 1x on resume as if the backend were
         // already there, although it was still running at the previously applied rate.
