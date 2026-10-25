@@ -386,3 +386,11 @@ brew install mpv
 ```
 
 发布构建仍走 `mpvAssembleMacosArm64`(meson 源码构建 libmpv + ffmpeg, 打包 runtime jar)。
+
+CoreAudio 声道映射 (`coreaudio-channel-map.patch`, 见 [animeko#3494](https://github.com/open-ani/animeko/issues/3494)):
+上游 `ao_coreaudio` 把 `AudioChannelLayout` 传给要求 `SInt32` 源声道索引数组的
+`kAudioOutputUnitProperty_ChannelMap`, macOS 27.2 上 Studio Display XDR 和 MacBook Pro 内置扬声器都会返回 `-50`,
+导致音频初始化失败。
+patch 只在声道数相同、扬声器集合相同的已知布局下设置显式映射, 其余情况保留 CoreAudio 默认映射,
+并把可选的查询/设置失败降级为警告。上游修复后可移除。Homebrew libmpv 不含此 patch, 只有本仓库
+源码构建的 libmpv 生效。

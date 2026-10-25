@@ -1,0 +1,85 @@
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 4b4bf1d48c..ac1e559a10 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -136,7 +136,7 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
+     return CONTROL_UNKNOWN;
+ }
+ 
+-static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, AudioChannelLayout *layout, size_t layout_size);
++static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd);
+ static void init_physical_format(struct ao *ao);
+ static void reinit_latency(struct ao *ao);
+ static bool register_hotplug_cb(struct ao *ao);
+@@ -178,13 +178,7 @@ static int init(struct ao *ao)
+ 
+     AudioStreamBasicDescription asbd;
+     ca_fill_asbd(ao, &asbd);
+-    size_t layout_size;
+-    AudioChannelLayout *layout = ca_get_acl(ao, &layout_size);
+-
+-    bool r = init_audiounit(ao, asbd, layout, layout_size);
+-    talloc_free(layout);
+-
+-    if (!r)
++    if (!init_audiounit(ao, asbd))
+         goto coreaudio_error;
+ 
+     reinit_latency(ao);
+@@ -277,7 +271,41 @@ coreaudio_error:
+     talloc_free(tmp);
+ }
+ 
+-static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, AudioChannelLayout *layout, size_t layout_size)
++static void init_channel_map(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++    AudioStreamBasicDescription out_asbd;
++    uint32_t size = sizeof(out_asbd);
++    OSStatus err = AudioUnitGetProperty(p->audio_unit,
++                                       kAudioUnitProperty_StreamFormat,
++                                       kAudioUnitScope_Output, 0, &out_asbd, &size);
++    if (!CHECK_CA_WARN("unable to get the output format of the audio unit"))
++        return;
++
++    // A channel map describes a permutation, not mixing or an unknown layout.
++    if (out_asbd.mChannelsPerFrame != ao->channels.num) {
++        MP_VERBOSE(ao, "using default channel map for %u output channels\n",
++                   (unsigned)out_asbd.mChannelsPerFrame);
++        return;
++    }
++
++    struct mp_chmap device_map;
++    ca_get_active_chmap(ao, p->device, ao->channels.num, &device_map);
++    if (!mp_chmap_is_valid(&device_map) || mp_chmap_is_unknown(&device_map) ||
++        !mp_chmap_equals_reordered(&ao->channels, &device_map))
++        return;
++
++    // ChannelMap requires one SInt32 source index per output channel.
++    SInt32 channel_map[MP_NUM_CHANNELS];
++    mp_chmap_get_reorder(channel_map, &ao->channels, &device_map);
++    err = AudioUnitSetProperty(p->audio_unit,
++                              kAudioOutputUnitProperty_ChannelMap,
++                              kAudioUnitScope_Output, 0, channel_map,
++                              ao->channels.num * sizeof(channel_map[0]));
++    CHECK_CA_WARN("unable to set the channel map on the audio unit");
++}
++
++static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd)
+ {
+     OSStatus err;
+     uint32_t size;
+@@ -321,12 +349,7 @@ static bool init_audiounit(struct ao *ao, AudioStreamBasicDescription asbd, Audi
+     CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+                      "can't link audio unit to selected device");
+ 
+-    err = AudioUnitSetProperty(p->audio_unit,
+-                               kAudioOutputUnitProperty_ChannelMap,
+-                               kAudioUnitScope_Global, 0, layout, layout_size);
+-
+-    CHECK_CA_ERROR_L(coreaudio_error_audiounit,
+-                     "unable to set the input channel layout on the audio unit");
++    init_channel_map(ao);
+ 
+     AURenderCallbackStruct render_cb = (AURenderCallbackStruct) {
+         .inputProc       = render_cb_lpcm,
