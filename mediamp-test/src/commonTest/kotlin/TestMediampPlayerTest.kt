@@ -414,6 +414,76 @@ class TestMediampPlayerTest {
     }
 
     @Test
+    fun `playback speed lowered while stalled is applied natively when playback resumes`(): TestResult = runTest {
+        // regression: open-ani/animeko#3368, #3664 — releasing long-press acceleration while
+        // the video was buffering left the backend at the fast rate. The machine only stored
+        // the 1x while stalled, then skipped applying 1x on resume as if the backend were
+        // already there, although it was still running at the previously applied rate.
+        val player = createPlayer()
+        val speed = player.features.getOrFail(PlaybackSpeed)
+        player.setMediaData(newData(), playWhenReady = true)
+        advanceUntilIdle()
+        speed.set(2.5f)
+        assertEquals(2.5f, player.nativePlaybackRate)
+
+        player.injectStall(true)
+        advanceUntilIdle()
+        assertTrue(player.state.value.isBuffering)
+        speed.set(1f)
+        assertEquals(1f, speed.value)
+        assertEquals(2.5f, player.nativePlaybackRate) // stalled: stored only (spec section 6)
+
+        player.injectStall(false)
+        advanceUntilIdle()
+        assertTrue(player.state.value.isPlaying)
+        assertEquals(1f, player.nativePlaybackRate) // re-applied on the transition to playing
+        player.close()
+    }
+
+    @Test
+    fun `playback speed lowered while paused is applied natively on play`(): TestResult = runTest {
+        val player = createPlayer()
+        val speed = player.features.getOrFail(PlaybackSpeed)
+        player.setMediaData(newData(), playWhenReady = true)
+        advanceUntilIdle()
+        speed.set(2f)
+        assertEquals(2f, player.nativePlaybackRate)
+
+        player.pause()
+        advanceUntilIdle()
+        speed.set(1f)
+        assertEquals(2f, player.nativePlaybackRate) // paused: stored only (spec section 6)
+
+        player.play()
+        advanceUntilIdle()
+        assertEquals(1f, player.nativePlaybackRate) // re-applied on the transition to playing
+        player.close()
+    }
+
+    @Test
+    fun `playback speed lowered during an external pause is applied natively on external play`(): TestResult =
+        runTest {
+            val player = createPlayer()
+            val speed = player.features.getOrFail(PlaybackSpeed)
+            player.setMediaData(newData(), playWhenReady = true)
+            advanceUntilIdle()
+            speed.set(2f)
+            assertEquals(2f, player.nativePlaybackRate)
+
+            player.injectExternalPlayWhenReady(false) // e.g. an audio interruption
+            advanceUntilIdle()
+            assertFalse(player.state.value.playWhenReady)
+            speed.set(1f)
+            assertEquals(2f, player.nativePlaybackRate) // paused: stored only (spec section 6)
+
+            player.injectExternalPlayWhenReady(true) // e.g. a media-session play command
+            advanceUntilIdle()
+            assertTrue(player.state.value.isPlaying)
+            assertEquals(1f, player.nativePlaybackRate) // re-applied after the accepted external play
+            player.close()
+        }
+
+    @Test
     fun `media metadata feature provides chapters`(): TestResult = runTest {
         val player = createPlayer()
         val metadata = assertNotNull(player.features[MediaMetadata])
