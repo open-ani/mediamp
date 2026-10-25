@@ -107,7 +107,8 @@ internal object MpvTestMedia {
  */
 internal class RangeFileServer(
     private val file: File,
-    private val bytesPerSecond: Long? = null,
+    /** Bandwidth cap for responses, `null` for unlimited. Changes apply to the next chunk sent. */
+    @Volatile var bytesPerSecond: Long? = null,
 ) : AutoCloseable {
     private val executor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "mpv-test-http").apply { isDaemon = true }
