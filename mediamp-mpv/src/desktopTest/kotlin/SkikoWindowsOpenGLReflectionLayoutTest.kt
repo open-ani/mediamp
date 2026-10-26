@@ -31,7 +31,7 @@ private fun probeSkikoWindowsOpenGLReflectionLayout(): WindowsReflectionLayoutRe
     val classLoader = SkikoWindowsOpenGLReflectionLayoutTest::class.java.classLoader
     val layer = runCatching { Class.forName("org.jetbrains.skiko.SkiaLayer", false, classLoader) }
         .getOrElse { return WindowsReflectionLayoutResult(false, "SkiaLayer is not on the classpath: $it") }
-    if (layer.methods.any { it.name == "getFrameDriver\$skiko" }) {
+    if (layer.methods.any { it.name.startsWith("getFrameDriver\$") }) {
         return runCatching {
             val renderer = Class.forName("org.jetbrains.skiko.renderer.WindowsOpenGLRenderer", false, classLoader)
             SkiaDirectContextAccess(renderer)
