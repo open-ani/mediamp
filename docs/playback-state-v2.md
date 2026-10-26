@@ -403,9 +403,11 @@ for a saved-position-at-end resume).
   defer-loadfile-to-resume (deferral to `play()`) is abolished everywhere — deferral, where
   unavoidable, lives inside Opening, never after Ready.
 - **Speed**: `setRateImpl` is part of the SPI. Feature `PlaybackSpeed.set` goes through the
-  machine: while not playing it only stores the rate (fixes avkit `setRate`-starts-playback);
-  the machine (re)applies the stored rate on every transition to playing and after an accepted
-  external play (Control-Center resume resets AVPlayer's rate to 1.0).
+  machine: while not playing it only stores the rate (fixes avkit `setRate`-starts-playback).
+  The machine (re)applies the stored rate on every transition to playing, including an accepted
+  external play (Control-Center resume resets AVPlayer's rate to 1.0). The re-apply is
+  unconditional, also at 1.0, because the backend may still run at the rate applied before
+  playback stopped (a 1.0 stored during a stall or pause would otherwise never reach it).
 - **External intent sources** (wired via the §5 echo accounting): exo — every
   `onPlayWhenReadyChanged` goes through `reportNativePlayWhenReady` (media-session commands
   arrive with reason `USER_REQUEST`; reason codes are not trusted); avkit — audio-session

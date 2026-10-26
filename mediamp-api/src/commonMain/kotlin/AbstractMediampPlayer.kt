@@ -591,7 +591,10 @@ public abstract class AbstractMediampPlayer(
         try {
             _state.value = snapshot
             _legacyPlaybackState.value = deriveLegacy(snapshot)
-            if (risingPlay && activeSession != null && desiredRate != 1f) {
+            if (risingPlay && activeSession != null) {
+                // (Re)apply the stored rate on every transition to playing (spec §6), also
+                // when it is 1x: a rate set while paused or stalled is only stored, so the
+                // backend may still run at the rate applied before playback stopped.
                 setRateImpl(desiredRate)
             }
             for (event in deferredEvents) {
@@ -876,13 +879,9 @@ public abstract class AbstractMediampPlayer(
         val newSnapshot = PlayerState(MediaStatus.Ready, newPwr, snapshot.isStalled)
         if (newSnapshot != current || externalChange || deferredEvents.isNotEmpty()) {
             if (externalChange) {
+                // An accepted external play is a transition to playing: commit() re-applies the
+                // stored rate (spec §6).
                 commit(newSnapshot, PlaybackEvent.ExternalPlayWhenReadyChanged(newPwr), *deferredEvents)
-                if (newPwr && desiredRate != 1f &&
-                    _state.value.mediaStatus == MediaStatus.Ready && _state.value.isPlaying
-                ) {
-                    // Re-apply the stored rate after an accepted external play (spec §6).
-                    setRateImpl(desiredRate)
-                }
             } else {
                 commit(newSnapshot, *deferredEvents)
             }
@@ -1023,9 +1022,10 @@ public abstract class AbstractMediampPlayer(
 
     /**
      * Creates a [PlaybackSpeed] feature backed by the machine (spec §6): while not playing the
-     * rate is only stored; the machine applies it on transitions to playing and after an
-     * accepted external play. [PlaybackSpeed.set] must be called on the machine thread
-     * (spec §4), like every other command.
+     * rate is only stored. The machine applies it on every transition to playing (including
+     * after an accepted external play), whatever its value, because the backend may still run
+     * at the rate applied before playback stopped. [PlaybackSpeed.set] must be called on the
+     * machine thread (spec §4), like every other command.
      */
     protected fun machinePlaybackSpeed(): PlaybackSpeed = object : PlaybackSpeed {
         private val flow = MutableStateFlow(1f)
