@@ -83,7 +83,10 @@ import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
 
 @OptIn(InternalMediampApi::class, InternalForInheritanceMediampApi::class)
-public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
+public class VlcMediampPlayer(
+    parentCoroutineContext: CoroutineContext,
+    config: VlcConfig = VlcConfig(),
+) :
     MediampPlayer,
     AbstractMediampPlayer<VlcjData>(Dispatchers.Default) {
 
@@ -103,7 +106,7 @@ public class VlcMediampPlayer(parentCoroutineContext: CoroutineContext) :
 //    )
 
     public val player: EmbeddedMediaPlayer = createPlayerLock.withLock {
-        MediaPlayerFactory("-v")
+        MediaPlayerFactory(*config.toArgs().toTypedArray())
             .mediaPlayers()
             .newEmbeddedMediaPlayer()
     }
