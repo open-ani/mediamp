@@ -28,7 +28,7 @@ internal fun registerHostFfmpegTasks(context: FfmpegBuildContext) {
             taskNameInfix = "Ffmpeg",
             taskGroup = "ffmpeg",
             sourceDisplayName = "FFmpeg",
-            patchFile = context.ffmpegPatch,
+            patchFiles = listOf(context.ffmpegPatch),
             sourceDir = context.ffmpegSrcDir,
             outputDir = sourceTemplateDir,
             markerFileRelativePath = "configure",
