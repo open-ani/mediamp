@@ -66,8 +66,8 @@ actual fun MpvMediampPlayerSurface(
  * extra CPU copies end to end, and this thread never renders or blocks. The Windows
  * OpenGL fallback (Compose on `SKIKO_RENDER_API=OPENGL`) publishes CPU frames instead,
  * which the consumer uploads during draw — same protocol, one extra copy by design; so
- * does the D3D11 readback path for Skiko's software and ANGLE redrawers, which have no
- * device to share textures with.
+ * do the D3D11 and Metal producers for Skiko's software and ANGLE redrawers, which have
+ * no device to share textures with (their consumers switch modes in place).
  *
  * All platform differences live behind [MpvSurfaceDrawResolver] and the player's
  * render-context lifecycle; this composable contains no host checks.
@@ -187,8 +187,9 @@ private fun MpvMediampPlayerSurfaceRing(
             return@Canvas
         }
         if (layerRedrawer != null && !player.rendersFor(layerRedrawer)) {
-            // Skiko switched its redrawer and the reselection above has not run yet; the
-            // current backend's interop must not read the new redrawer from inside its frame.
+            // Skiko switched its redrawer and the reselection above has not run yet: the
+            // current backend's interop must not read the new redrawer from inside its
+            // frame, and no GPU work may run under the previous renderer's lock.
             logOnce("Skiko switched its renderer; waiting for the mpv render path to follow")
             return@Canvas
         }

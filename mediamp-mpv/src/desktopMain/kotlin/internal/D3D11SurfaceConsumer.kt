@@ -11,21 +11,29 @@ package org.openani.mediamp.mpv.internal
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.Image
 import org.openani.mediamp.InternalMediampApi
+import org.openani.mediamp.mpv.MPVLog
 import org.openani.mediamp.mpv.nCanShareFramesD3D11
 
 /**
- * Consumer of [D3D11SurfaceRingBackend]. The ring's shared textures open only on a D3D12
- * device of the adapter mpv's D3D11 device was created on. mpv's device follows Skia's
- * adapter, but it can end up elsewhere: created on the default adapter or WARP because
- * Skia's adapter refused it, or left behind when Skiko recreated its redrawer on another
- * GPU (the device is fixed for the render context's lifetime). Sharing then fails and the
- * video stays black, so for such a device this consumer takes frames through the same
- * render context's CPU readback mode ([D3D11ReadbackSurfaceBackend], drawn by
- * [MpvReadbackSurface]) instead. Device 0 (headless) keeps the ring, which needs no Skia
- * side.
+ * Consumer of [D3D11SurfaceRingBackend]. With Skiko's Direct3D redrawer the ring's shared
+ * textures are sampled zero-copy ([MpvSurfaceRing]); in two situations frames are taken
+ * through the same render context's CPU readback mode instead
+ * ([D3D11ReadbackSurfaceBackend], drawn by [MpvReadbackSurface]):
+ *
+ * - Skiko renders without a D3D12 device (software or ANGLE redrawers, or the OpenGL
+ *   redrawer when the WGL producer is unavailable): `SkiaDirectXInterop` reports device 0.
+ *   Skiko may also get there at runtime, after a failed Direct3D frame; the surface
+ *   composable re-reads the device on every draw ([refreshDeviceIfChanged]), so the
+ *   switch happens in place, as `MacosSurfaceConsumer` does when Skiko leaves Metal.
+ * - Skia's D3D12 device is on another adapter than mpv's D3D11 device. mpv's device
+ *   follows Skia's adapter, but it can end up elsewhere: created on the default adapter or
+ *   WARP because Skia's adapter refused it, or left behind when Skiko recreated its
+ *   redrawer on another GPU (the device is fixed for the render context's lifetime). The
+ *   shared textures could not be opened there and the video would stay black.
  *
  * The producer stays the same in both modes, so switching works during playback, unlike
- * replacing the backend.
+ * replacing the backend. Headless users (frame preview, tests) configure the producer
+ * directly and never go through this consumer.
  *
  * All methods are called from the Compose/Skiko UI thread only.
  */
@@ -44,7 +52,7 @@ internal class D3D11SurfaceConsumer(private val handlePtr: Long) : MpvSurfaceCon
     override val rendererName: String get() = (active ?: ring).rendererName
 
     private fun consumerFor(devicePtr: Long): MpvSurfaceConsumer =
-        if (devicePtr == 0L || nCanShareFramesD3D11(handlePtr, devicePtr)) ring else readback
+        if (devicePtr != 0L && nCanShareFramesD3D11(handlePtr, devicePtr)) ring else readback
 
     override fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean {
         val current = active
@@ -54,6 +62,9 @@ internal class D3D11SurfaceConsumer(private val handlePtr: Long) : MpvSurfaceCon
             // ring when it applies the new config (see surface_ring.h).
             current?.release()
             active = target
+            if (target === readback && devicePtr == 0L) {
+                MPVLog.log(handlePtr, MPVLog.INFO, "no D3D12 device to share frames with; drawing CPU readback frames")
+            }
         }
         if (!target.requestSurface(width, height, devicePtr)) {
             chosenForDevicePtr = null // choose again on the next request

@@ -8,13 +8,28 @@
 
 package org.openani.mediamp.mpv
 
-import org.openani.mediamp.mpv.internal.D3D11ReadbackSurfaceBackend
+import org.jetbrains.skiko.GraphicsApi
+import org.jetbrains.skiko.SkiaLayer
+import org.jetbrains.skiko.hostOs
+import org.jetbrains.skiko.OS
+import org.junit.Assume.assumeFalse
+import org.junit.Assume.assumeTrue
 import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
 import org.openani.mediamp.mpv.internal.WindowsOpenGLSurfaceBackend
 import org.openani.mediamp.mpv.internal.windowsSurfaceBackend
+import org.openani.mediamp.mpv.utils.SkiaDirectXInterop
+import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
+import org.openani.mediamp.mpv.utils.isSkikoDirect3DRedrawer
+import java.awt.GraphicsEnvironment
+import java.lang.reflect.Proxy
+import javax.swing.JFrame
+import javax.swing.SwingUtilities
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class WindowsSurfaceBackendTest {
     private fun redrawerClass(name: String): Class<*> =
@@ -46,10 +61,65 @@ class WindowsSurfaceBackendTest {
         }
     }
 
+    /**
+     * Software and ANGLE share the D3D11 producer with Direct3D; its consumer takes CPU
+     * frames for them (device 0), so Skiko leaving Direct3D during playback needs no
+     * backend replacement.
+     */
     @Test
-    fun `software and ANGLE redrawers select D3D11 readback`() {
+    fun `software and ANGLE redrawers share the D3D11 producer`() {
         for (name in listOf("WindowsSoftwareRedrawer", "SoftwareRedrawer", "AngleRedrawer")) {
-            assertSame(D3D11ReadbackSurfaceBackend, windowsSurfaceBackend(redrawerClass(name)), name)
+            assertSame(D3D11SurfaceRingBackend, windowsSurfaceBackend(redrawerClass(name)), name)
+            assertFalse(isSkikoDirect3DRedrawer(redrawerClass(name)), name)
+        }
+        assertTrue(isSkikoDirect3DRedrawer(redrawerClass("Direct3DRedrawer")))
+    }
+
+    /**
+     * The interop is read inside the Compose draw pass: for a redrawer without a D3D12
+     * device it must report none (device 0 selects CPU frames) rather than throw, which
+     * would stop the whole window from rendering.
+     */
+    @Test
+    fun `DirectX interop reports no device for a non-Direct3D redrawer instead of throwing`() {
+        assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
+        SwingUtilities.invokeAndWait {
+            if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
+                // A real software layer: Skiko 0.153+ has no replaceable redrawer slot.
+                assumeTrue("Software layers need a Windows AWT toolkit", hostOs == OS.Windows)
+                val layer = SkiaLayer(renderApi = GraphicsApi.SOFTWARE_COMPAT)
+                val window = JFrame("Mediamp software interop test")
+                try {
+                    window.contentPane.add(layer)
+                    window.setSize(160, 120)
+                    window.isVisible = true
+                    val interop = SkiaDirectXInterop(SkiaLayerRedrawer(layer))
+                    assertEquals(0L, interop.renderDevicePtr)
+                    assertNull(interop.directContext)
+                } finally {
+                    layer.dispose()
+                    window.dispose()
+                }
+                return@invokeAndWait
+            }
+            val layer = SkiaLayer()
+            val managerField = SkiaLayer::class.java.getDeclaredField("redrawerManager")
+                .apply { isAccessible = true }
+            val manager = managerField.get(layer)
+            val redrawerField = manager.javaClass.getDeclaredField("redrawer")
+                .apply { isAccessible = true }
+            val original = redrawerField.get(manager)
+            val redrawerType = Class.forName("org.jetbrains.skiko.redrawer.Redrawer")
+            val softwareLike = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(redrawerType)) { _, _, _ -> null }
+            val interop = SkiaDirectXInterop(SkiaLayerRedrawer(layer))
+            try {
+                redrawerField.set(manager, softwareLike)
+                assertEquals(0L, interop.renderDevicePtr)
+                assertNull(interop.directContext)
+            } finally {
+                redrawerField.set(manager, original)
+                layer.dispose()
+            }
         }
     }
 }

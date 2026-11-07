@@ -19,10 +19,19 @@
 // software and ANGLE redrawers), which take frames from system memory instead of
 // sampling ring textures.
 //
-// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm). Its
-// d3d11 renderer writes alpha=1 in practice, so the consumer wraps the texture as
-// RGBA_8888 (Skia's D3D backend rejects the opaque RGB_888x for render targets), and the
-// CPU readbacks (PNG/pixels) force alpha to 255. No native alpha-fix pass is needed.
+// mpv leaves the alpha channel undefined for opaque video (see render_macos.mm). The
+// consumer wraps the texture as RGBA_8888 and samples it premultiplied (Skia's D3D
+// backend rejects the opaque RGB_888x for render targets), so like the GL paths this one
+// writes alpha=1 after every frame it shares with Skia: a fullscreen triangle through an
+// alpha-only color write mask, with shaders compiled at startup through d3dcompiler_47
+// (the DLL mpv's own ra_d3d11 compiles with). Should that setup fail, the pass is skipped
+// and the frame relies on mpv's d3d11 renderer writing alpha=1, which it does in practice.
+// The CPU readbacks (PNG/pixels) force alpha to 255 themselves.
+//
+// Known limitation: a removed device (driver update, GPU reset, TDR) is not recovered.
+// mpv's render context is bound to the ID3D11Device for its lifetime and freeing it while
+// video is active disables video (render.h), so wait_for_gpu logs the removal reason once
+// and frames stop being published; the video stays black until the player is recreated.
 
 #ifdef _WIN32
 
@@ -35,6 +44,7 @@
 #include <windows.h>
 #include <d3d11_4.h>
 #include <d3d12.h>
+#include <d3dcompiler.h>
 #include <dxgi1_6.h>
 
 #include <cstdint>
@@ -62,6 +72,29 @@ void safe_release(T *&object) {
         object = nullptr;
     }
 }
+
+// d3dcompiler_47.dll ships with Windows 8.1+ (and is what mpv's ra_d3d11 compiles its
+// shaders with); loaded on first use so the wrapper carries no import of it.
+using d3d_compile_fn = HRESULT(WINAPI *)(
+    LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO *, ID3DInclude *, LPCSTR, LPCSTR, UINT, UINT,
+    ID3DBlob **, ID3DBlob **);
+
+d3d_compile_fn load_d3d_compile() {
+    static const d3d_compile_fn fn = [] {
+        HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
+        return module ? reinterpret_cast<d3d_compile_fn>(GetProcAddress(module, "D3DCompile")) : nullptr;
+    }();
+    return fn;
+}
+
+// The opaque-alpha pass: one triangle covering clip space, writing alpha=1 (the blend
+// state's write mask keeps RGB). No vertex buffer: the position comes from SV_VertexID.
+constexpr char kOpaqueAlphaHlsl[] =
+    "float4 vs_main(uint id : SV_VertexID) : SV_Position {\n"
+    "    float2 pos = float2((id << 1) & 2, id & 2) * 2.0 - 1.0;\n"
+    "    return float4(pos, 0.0, 1.0);\n"
+    "}\n"
+    "float4 ps_main() : SV_Target { return float4(0.0, 0.0, 0.0, 1.0); }\n";
 
 bool same_luid(const LUID &a, const LUID &b) {
     return a.LowPart == b.LowPart && a.HighPart == b.HighPart;
@@ -143,6 +176,8 @@ IDXGIAdapter *skia_adapter(const void *instance_handle, int64_t skiko_device_ptr
 //   MEDIAMP_D3D11_MAX_FEATURE_LEVEL: hardware devices behave as on a GPU supporting at most
 //     this level (e.g. `10_1`, a DX10.1-class GPU), so creation fails where it would fail
 //     there and the WARP fallback runs. WARP is unaffected, as on a real machine.
+//   MEDIAMP_D3D11_OPAQUE_ALPHA: `0` skips the opaque-alpha pass (the file comment), so a
+//     frame shows exactly what mpv's d3d11 renderer leaves in the alpha channel.
 enum class adapter_override { automatic, system_default, warp, minimum_power, high_performance };
 
 struct d3d11_overrides {
@@ -150,6 +185,7 @@ struct d3d11_overrides {
     std::string adapter_text;  // raw value, empty when unset
     D3D_FEATURE_LEVEL max_level = static_cast<D3D_FEATURE_LEVEL>(0);  // 0 = no cap
     std::string max_level_text;
+    bool opaque_alpha = true;
     std::string ignored;  // unknown values, reported with the active overrides
 };
 
@@ -192,6 +228,12 @@ const d3d11_overrides &overrides() {
             }
             if (result.max_level == 0) result.ignored += " MEDIAMP_D3D11_MAX_FEATURE_LEVEL=" + result.max_level_text;
         }
+        const std::string opaque_alpha = environment_value("MEDIAMP_D3D11_OPAQUE_ALPHA");
+        if (opaque_alpha == "0") {
+            result.opaque_alpha = false;
+        } else if (!opaque_alpha.empty() && opaque_alpha != "1") {
+            result.ignored += " MEDIAMP_D3D11_OPAQUE_ALPHA=" + opaque_alpha;
+        }
         return result;
     }();
     return parsed;
@@ -203,11 +245,13 @@ void log_overrides(const void *instance_handle) {
         LOG(instance_handle, mediampv::LOG_LEVEL_WARN, "D3D11 overrides: ignoring unknown values:%s",
             active.ignored.c_str());
     }
-    if (active.adapter != adapter_override::automatic || active.max_level != 0) {
+    if (active.adapter != adapter_override::automatic || active.max_level != 0 || !active.opaque_alpha) {
         LOG(instance_handle, mediampv::LOG_LEVEL_WARN,
-            "D3D11 overrides active: MEDIAMP_D3D11_ADAPTER=%s MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s",
+            "D3D11 overrides active: MEDIAMP_D3D11_ADAPTER=%s MEDIAMP_D3D11_MAX_FEATURE_LEVEL=%s "
+            "MEDIAMP_D3D11_OPAQUE_ALPHA=%s",
             active.adapter != adapter_override::automatic ? active.adapter_text.c_str() : "auto",
-            active.max_level != 0 ? active.max_level_text.c_str() : "none");
+            active.max_level != 0 ? active.max_level_text.c_str() : "none",
+            active.opaque_alpha ? "1" : "0");
     }
 }
 
@@ -318,6 +362,7 @@ namespace {
 
 struct d3d11_buffer {
     ID3D11Texture2D *texture = nullptr;        // render target on our device
+    ID3D11RenderTargetView *rtv = nullptr;     // for the opaque-alpha pass
     HANDLE shared_handle = nullptr;            // NT handle from CreateSharedHandle
     ID3D12Resource *d3d12_resource = nullptr;  // opened on the consumer's device, may be null
 };
@@ -355,6 +400,11 @@ protected:
 private:
     bool wait_for_gpu();
     bool read_texture_argb(ID3D11Texture2D *source, std::vector<uint32_t> &pixels, int &width, int &height);
+    // Compiles the shaders and creates the states of the opaque-alpha pass; false (logged)
+    // leaves the pass disabled.
+    bool create_opaque_alpha_pass();
+    // Render thread: writes alpha=1 into a freshly rendered buffer (see the file comment).
+    void write_opaque_alpha(const d3d11_buffer &buffer);
 
     // mpv renders on our own D3D11 device. Its immediate context is multithread-protected
     // so screenshot readbacks (JNI thread) can copy/map while the render thread is inside
@@ -365,6 +415,13 @@ private:
     DXGI_ADAPTER_DESC adapter_desc_{};
     bool adapter_known_ = false;
     ID3D11Query *flush_query_ = nullptr;  // D3D11_QUERY_EVENT, the glFinish equivalent
+    // Opaque-alpha pass; all null when create_opaque_alpha_pass failed.
+    ID3D11VertexShader *alpha_vs_ = nullptr;
+    ID3D11PixelShader *alpha_ps_ = nullptr;
+    ID3D11BlendState *alpha_blend_ = nullptr;            // RGB masked off, alpha written
+    ID3D11RasterizerState *alpha_rasterizer_ = nullptr;  // no culling
+    bool alpha_pass_ready_ = false;
+    bool device_removed_logged_ = false;
     // Consumer-side D3D12 device (owned reference), extracted from Skiko's native
     // DirectXDevice struct; null while the ring is headless (device 0).
     ID3D12Device *skia_device_ = nullptr;
@@ -442,6 +499,7 @@ bool d3d11_renderer::create(int64_t consumer_device_hint) {
         LOG(&owner_, LOG_LEVEL_WARN, "CreateQuery(D3D11_QUERY_EVENT) failed; frame waits degrade to Flush");
         flush_query_ = nullptr;
     }
+    alpha_pass_ready_ = active.opaque_alpha && create_opaque_alpha_pass();
 
     mpv_d3d11_init_params init_params{device_};
     mpv_render_param params[] = {
@@ -467,9 +525,132 @@ void d3d11_renderer::after_shutdown() {
         render_context_ = nullptr;
     }
     safe_release(skia_device_);
+    safe_release(alpha_vs_);
+    safe_release(alpha_ps_);
+    safe_release(alpha_blend_);
+    safe_release(alpha_rasterizer_);
+    alpha_pass_ready_ = false;
     safe_release(flush_query_);
     safe_release(context_);
     safe_release(device_);
+}
+
+bool d3d11_renderer::create_opaque_alpha_pass() {
+    const d3d_compile_fn compile = load_d3d_compile();
+    if (!compile) {
+        LOG(&owner_, LOG_LEVEL_WARN, "d3dcompiler_47.dll unavailable; the opaque-alpha pass is disabled");
+        return false;
+    }
+    ID3DBlob *vs_code = nullptr, *ps_code = nullptr, *errors = nullptr;
+    const UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+    HRESULT hr = compile(kOpaqueAlphaHlsl, sizeof(kOpaqueAlphaHlsl) - 1, "mediamp_opaque_alpha", nullptr, nullptr,
+                         "vs_main", "vs_4_0", flags, 0, &vs_code, &errors);
+    if (SUCCEEDED(hr)) {
+        safe_release(errors);
+        hr = compile(kOpaqueAlphaHlsl, sizeof(kOpaqueAlphaHlsl) - 1, "mediamp_opaque_alpha", nullptr, nullptr,
+                     "ps_main", "ps_4_0", flags, 0, &ps_code, &errors);
+    }
+    if (FAILED(hr)) {
+        LOG(&owner_, LOG_LEVEL_WARN, "opaque-alpha shader compilation failed (0x%lx): %s", hr,
+            errors ? static_cast<const char *>(errors->GetBufferPointer()) : "");
+        safe_release(errors);
+        safe_release(vs_code);
+        safe_release(ps_code);
+        return false;
+    }
+    safe_release(errors);
+    hr = device_->CreateVertexShader(vs_code->GetBufferPointer(), vs_code->GetBufferSize(), nullptr, &alpha_vs_);
+    if (SUCCEEDED(hr)) {
+        hr = device_->CreatePixelShader(ps_code->GetBufferPointer(), ps_code->GetBufferSize(), nullptr, &alpha_ps_);
+    }
+    safe_release(vs_code);
+    safe_release(ps_code);
+    if (SUCCEEDED(hr)) {
+        D3D11_BLEND_DESC blend{};
+        blend.RenderTarget[0].BlendEnable = FALSE;
+        blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        blend.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
+        blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+        blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALPHA;
+        hr = device_->CreateBlendState(&blend, &alpha_blend_);
+    }
+    if (SUCCEEDED(hr)) {
+        D3D11_RASTERIZER_DESC rasterizer{};
+        rasterizer.FillMode = D3D11_FILL_SOLID;
+        rasterizer.CullMode = D3D11_CULL_NONE;
+        rasterizer.DepthClipEnable = TRUE;
+        hr = device_->CreateRasterizerState(&rasterizer, &alpha_rasterizer_);
+    }
+    if (FAILED(hr)) {
+        LOG(&owner_, LOG_LEVEL_WARN, "opaque-alpha pass setup failed (0x%lx); the pass is disabled", hr);
+        safe_release(alpha_vs_);
+        safe_release(alpha_ps_);
+        safe_release(alpha_blend_);
+        safe_release(alpha_rasterizer_);
+        return false;
+    }
+    return true;
+}
+
+// The pass shares mpv's immediate context, and mpv's ra_d3d11 does not rebind everything
+// per pass: its rasterizer state (no culling, scissor on) is set once in ra_d3d11_create.
+// Resetting that to the D3D default culled mpv's quads from the next frame on (black
+// video), so every piece of state the pass touches is saved before and restored after,
+// exactly as mpv left it.
+void d3d11_renderer::write_opaque_alpha(const d3d11_buffer &buffer) {
+    if (!alpha_pass_ready_ || !buffer.rtv) return;
+
+    ID3D11RasterizerState *saved_rasterizer = nullptr;
+    context_->RSGetState(&saved_rasterizer);
+    ID3D11BlendState *saved_blend = nullptr;
+    FLOAT saved_blend_factor[4] = {};
+    UINT saved_sample_mask = 0xFFFFFFFFu;
+    context_->OMGetBlendState(&saved_blend, saved_blend_factor, &saved_sample_mask);
+    ID3D11InputLayout *saved_layout = nullptr;
+    context_->IAGetInputLayout(&saved_layout);
+    D3D11_PRIMITIVE_TOPOLOGY saved_topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    context_->IAGetPrimitiveTopology(&saved_topology);
+    ID3D11VertexShader *saved_vs = nullptr;
+    context_->VSGetShader(&saved_vs, nullptr, nullptr);
+    ID3D11PixelShader *saved_ps = nullptr;
+    context_->PSGetShader(&saved_ps, nullptr, nullptr);
+    UINT saved_viewport_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    D3D11_VIEWPORT saved_viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+    context_->RSGetViewports(&saved_viewport_count, saved_viewports);
+    ID3D11RenderTargetView *saved_rtv = nullptr;
+    ID3D11DepthStencilView *saved_dsv = nullptr;
+    context_->OMGetRenderTargets(1, &saved_rtv, &saved_dsv);
+
+    ID3D11RenderTargetView *rtv = buffer.rtv;
+    context_->OMSetRenderTargets(1, &rtv, nullptr);
+    context_->OMSetBlendState(alpha_blend_, nullptr, 0xFFFFFFFFu);
+    context_->RSSetState(alpha_rasterizer_);
+    const D3D11_VIEWPORT viewport{0.f, 0.f, (FLOAT) buffer_width_, (FLOAT) buffer_height_, 0.f, 1.f};
+    context_->RSSetViewports(1, &viewport);
+    context_->IASetInputLayout(nullptr);
+    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context_->VSSetShader(alpha_vs_, nullptr, 0);
+    context_->PSSetShader(alpha_ps_, nullptr, 0);
+    context_->Draw(3, 0);
+
+    context_->OMSetRenderTargets(saved_rtv ? 1 : 0, saved_rtv ? &saved_rtv : nullptr, saved_dsv);
+    context_->OMSetBlendState(saved_blend, saved_blend_factor, saved_sample_mask);
+    context_->RSSetState(saved_rasterizer);
+    context_->RSSetViewports(saved_viewport_count, saved_viewports);
+    context_->IASetInputLayout(saved_layout);
+    context_->IASetPrimitiveTopology(saved_topology);
+    context_->VSSetShader(saved_vs, nullptr, 0);
+    context_->PSSetShader(saved_ps, nullptr, 0);
+    safe_release(saved_rtv);
+    safe_release(saved_dsv);
+    safe_release(saved_blend);
+    safe_release(saved_rasterizer);
+    safe_release(saved_layout);
+    safe_release(saved_vs);
+    safe_release(saved_ps);
 }
 
 bool d3d11_renderer::prepare_device_locked(int64_t consumer_device, bool changed) {
@@ -565,7 +746,18 @@ bool d3d11_renderer::allocate_buffer(d3d11_buffer &buffer, int width, int height
         }
     }
 
+    ID3D11RenderTargetView *rtv = nullptr;
+    if (alpha_pass_ready_ && d3d12_resource) {
+        hr = device_->CreateRenderTargetView(texture, nullptr, &rtv);
+        if (FAILED(hr)) {
+            // Not fatal: the frame then relies on mpv writing opaque alpha.
+            LOG(&owner_, LOG_LEVEL_WARN, "CreateRenderTargetView for the opaque-alpha pass failed: 0x%lx", hr);
+            rtv = nullptr;
+        }
+    }
+
     buffer.texture = texture;
+    buffer.rtv = rtv;
     buffer.shared_handle = shared_handle;
     buffer.d3d12_resource = d3d12_resource;
     return true;
@@ -574,6 +766,7 @@ bool d3d11_renderer::allocate_buffer(d3d11_buffer &buffer, int width, int height
 void d3d11_renderer::destroy_buffer(d3d11_buffer &buffer) {
     safe_release(buffer.d3d12_resource);
     if (buffer.shared_handle) CloseHandle(buffer.shared_handle);
+    safe_release(buffer.rtv);
     safe_release(buffer.texture);
 }
 
@@ -588,12 +781,16 @@ bool d3d11_renderer::render_into(const d3d11_buffer &buffer) {
         {MPV_RENDER_PARAM_INVALID, nullptr},
     };
     const int render_result = mpv_render_context_render(render_context_, params);
+    // Only frames Skia samples premultiplied need the opaque alpha (the RTV exists for
+    // those alone); readback consumers treat their copy as opaque.
+    if (render_result >= 0) write_opaque_alpha(buffer);
 
     // The glFinish equivalent: Skia samples this texture on another device right after
     // the buffer is published, so the frame must be complete, not merely submitted.
-    // Runs on the render thread, so it never blocks UI.
-    wait_for_gpu();
-    return render_result >= 0;
+    // Runs on the render thread, so it never blocks UI. A wait that gave up (device
+    // removed, GPU wedged) leaves the frame unpublished rather than half-written.
+    const bool complete = wait_for_gpu();
+    return render_result >= 0 && complete;
 }
 
 bool d3d11_renderer::wait_for_gpu() {
@@ -619,9 +816,13 @@ bool d3d11_renderer::wait_for_gpu() {
         }
         if (GetTickCount64() - start_tick >= timeout_ms) {
             const HRESULT removed = device_ ? device_->GetDeviceRemovedReason() : S_OK;
-            LOG(&owner_, LOG_LEVEL_ERROR,
-                "wait_for_gpu timed out after %llums (device removed reason: 0x%lx)",
-                timeout_ms, removed);
+            if (removed == S_OK || !device_removed_logged_) {
+                LOG(&owner_, LOG_LEVEL_ERROR,
+                    "wait_for_gpu timed out after %llums (device removed reason: 0x%lx)%s",
+                    timeout_ms, removed,
+                    removed == S_OK ? "" : "; the D3D11 device is lost, video stays black until the player is recreated");
+                device_removed_logged_ = removed != S_OK;
+            }
             return false;
         }
         if (spins < 64) {

@@ -8,7 +8,6 @@
 
 package org.openani.mediamp.mpv
 
-import org.openani.mediamp.mpv.internal.D3D11ReadbackSurfaceBackend
 import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
 import org.openani.mediamp.mpv.internal.MpvBackendChange
 import org.openani.mediamp.mpv.internal.MpvBackendSelection
@@ -29,24 +28,24 @@ class MpvBackendSelectionTest {
     }
 
     @Test
-    fun `a renderer switch replaces the backend only without playback`() {
+    fun `a producer switch replaces the backend only without playback`() {
         assertEquals(
             MpvBackendChange.REPLACE,
-            MpvBackendSelection.change(WindowsOpenGLSurfaceBackend, D3D11ReadbackSurfaceBackend, playbackActive = false),
+            MpvBackendSelection.change(WindowsOpenGLSurfaceBackend, D3D11SurfaceRingBackend, playbackActive = false),
         )
         assertEquals(
             MpvBackendChange.REFUSE_DURING_PLAYBACK,
-            MpvBackendSelection.change(D3D11SurfaceRingBackend, D3D11ReadbackSurfaceBackend, playbackActive = true),
+            MpvBackendSelection.change(D3D11SurfaceRingBackend, WindowsOpenGLSurfaceBackend, playbackActive = true),
         )
     }
 
     @Test
-    fun `an unavailable WGL producer falls back to D3D11 readback from then on`() {
+    fun `an unavailable WGL producer falls back to the D3D11 producer from then on`() {
         val selection = MpvBackendSelection()
         assertSame(WindowsOpenGLSurfaceBackend, selection.resolve(WindowsOpenGLSurfaceBackend))
 
-        assertSame(D3D11ReadbackSurfaceBackend, selection.markUnavailable(WindowsOpenGLSurfaceBackend))
-        assertSame(D3D11ReadbackSurfaceBackend, selection.resolve(WindowsOpenGLSurfaceBackend))
+        assertSame(D3D11SurfaceRingBackend, selection.markUnavailable(WindowsOpenGLSurfaceBackend))
+        assertSame(D3D11SurfaceRingBackend, selection.resolve(WindowsOpenGLSurfaceBackend))
         assertSame(D3D11SurfaceRingBackend, selection.resolve(D3D11SurfaceRingBackend))
     }
 

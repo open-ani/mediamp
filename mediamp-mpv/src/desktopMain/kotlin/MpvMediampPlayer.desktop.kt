@@ -159,10 +159,18 @@ actual class MpvMediampPlayer(
     internal fun surfaceBackendFor(layerRedrawer: SkiaLayerRedrawer): MpvSurfaceBackend? =
         currentSurfaceBackend(layerRedrawer)?.let(backendSelection::resolve)
 
-    /** Whether the current backend is the one for Skiko's live redrawer, so its interop may be drawn with. */
+    /**
+     * Whether the current backend is the one for Skiko's live redrawer and the GPU lock
+     * ([withGpuAccess]) is that redrawer's, so its interop may be drawn with. Between a Skiko
+     * renderer switch and [createSkiaInterop] following it (which rebinds the lock), the
+     * interop would already read the new redrawer's DirectContext while GPU work still ran
+     * under the previous renderer's lock; draws wait instead.
+     */
     internal fun rendersFor(layerRedrawer: SkiaLayerRedrawer): Boolean {
         val current = rendering?.backend ?: return false
-        return current === surfaceBackendFor(layerRedrawer)
+        if (current !== surfaceBackendFor(layerRedrawer)) return false
+        val redrawer = layerRedrawer.redrawerOrNull ?: return false
+        return gpuAccess?.renderer === redrawer
     }
 
     /**

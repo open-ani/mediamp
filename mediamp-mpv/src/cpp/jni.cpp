@@ -198,6 +198,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
@@ -223,6 +224,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateMacos)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsMacos)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
@@ -236,6 +238,7 @@ extern "C" {
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetFrameStateOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jlong JNICALL FN_DESKTOP(nGetBufferTextureOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *env, jclass clazz, jlong ptr);
+	JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint index);
 	JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *env, jclass clazz, jlong ptr);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nRenderFramePixelsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jint width, jint height);
 	JNIEXPORT jintArray JNICALL FN_DESKTOP(nReadSurfacePixelsOpenGL)(JNIEnv *env, jclass clazz, jlong ptr, jintArray dims);
@@ -607,6 +610,11 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersD3D11)(JNIEnv *env, jcla
     return renderer && renderer->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
 
+JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseD3D11)(JNIEnv *env, jclass clazz, jlong ptr, jint index) try {
+    auto renderer = get_renderer(ptr);
+    if (renderer) renderer->mark_buffer_in_use(index);
+} JNI_CATCH_VOID
+
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasD3D11Surface)(JNIEnv *env, jclass clazz, jlong ptr) try {
     auto renderer = get_renderer(ptr);
     return renderer && renderer->has_surface() ? JNI_TRUE : JNI_FALSE;
@@ -697,6 +705,11 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersMacos)(JNIEnv *env, jcla
     auto renderer = get_renderer(ptr);
     return renderer && renderer->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
+
+JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseMacos)(JNIEnv *env, jclass clazz, jlong ptr, jint index) try {
+    auto renderer = get_renderer(ptr);
+    if (renderer) renderer->mark_buffer_in_use(index);
+} JNI_CATCH_VOID
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasMetalSurface)(JNIEnv *env, jclass clazz, jlong ptr) try {
     auto renderer = get_renderer(ptr);
@@ -801,6 +814,11 @@ JNIEXPORT jboolean JNICALL FN_DESKTOP(nAckRetiredBuffersOpenGL)(JNIEnv *env, jcl
     auto renderer = get_renderer(ptr);
     return renderer && renderer->ack_retired_buffers() ? JNI_TRUE : JNI_FALSE;
 } JNI_CATCH(JNI_FALSE)
+
+JNIEXPORT void JNICALL FN_DESKTOP(nMarkBufferInUseOpenGL)(JNIEnv *env, jclass, jlong ptr, jint index) try {
+    auto renderer = get_renderer(ptr);
+    if (renderer) renderer->mark_buffer_in_use(index);
+} JNI_CATCH_VOID
 
 JNIEXPORT jboolean JNICALL FN_DESKTOP(nHasOpenGLSurface)(JNIEnv *env, jclass, jlong ptr) try {
     auto renderer = get_renderer(ptr);

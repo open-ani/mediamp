@@ -49,6 +49,9 @@ public:
     // generation, and the acknowledgement that the previous generation is unused.
     virtual int64_t buffer_texture(int index) { return 0; }
     virtual bool ack_retired_buffers() { return false; }
+    // GPU rings: the consumer is about to sample ring buffer `index`. The render thread
+    // keeps writing elsewhere until the consumer reports another slot (surface_ring.h).
+    virtual void mark_buffer_in_use(int index) {}
 
     // CPU readback paths: copies the latest frame (RGBA8, top-down, width*4 stride) into
     // dest if it is exactly width x height; returns its frame state, or 0.

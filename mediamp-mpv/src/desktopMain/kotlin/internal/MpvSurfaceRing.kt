@@ -14,7 +14,6 @@ import org.jetbrains.skia.ContentChangeMode
 import org.jetbrains.skia.DirectContext
 import org.jetbrains.skia.FramebufferFormat
 import org.jetbrains.skia.Image
-import org.jetbrains.skia.ImageInfo
 import org.jetbrains.skia.Surface
 import org.jetbrains.skia.SurfaceColorFormat
 import org.jetbrains.skia.SurfaceOrigin
@@ -42,6 +41,9 @@ import org.openani.mediamp.mpv.nGetFrameStateOpenGL
 import org.openani.mediamp.mpv.nHasD3D11Surface
 import org.openani.mediamp.mpv.nHasMetalSurface
 import org.openani.mediamp.mpv.nHasOpenGLSurface
+import org.openani.mediamp.mpv.nMarkBufferInUseD3D11
+import org.openani.mediamp.mpv.nMarkBufferInUseMacos
+import org.openani.mediamp.mpv.nMarkBufferInUseOpenGL
 import org.openani.mediamp.mpv.nReadSurfacePixelsD3D11
 import org.openani.mediamp.mpv.nReadSurfacePixelsMacos
 import org.openani.mediamp.mpv.nReadSurfacePixelsOpenGL
@@ -106,17 +108,20 @@ internal fun headlessSurfaceBackend(): MpvSurfaceBackend? = when (hostOs) {
     else -> currentSurfaceBackend()
 }
 
+/**
+ * Only the OpenGL redrawer gets its own producer (a WGL context). Direct3D shares the
+ * D3D11 ring textures with Skia's D3D12 device; software (WindowsSoftwareRedrawer,
+ * SoftwareRedrawer), ANGLE and any future redrawer have no device to share with and take
+ * CPU frames from that same D3D11 producer instead ([D3D11SurfaceConsumer], device 0), so
+ * Skiko leaving Direct3D at runtime is followed without replacing the render context,
+ * as [MacosSurfaceConsumer] does when Skiko leaves Metal.
+ */
 internal fun windowsSurfaceBackend(redrawerClass: Class<*>?): MpvSurfaceBackend? = when (redrawerClass?.name) {
     null -> null
-    "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
-    "org.jetbrains.skiko.renderer.Direct3DRenderer",
-    -> D3D11SurfaceRingBackend
     "org.jetbrains.skiko.redrawer.WindowsOpenGLRedrawer",
     "org.jetbrains.skiko.renderer.WindowsOpenGLRenderer",
     -> WindowsOpenGLSurfaceBackend
-    // Software (WindowsSoftwareRedrawer, SoftwareRedrawer), ANGLE and any future
-    // redrawer: the readback path needs nothing from Skiko's renderer.
-    else -> D3D11ReadbackSurfaceBackend
+    else -> D3D11SurfaceRingBackend
 }
 
 /**
@@ -193,6 +198,12 @@ internal interface MpvSurfaceRingBackend : MpvSurfaceBackend {
     fun getBufferTexture(ptr: Long, index: Int): Long
     fun ackRetiredBuffers(ptr: Long): Boolean
 
+    /**
+     * Names the ring buffer the consumer samples next; the render thread then writes the
+     * other buffers until another one is named (see `nMarkBufferInUseD3D11`).
+     */
+    fun markBufferInUse(ptr: Long, index: Int)
+
     fun makeConsumerRenderTarget(width: Int, height: Int, texturePtr: Long): MpvConsumerRenderTarget
     val wrapColorFormat: SurfaceColorFormat
     val skiaSurfaceOrigin: SurfaceOrigin get() = SurfaceOrigin.TOP_LEFT
@@ -211,6 +222,7 @@ internal object MacosSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getFrameState(ptr: Long) = nGetFrameStateMacos(ptr)
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureMacos(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersMacos(ptr)
+    override fun markBufferInUse(ptr: Long, index: Int) = nMarkBufferInUseMacos(ptr, index)
     override fun hasSurface(ptr: Long) = nHasMetalSurface(ptr)
     override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsMacos(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsMacos(ptr, dims)
@@ -244,6 +256,7 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getFrameState(ptr: Long) = nGetFrameStateD3D11(ptr)
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureD3D11(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersD3D11(ptr)
+    override fun markBufferInUse(ptr: Long, index: Int) = nMarkBufferInUseD3D11(ptr, index)
     override fun hasSurface(ptr: Long) = nHasD3D11Surface(ptr)
     override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsD3D11(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsD3D11(ptr, dims)
@@ -261,8 +274,9 @@ internal object D3D11SurfaceRingBackend : MpvSurfaceRingBackend {
 
     // RGB_888x would sidestep the alpha channel entirely, but Skia's D3D backend
     // refuses to wrap render targets with a non-renderable color type (returns null),
-    // so wrap as RGBA_8888. mpv's d3d11 renderer writes alpha=1 for opaque video
-    // (verified by the demo pixel readback), so premultiplied sampling is safe.
+    // so wrap as RGBA_8888. The producer writes alpha=1 into every shared frame after
+    // mpv rendered it (render_d3d11.cpp, like the GL paths' alpha pass), so premultiplied
+    // sampling is safe without relying on what mpv's d3d11 renderer leaves in alpha.
     override val wrapColorFormat: SurfaceColorFormat get() = SurfaceColorFormat.RGBA_8888
 
     // The producer renders through D3D11, but the consumer side Compose draws with is
@@ -290,6 +304,7 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
     override fun getFrameState(ptr: Long) = nGetFrameStateOpenGL(ptr)
     override fun getBufferTexture(ptr: Long, index: Int) = nGetBufferTextureOpenGL(ptr, index)
     override fun ackRetiredBuffers(ptr: Long) = nAckRetiredBuffersOpenGL(ptr)
+    override fun markBufferInUse(ptr: Long, index: Int) = nMarkBufferInUseOpenGL(ptr, index)
     override fun hasSurface(ptr: Long) = nHasOpenGLSurface(ptr)
     override fun renderFramePixels(ptr: Long, width: Int, height: Int) = nRenderFramePixelsOpenGL(ptr, width, height)
     override fun readSurfacePixels(ptr: Long, dims: IntArray) = nReadSurfacePixelsOpenGL(ptr, dims)
@@ -342,8 +357,10 @@ internal object OpenGLSurfaceRingBackend : MpvSurfaceRingBackend {
 /**
  * Consumer side of the native surface-ring render path: the native render thread
  * renders mpv into a triple-buffered ring of GPU textures; this class wraps the ring's
- * textures as Skia surfaces and samples whichever buffer the packed frame state marks
- * as latest. All methods are called from the Compose/Skiko UI thread only.
+ * textures as Skia surfaces and snapshots whichever buffer the packed frame state marks
+ * as latest. All methods are called from the Compose/Skiko UI thread only, under the
+ * renderer's GPU lock (`SkiaGpuAccess`), which also orders them after Skiko's replay of
+ * the previous frame.
  */
 internal class MpvSurfaceRing(
     private val handlePtr: Long,
@@ -351,11 +368,10 @@ internal class MpvSurfaceRing(
 ) : MpvSurfaceConsumer {
     private val wrappedSurfaces = arrayOfNulls<Surface>(SURFACE_RING_BUFFER_COUNT)
     private val consumerTargets = arrayOfNulls<MpvConsumerRenderTarget>(SURFACE_RING_BUFFER_COUNT)
-    private var blitSurface: Surface? = null
     private var wrappedGeneration = -1
     private var surfaceContext: DirectContext? = null
 
-    // Frame cache: blit + snapshot happen only when the native frame state advanced;
+    // Frame cache: the GPU copy happens only when the native frame state advanced;
     // overlay-driven Compose redraws just re-draw the cached image.
     private var cachedFrame: Image? = null
     private var cachedState = 0L
@@ -411,10 +427,10 @@ internal class MpvSurfaceRing(
 
     /**
      * Returns the latest video frame as a Skia-owned texture image (safe to draw
-     * through Compose, including RenderNode recordings). The expensive part (blit +
-     * snapshot) only runs when the native render thread published a new frame; other
-     * redraws reuse the cached image. During a buffer-ring swap the previous frame is
-     * returned until the new ring has content, so resizes never flash black. Do NOT
+     * through Compose, including RenderNode recordings). The expensive part (one
+     * GPU->GPU copy) only runs when the native render thread published a new frame;
+     * other redraws reuse the cached image. During a buffer-ring swap the previous frame
+     * is returned until the new ring has content, so resizes never flash black. Do NOT
      * close the returned image — it is owned by this ring.
      */
     override fun currentFrameImage(directContext: DirectContext?): Image? {
@@ -430,35 +446,37 @@ internal class MpvSurfaceRing(
         val height = ((state ushr 16) and 0x3FFF).toInt()
         if (index == 0xF || width <= 0 || height <= 0) return cachedFrame
 
-        if (generation != wrappedGeneration ||
-            surfaceContext !== directContext ||
-            blitSurface == null
-        ) {
+        if (generation != wrappedGeneration || surfaceContext !== directContext) {
             if (!rewrapBuffers(generation, width, height, directContext)) {
                 return cachedFrame
             }
         }
 
         val source = wrappedSurfaces[index] ?: return cachedFrame
-        val blit = blitSurface ?: return cachedFrame
-        // The wrapped surface content was produced externally (GL/D3D11); without this,
-        // Skia reuses a generation-cached snapshot of the texture and the video freezes
-        // on the first frame when sampled into another surface.
+        // From here on the render thread leaves this buffer alone until a later draw
+        // samples another one (surface_ring.h): the copy below runs on Skia's GPU
+        // timeline, after this call has returned.
+        backend.markBufferInUse(handlePtr, index)
+        // The wrapped surface content was produced externally (GL/D3D11/Metal); without
+        // this, Skia hands back its generation-cached snapshot and the video freezes on
+        // its first frame.
         source.notifyContentWillChange(ContentChangeMode.DISCARD)
-        // Snapshots of a BRT-wrapped surface do not render (Skia does not own the
-        // texture), so blit into a Skia-owned GPU surface and snapshot that. The snapshot
-        // is a GPU image on the current DirectContext; the caller draws it straight onto
-        // the Compose canvas with skiaCanvas.drawImageRect (see MpvMediampPlayerSurface),
-        // a zero-copy GPU->GPU draw. Do NOT convert it with toComposeImageBitmap(): that
-        // reads the GPU image back to a CPU bitmap every frame, which both costs a full
-        // GPU->CPU transfer (a ~20ms stall at 4K that pins the whole Compose scene, and
-        // the danmaku overlay with it, to ~40fps) and crashes on window resize (the
-        // readback runs inside reshape()'s redraw against a stale swapchain context).
-        source.draw(blit.canvas, 0, 0, null)
+        // Skia does not own a wrapped render target, so the snapshot copies it into a
+        // Skia-owned texture on the current DirectContext: one GPU->GPU copy per video
+        // frame, and the caller draws the image straight onto the Compose canvas with
+        // skiaCanvas.drawImageRect (see MpvMediampPlayerSurface). Do NOT convert it with
+        // toComposeImageBitmap(): that reads the GPU image back to a CPU bitmap every
+        // frame, which both costs a full GPU->CPU transfer (a ~20ms stall at 4K that pins
+        // the whole Compose scene, and the danmaku overlay with it, to ~40fps) and
+        // crashes on window resize (the readback runs inside reshape()'s redraw against a
+        // stale swapchain context).
+        val snapshot = runCatching { source.makeImageSnapshot() }
+            .onFailure { logOnce("snapshot of buffer $index failed", MPVLog.ERROR, it) }
+            .getOrNull() ?: return cachedFrame
         cachedFrame?.close()
-        cachedFrame = blit.makeImageSnapshot()
+        cachedFrame = snapshot
         cachedState = state
-        return cachedFrame
+        return snapshot
     }
 
     private fun rewrapBuffers(
@@ -513,16 +531,6 @@ internal class MpvSurfaceRing(
             consumerTargets[i] = consumerTarget
             wrappedSurfaces[i] = surface
         }
-        // A GPU (render-target) blit surface: the blit is GPU->GPU and its snapshot is
-        // drawn zero-copy onto the Compose canvas, so no frame ever crosses the CPU.
-        blitSurface = runCatching {
-            Surface.makeRenderTarget(directContext, false, ImageInfo.makeN32Premul(width, height))
-        }.onFailure { logOnce("blit surface creation failed", MPVLog.ERROR, it) }.getOrNull()
-        if (blitSurface == null) {
-            logOnce("blit surface unavailable (${width}x${height})", MPVLog.ERROR)
-            closeWraps()
-            return false
-        }
 
         // The ack above may have unblocked a pending reconfig; if the ring was swapped
         // again while we were wrapping, these wraps are stale — drop them and let the
@@ -566,8 +574,6 @@ internal class MpvSurfaceRing(
             }
             consumerTargets[i] = null
         }
-        blitSurface?.close()
-        blitSurface = null
         wrappedGeneration = -1
     }
 

@@ -24,6 +24,13 @@ import java.lang.reflect.Field
  * so nothing is cached across calls — every access re-reads the live redrawer from the
  * layer. The native prefix is source-checked against Skiko 0.9.37 and 0.153.0;
  * Windows rendering still needs regression testing when upgrading Skiko.
+ *
+ * Skiko leaves Direct3D for a software (or ANGLE) redrawer when it has no usable D3D12
+ * device, also at runtime after a failed frame. Such a redrawer has no device to share:
+ * [renderDevicePtr] is then 0, which turns the consumer to CPU frames (see
+ * `D3D11SurfaceConsumer`), and [directContext] is null. Both are read inside the Compose
+ * draw pass, where an exception stops the whole window from rendering, so neither throws
+ * for a non-Direct3D redrawer (the same contract as [SkiaMetalInterop]).
  */
 internal class SkiaDirectXInterop(
     private val layerRedrawer: SkiaLayerRedrawer,
@@ -47,22 +54,6 @@ internal class SkiaDirectXInterop(
     private var cachedAccess: RedrawerAccess? = null
     private var cachedAccessClass: Class<*>? = null
 
-    private fun currentRedrawer(): Any {
-        val redrawer = layerRedrawer.redrawer
-        check(
-            redrawer.javaClass.name in
-                setOf(
-                    "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
-                    "org.jetbrains.skiko.renderer.Direct3DRenderer",
-                ),
-        ) {
-            "Unsupported Skiko redrawer ${redrawer.javaClass.name}. The mpv D3D11 render " +
-                "path requires Skiko's Direct3D backend (Direct3DRedrawer/Direct3DRenderer). " +
-                "Recreate the player if Skiko changed its render backend."
-        }
-        return redrawer
-    }
-
     private fun accessFor(redrawer: Any): RedrawerAccess {
         val clazz = redrawer.javaClass
         cachedAccess?.let { if (cachedAccessClass == clazz) return it }
@@ -72,17 +63,35 @@ internal class SkiaDirectXInterop(
         }
     }
 
-    /** Pointer to Skiko's native DirectXDevice struct. */
+    /**
+     * Pointer to Skiko's native DirectXDevice struct, or 0 when Skiko is not rendering
+     * with Direct3D.
+     */
     override val renderDevicePtr: Long
         get() {
-            val redrawer = currentRedrawer()
+            val redrawer = layerRedrawer.redrawer
+            if (!isSkikoDirect3DRedrawer(redrawer.javaClass)) return 0L
             return accessFor(redrawer).deviceField.getLong(redrawer)
         }
 
+    /**
+     * Skia's *current* GrDirectContext; null until the first frame has been rendered, and
+     * while Skiko is not rendering with Direct3D.
+     */
     override val directContext: DirectContext?
         get() {
-            val redrawer = currentRedrawer()
+            val redrawer = layerRedrawer.redrawerOrNull ?: return null
+            if (!isSkikoDirect3DRedrawer(redrawer.javaClass)) return null
             val access = accessFor(redrawer)
             return access.directContext.get(redrawer)
         }
+}
+
+/** Whether [redrawerClass] is Skiko's Direct3D renderer, whose D3D12 device the ring can share. */
+internal fun isSkikoDirect3DRedrawer(redrawerClass: Class<*>): Boolean = when (redrawerClass.name) {
+    "org.jetbrains.skiko.redrawer.Direct3DRedrawer",
+    "org.jetbrains.skiko.renderer.Direct3DRenderer",
+    -> true
+
+    else -> false
 }
