@@ -10,10 +10,7 @@ package org.openani.mediamp.mpv
 
 import org.jetbrains.skiko.GraphicsApi
 import org.jetbrains.skiko.SkiaLayer
-import org.jetbrains.skiko.hostOs
-import org.jetbrains.skiko.OS
 import org.junit.Assume.assumeFalse
-import org.junit.Assume.assumeTrue
 import org.openani.mediamp.mpv.internal.D3D11SurfaceRingBackend
 import org.openani.mediamp.mpv.internal.WindowsOpenGLSurfaceBackend
 import org.openani.mediamp.mpv.internal.windowsSurfaceBackend
@@ -85,8 +82,8 @@ class WindowsSurfaceBackendTest {
         assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
         SwingUtilities.invokeAndWait {
             if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
-                // A real software layer: Skiko 0.153+ has no replaceable redrawer slot.
-                assumeTrue("Software layers need a Windows AWT toolkit", hostOs == OS.Windows)
+                // A real software layer (Skiko 0.153+ has no replaceable redrawer slot); any
+                // non-Direct3D renderer class answers the question, so this runs on every OS.
                 val layer = SkiaLayer(renderApi = GraphicsApi.SOFTWARE_COMPAT)
                 val window = JFrame("Mediamp software interop test")
                 try {
