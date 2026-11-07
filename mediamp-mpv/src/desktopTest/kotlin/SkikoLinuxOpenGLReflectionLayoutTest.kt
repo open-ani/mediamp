@@ -28,12 +28,12 @@ private fun probeSkikoLinuxOpenGLReflectionLayout(): ReflectionLayoutResult {
     val classLoader = SkikoLinuxOpenGLReflectionLayoutTest::class.java.classLoader
     val layer = runCatching { Class.forName("org.jetbrains.skiko.SkiaLayer", false, classLoader) }
         .getOrElse { return ReflectionLayoutResult(false, "SkiaLayer is not on the classpath: $it") }
-    if (layer.methods.any { it.name == "getFrameDriver\$skiko" }) {
+    if (layer.methods.any { it.name.startsWith("getFrameDriver\$") }) {
         return runCatching {
             val renderer = Class.forName("org.jetbrains.skiko.renderer.LinuxOpenGLRenderer", false, classLoader)
             SkiaDirectContextAccess(renderer)
             check(renderer.getDeclaredField("context").type == java.lang.Long.TYPE)
-            layer.getMethod("getBackedLayer\$skiko")
+            layer.methods.first { it.name.startsWith("getBackedLayer\$") && it.parameterCount == 0 }
             ReflectionLayoutResult(true, "${renderer.name}; FrameDriver; inherited glContext")
         }.getOrElse { ReflectionLayoutResult(false, it.toString()) }
     }

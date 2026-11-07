@@ -26,6 +26,7 @@ import org.openani.mediamp.mpv.internal.headlessSurfaceBackend
 import org.openani.mediamp.mpv.internal.runOnAwtEventThreadAndWait
 import org.openani.mediamp.mpv.internal.supportsSurfaceBackend
 import org.openani.mediamp.mpv.internal.writeFramePng
+import org.openani.mediamp.mpv.utils.SkiaGpuAccess
 import org.openani.mediamp.mpv.utils.SkiaLayerRedrawer
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 import kotlin.coroutines.CoroutineContext
@@ -58,6 +59,21 @@ actual class MpvMediampPlayer(
     @Volatile
     private var rendering: Rendering? = null
     private val backendSelection = MpvBackendSelection()
+    private var gpuAccess: SkiaGpuAccess? = null
+
+    private fun <T> withGpuAccess(action: () -> T): T {
+        val access = gpuAccess
+        return if (access == null) action() else access.withLock(action)
+    }
+
+    private fun bindGpuAccess(renderer: Any) {
+        if (gpuAccess?.renderer === renderer) return
+        val next = SkiaGpuAccess(renderer)
+        // Drop the previous context's resources under its own lock before switching.
+        gpuAccess?.withLock { surfaceRing?.invalidateForRenderEnvironmentChange() }
+        gpuAccess = next
+    }
+
     internal val ringBackend: MpvSurfaceBackend? get() = rendering?.backend
     private val surfaceRing: MpvSurfaceConsumer? get() = rendering?.surface
 
@@ -95,7 +111,7 @@ actual class MpvMediampPlayer(
                 override fun onRenderContextReady() = renderContextBecameReady()
 
                 override fun invalidateSurfaceRingForEnvironmentChange() {
-                    surface.invalidateForRenderEnvironmentChange()
+                    withGpuAccess { surface.invalidateForRenderEnvironmentChange() }
                 }
             },
         )
@@ -108,7 +124,7 @@ actual class MpvMediampPlayer(
     private fun detachBackend() {
         val current = rendering ?: return
         rendering = null
-        current.surface.release()
+        withGpuAccess { current.surface.release() }
         current.lifecycle.detach()
         current.backend.destroyRenderContext(handle.ptr)
     }
@@ -191,6 +207,7 @@ actual class MpvMediampPlayer(
                 return createSkiaInterop(layerRedrawer)
             }
         }
+        bindGpuAccess(layerRedrawer.redrawer)
         val interop = backend.createSkiaInterop(layerRedrawer)
         if (rendering == null) {
             // Before attachBackend: eager lifecycles create the producer device there.
@@ -202,20 +219,22 @@ actual class MpvMediampPlayer(
     }
 
     /** See [MpvSurfaceConsumer.requestSurface]. */
-    internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean =
+    internal fun requestSurface(width: Int, height: Int, devicePtr: Long): Boolean = withGpuAccess {
         !surfaceTeardownStarted && (surfaceRing?.requestSurface(width, height, devicePtr) ?: false)
+    }
 
     /** See [MpvSurfaceConsumer.refreshDeviceIfChanged]. */
-    internal fun refreshDeviceIfChanged(devicePtr: Long) {
+    internal fun refreshDeviceIfChanged(devicePtr: Long): Unit = withGpuAccess {
         if (!surfaceTeardownStarted) surfaceRing?.refreshDeviceIfChanged(devicePtr)
     }
 
     /** See [MpvSurfaceConsumer.currentFrameImage]. Do NOT close the returned image. */
-    internal fun currentFrameImage(directContext: DirectContext?): Image? =
+    internal fun currentFrameImage(directContext: DirectContext?): Image? = withGpuAccess {
         if (surfaceTeardownStarted) null else surfaceRing?.currentFrameImage(directContext)
+    }
 
     /** See [MpvSurfaceConsumer.release]. */
-    internal fun releaseSurface() {
+    internal fun releaseSurface(): Unit = withGpuAccess {
         if (!surfaceTeardownStarted) surfaceRing?.release()
     }
 
@@ -235,9 +254,9 @@ actual class MpvMediampPlayer(
     override fun prepareNativeTeardown() {
         val ptr = handle.ptr
         runOnAwtEventThreadAndWait {
-            // Skia wrappers belong to Skiko's consumer render thread. Closing them here also
-            // establishes an event-queue barrier after any draw/swap already in progress.
-            surfaceRing?.release()
+            // The EDT owns the consumer state, but an AWT barrier alone does not
+            // exclude Skiko's background GPU replay. Share the renderer's draw lock.
+            withGpuAccess { surfaceRing?.release() }
 
             val backend = ringBackend
             if (backend === OpenGLSurfaceRingBackend) {

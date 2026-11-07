@@ -31,7 +31,7 @@ class MacosSurfaceBackendTest {
 
     @Test
     fun `Metal redrawers share their device with the IOSurface ring`() {
-        if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+        if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
             assertTrue(isSkikoMetalRedrawer(redrawerClass("renderer.MetalRenderer")))
         } else {
             assertTrue(isSkikoMetalRedrawer(redrawerClass("redrawer.MetalRedrawer")))
@@ -41,7 +41,7 @@ class MacosSurfaceBackendTest {
 
     @Test
     fun `software redrawers have no Metal device`() {
-        val names = if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+        val names = if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
             listOf("renderer.SoftwareRenderer", "renderer.WindowsSoftwareRenderer")
         } else listOf("redrawer.SoftwareRedrawer", "swing.SoftwareSwingRedrawer")
         for (name in names) {
@@ -58,7 +58,7 @@ class MacosSurfaceBackendTest {
     fun `Metal interop reports no device for a non-Metal redrawer instead of throwing`() {
         assumeFalse("Requires an AWT display", GraphicsEnvironment.isHeadless())
         SwingUtilities.invokeAndWait {
-            if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+            if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
                 val layer = SkiaLayer(renderApi = GraphicsApi.SOFTWARE_COMPAT)
                 val window = JFrame("Mediamp software interop test")
                 try {
