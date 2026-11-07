@@ -57,6 +57,10 @@ external fun nGetBufferTextureMacos(ptr: Long, index: Int): Long
 @InternalMediampApi
 external fun nAckRetiredBuffersMacos(ptr: Long): Boolean
 
+/** Metal/IOSurface path equivalent of [nMarkBufferInUseD3D11]. */
+@InternalMediampApi
+external fun nMarkBufferInUseMacos(ptr: Long, index: Int)
+
 @InternalMediampApi
 external fun nHasMetalSurface(ptr: Long): Boolean
 
@@ -133,6 +137,15 @@ external fun nGetBufferTextureD3D11(ptr: Long, index: Int): Long
 /** Signals that the previous buffer generation is no longer referenced and may be freed. */
 @InternalMediampApi
 external fun nAckRetiredBuffersD3D11(ptr: Long): Boolean
+
+/**
+ * Tells the render thread that the consumer samples ring buffer [index] next. No GPU
+ * fence orders the producer's writes against Skia's reads, so the render thread keeps
+ * rendering into other buffers until a later call names another one (surface_ring.h).
+ * Called right before every sample; cheap (a flag under the ring mutex).
+ */
+@InternalMediampApi
+external fun nMarkBufferInUseD3D11(ptr: Long, index: Int)
 
 @InternalMediampApi
 external fun nHasD3D11Surface(ptr: Long): Boolean
@@ -251,6 +264,10 @@ external fun nGetBufferTextureOpenGL(ptr: Long, index: Int): Long
 /** Signals that Skia no longer references the retired shared-texture generation. */
 @InternalMediampApi
 external fun nAckRetiredBuffersOpenGL(ptr: Long): Boolean
+
+/** Linux OpenGL equivalent of [nMarkBufferInUseD3D11]. */
+@InternalMediampApi
+external fun nMarkBufferInUseOpenGL(ptr: Long, index: Int)
 
 @InternalMediampApi
 external fun nHasOpenGLSurface(ptr: Long): Boolean

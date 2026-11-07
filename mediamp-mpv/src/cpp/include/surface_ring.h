@@ -35,9 +35,21 @@ namespace mediampv {
 // never hold ring textures, so a reconfig to or within readback frees the old ring
 // immediately.
 //
-// Why 3 buffers: the render thread writes (latest+1)%3 while Skia may still have
-// sampling of both the published latest and the previous frame in flight on its own
-// GPU timeline.
+// Why 3 buffers, and which one is written: no GPU fence orders the producer's writes
+// against the consumer's reads (D3D11 -> D3D12 would need Skiko's command queue, GL and
+// Metal have no shared primitive either), so the ring itself keeps them apart. The
+// render thread never writes the published frame (a consumer waking now samples it)
+// nor the slot the consumer reported sampling last (mark_buffer_in_use: its GPU read may
+// still be in flight), and of the remaining slot(s) prefers the one the consumer did not
+// sample the time before. A slot is therefore rewritten only after the consumer moved on
+// from it, and a consumer that stalls (window resize, heavy composition) keeps its slot
+// untouched for as long as it stalls, instead of being overtaken after two frames.
+//
+// Pacing: mpv_render_context_render blocks until the frame's target display time
+// (MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME defaults on), so frames are produced on mpv's
+// audio-driven clock and Compose presents the latest one at its own vsync. Nothing calls
+// mpv_render_context_report_swap, so mpv's display-sync modes (video-sync=display-*) are
+// not available on these paths; the players run video-sync=audio.
 //
 // Subclasses provide the platform hooks below and call start_render_thread() from their
 // factory; their destructor must call shutdown() (hooks are virtual).
@@ -71,6 +83,13 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         if (!buffers_allocated_ || index < 0 || index >= kBufferCount) return 0;
         return texture_handle(buffers_[index]);
+    }
+
+    void mark_buffer_in_use(int index) final {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (index < 0 || index >= kBufferCount || index == consumer_index_) return;
+        previous_consumer_index_ = consumer_index_;
+        consumer_index_ = index;
     }
 
     bool ack_retired_buffers() final {
@@ -268,11 +287,13 @@ private:
 
             // A reconfig retires the current ring; never stack a second retirement on
             // top of an unacked one (the consumer may still be sampling it): postpone
-            // until the ack arrives.
-            bool configured = false;
+            // until the ack arrives. A successful reconfig owes the new ring a redraw;
+            // the flag survives the `continue`s below (a frame request or path request
+            // served in the same iteration), so a paused video is still redrawn into
+            // the new ring, which is also what lets the consumer rewrap and ack.
             if (config_pending_ && !has_retired_buffers_) {
                 config_pending_ = false;
-                configured = apply_config_locked();
+                if (apply_config_locked()) redraw_pending_ = true;
             }
 
             if (frame_request_pending_) {
@@ -317,9 +338,10 @@ private:
             }
             // After a reconfig, redraw the current frame into the new ring even if mpv
             // has nothing new (e.g. resizing while paused).
-            if (!has_new_frame && !configured) continue;
+            if (!has_new_frame && !redraw_pending_) continue;
+            redraw_pending_ = false;
 
-            const int next = (latest_index_ + 1) % kBufferCount;
+            const int next = next_render_index_locked();
             const Buffer target = buffers_[next];
             lock.unlock();
             bool rendered = render_into(target);
@@ -379,6 +401,8 @@ private:
         }
         buffers_allocated_ = false;
         release_readback_locked();
+        // The marks refer to slots of the ring being replaced.
+        consumer_index_ = previous_consumer_index_ = -1;
 
         const bool device_changed = !device_prepared_ || device != buffer_device_;
         bool ok = prepare_device_locked(device, device_changed);
@@ -424,9 +448,25 @@ private:
         release_readback_locked();
         cpu_readback_ = false;
         latest_index_ = -1;
+        consumer_index_ = previous_consumer_index_ = -1;
+        redraw_pending_ = false;
         buffer_width_ = buffer_height_ = 0;
         ++buffer_generation_;
         publish_state_locked();
+    }
+
+    // The slot to render into next; see the class comment. Starts after the published
+    // frame so that, with the consumer keeping up, the ring still cycles in order.
+    int next_render_index_locked() const {
+        const int start = latest_index_ < 0 ? 0 : (latest_index_ + 1) % kBufferCount;
+        int fallback = -1;
+        for (int step = 0; step < kBufferCount; ++step) {
+            const int index = (start + step) % kBufferCount;
+            if (index == latest_index_ || index == consumer_index_) continue;
+            if (index != previous_consumer_index_) return index;
+            if (fallback < 0) fallback = index;
+        }
+        return fallback >= 0 ? fallback : start;
     }
 
     void destroy_ring(Buffer *ring) {
@@ -463,6 +503,11 @@ private:
     bool render_pending_ = false;
     bool retire_ack_pending_ = false;
     bool config_pending_ = false;
+    // A reconfig succeeded and the new ring has not been drawn into yet.
+    bool redraw_pending_ = false;
+    // The slot the consumer is sampling (mark_buffer_in_use) and the one before it; -1 =
+    // none. Guarded by mutex_.
+    int consumer_index_ = -1, previous_consumer_index_ = -1;
     // One-off frame request (render_frame_pixels): posted by any thread, served here.
     bool frame_request_pending_ = false;
     bool frame_request_finished_ = false;

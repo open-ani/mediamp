@@ -10,8 +10,10 @@
 > 环 PNG 读回像素正确)。与计划的偏差:
 > - PR 以 `mediamp-mpv/render_d3d11.patch` 落地(构建链已有 patch 机制), 未建 fork;
 > - 帧同步用 `D3D11_QUERY_EVENT` 轮询(等价 glFinish), 未用 shared fence(留作 Phase 4);
-> - alpha 无需处理:`RGB_888x` 在 Skia D3D12 后端不可 wrap(非 renderable, 返回 null),
->   实际用 `RGBA_8888`, mpv d3d11 渲染器对不透明视频输出 alpha=1(像素验证);
+> - alpha:`RGB_888x` 在 Skia D3D12 后端不可 wrap(非 renderable, 返回 null), 实际用
+>   `RGBA_8888`。首版依赖 mpv d3d11 渲染器对不透明视频输出 alpha=1(像素验证);2026-11 起
+>   按 §6.3 ② 补了 native alpha-only pass(`d3dcompiler_47` 运行时编译, 失败则退回首版行为),
+>   与 GL 路径对齐;
 > - 消费端状态机与 Compose surface 已抽为两平台共享(`internal/MpvSurfaceRing.kt`,
 >   统一的 `MpvMediampPlayerSurfaceRing` composable), macOS 行为不变;
 > - 附带修复:`mpvRuntimeAllElements` 聚合 variant 缺 capability, 导致项目内

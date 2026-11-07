@@ -22,16 +22,17 @@ import org.openani.mediamp.mpv.utils.SkiaReadbackInterop
 import org.openani.mediamp.mpv.utils.SkiaRenderDeviceInterop
 
 /**
- * Windows backend for Skiko redrawers that have no D3D12 or OpenGL device to share
- * with: the software redrawers (Skiko's last fallback, e.g. when Direct3D 12 is
- * unavailable on Windows ARM64, over Remote Desktop, or in VMs) and ANGLE. Also the mode
- * [D3D11SurfaceConsumer] switches to when Skia's D3D12 device is on another adapter.
+ * The CPU readback mode of the Windows D3D11 producer (render_d3d11.cpp): the same render
+ * context as [D3D11SurfaceRingBackend], with every frame also copied to system memory,
+ * which [MpvReadbackSurface] draws as a raster image. Never attached as a player backend;
+ * [D3D11SurfaceConsumer] switches to it for Skiko redrawers that have no D3D12 device to
+ * share with (the software redrawers, Skiko's last fallback, e.g. when Direct3D 12 is
+ * unavailable on Windows ARM64, over Remote Desktop, or in VMs; ANGLE; OpenGL when the
+ * WGL producer is unavailable) and when Skia's D3D12 device is on another adapter.
  *
- * The producer is the regular D3D11 render path (render_d3d11.cpp) on the default
- * adapter, which falls back to WARP, so it works wherever Direct3D 11 does, unlike the
- * WGL producer, which needs a real OpenGL driver. The render thread copies each frame to
- * system memory and [MpvReadbackSurface] draws it as a raster image, so nothing from
- * Skiko's renderer is needed and no Skiko internals are reflected.
+ * The producer falls back to WARP, so this works wherever Direct3D 11 does, unlike the
+ * WGL producer, which needs a real OpenGL driver; nothing from Skiko's renderer is needed
+ * and no Skiko internals are reflected.
  */
 @OptIn(InternalMediampApi::class)
 internal object D3D11ReadbackSurfaceBackend : MpvReadbackBackend {

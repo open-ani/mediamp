@@ -90,6 +90,7 @@ log.
 |---|---|---|
 | `MEDIAMP_D3D11_ADAPTER` | `auto` (default), `default`, `warp`, `minimum-power`, `high-performance` | Where mpv's device is created: Skia's adapter; the system default adapter (the behaviour before devices followed Skia); the WARP software rasterizer; the power-saving or the high-performance GPU of a hybrid machine. |
 | `MEDIAMP_D3D11_MAX_FEATURE_LEVEL` | `11_1`, `11_0`, `10_1`, `10_0`, `9_3`, … | Hardware devices behave like a GPU that supports at most this level, so device creation fails where it would fail on such a GPU and mpv falls back to WARP. |
+| `MEDIAMP_D3D11_OPAQUE_ALPHA` | `1` (default), `0` | `0` skips the opaque-alpha pass the D3D11 producer runs after every frame it shares with Skia, so the screen shows exactly what mpv's d3d11 renderer leaves in the alpha channel (premultiplied sampling then exposes any alpha below 1 as a darkened or see-through video). |
 
 Combine them with Skiko's own switches: `SKIKO_RENDER_API` / `-Dskiko.renderApi=OPENGL`
 starts Compose on the chain Skiko takes after a failed D3D12 start (a GPU without a D3D12

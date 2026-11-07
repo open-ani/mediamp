@@ -50,11 +50,12 @@ internal class MpvBackendSelection {
          * The WGL producer needs a hardware OpenGL driver, which a machine whose Skiko
          * redrawer is (or was briefly) OpenGL may not have: Skiko itself creates its OpenGL
          * redrawer on the GL 1.1 generic implementation and only fails on its first frame.
-         * D3D11 readback needs nothing from Skiko's renderer and works wherever Direct3D 11
-         * does, WARP included.
+         * The D3D11 producer works wherever Direct3D 11 does, WARP included; with Skiko on
+         * OpenGL its consumer takes CPU frames (`SkiaDirectXInterop` reports device 0, see
+         * [D3D11SurfaceConsumer]), so nothing from Skiko's renderer is needed.
          */
         fun fallbackWhenUnavailable(backend: MpvSurfaceBackend): MpvSurfaceBackend? = when (backend) {
-            WindowsOpenGLSurfaceBackend -> D3D11ReadbackSurfaceBackend
+            WindowsOpenGLSurfaceBackend -> D3D11SurfaceRingBackend
             else -> null
         }
 

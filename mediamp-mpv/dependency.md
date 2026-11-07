@@ -325,13 +325,20 @@ Android 子项目额外选项：
 
 ## Windows 渲染与开发工作流
 
-Windows 后端根据已挂载 `SkiaLayer` 的实际 redrawer 类型选择：`Direct3DRedrawer`
-使用 D3D11 共享纹理，`WindowsOpenGLRedrawer` 使用 OpenGL readback。其他类型会明确报错。
+Windows 后端根据已挂载 `SkiaLayer` 的实际 redrawer 类型选择：只有 `WindowsOpenGLRedrawer`
+走独立的 OpenGL readback 生产者 (WGL)；`Direct3DRedrawer` 以及软件/ANGLE 等其他 redrawer 都
+使用同一个 D3D11 生产者——Direct3D 下共享纹理零拷贝, 没有 D3D12 设备可共享时
+(`SkiaDirectXInterop` 报告 device 0) 由 `D3D11SurfaceConsumer` 原地切到同一渲染上下文的 CPU
+读回模式 (`D3D11ReadbackSurfaceBackend` + `MpvReadbackSurface`), 与 macOS 的
+`MacosSurfaceConsumer` 对称。因此 Skiko 在播放中从 Direct3D 回退到软件渲染不会黑屏, 也不需要
+重建播放器；只有 D3D11 与 WGL 两个生产者之间的切换才要求无活动播放 (`MpvBackendChange`)。
 不读取 Skiko 的全局渲染偏好，因此启动时自动回退到 OpenGL 也能选中正确的后端。
 `SkiaLayerRedrawer` 封装 layer 和实时 redrawer 访问，所有平台 interop 共用；只缓存反射方法，
 不缓存 redrawer 实例。Windows 在首次挂载 surface 前的加载等待在 `Opening`，选择并初始化
 渲染后端后才发出 `loadfile`；预览解码器使用主播放器已选定的后端。窗口内同一类型的 redrawer
-重建仍由各 interop 实时读取；切换后端类型则需要重建播放器。
+重建仍由各 interop 实时读取；消费端的 GPU 操作都在 Skiko 当前 redrawer 的 `drawLock` 下执行
+(`SkiaGpuAccess`), Skiko 换 redrawer 到 `createSkiaInterop` 重新绑定锁之间的 draw pass 直接跳过
+(`rendersFor`)。
 
 Windows 桌面渲染路径 (`src/cpp/render_d3d11.cpp`): 专用 native 渲染线程通过 libmpv 的
 **D3D11 render API**(上游 PR [mpv#17764](https://github.com/mpv-player/mpv/pull/17764),
@@ -348,8 +355,23 @@ multithread-protected, 截图读回 (staging + WIC PNG) 可在 JNI 线程安全�
 Skia 侧的 `ID3D12Device` 从 Skiko `Direct3DRedrawer.device` / `Direct3DRenderer.device`
 (原生 `DirectXDevice` 结构指针, Kotlin 反射见 `utils/SkiaDirectXInterop.kt`) 提取, 原生侧做前缀读取与
 `QueryInterface` + Adapter/Device LUID 关联验证后才使用 (`skiko_directx_device.cpp` 内 `open_skia_d3d12_device`)。
-包装颜色类型为 `RGBA_8888`(`RGB_888x` 不可 wrap 为 render target; mpv d3d11
-渲染器对不透明视频输出 alpha=1, 已经像素验证)。
+包装颜色类型为 `RGBA_8888`(`RGB_888x` 不可 wrap 为 render target)。Skia 按 premultiplied
+采样, 所以与 GL 路径一样, 每帧 mpv 渲染完后 native 侧再跑一次 alpha-only pass 把共享纹理的
+alpha 写成 1 (全屏三角形 + 只写 alpha 的 blend write mask; shader 在创建设备时经
+`d3dcompiler_47.dll` 运行时编译, 失败则跳过该 pass, 退回依赖 mpv d3d11 渲染器实际输出的
+alpha=1)。消费端对 wrapped surface 直接 `makeImageSnapshot` (Skia 不拥有 wrapped render
+target, snapshot 本身就是一次 GPU→GPU 拷贝进 Skia 自有纹理), 每帧只有这一次拷贝。
+
+环的写入槽位: 没有 GPU fence 排序生产者写与 Skia 读 (D3D11→D3D12 需要 Skiko 的 command
+queue), 所以消费端每次采样前通过 `nMarkBufferInUse*` 告知渲染线程它正在读哪一块, 渲染线程不写
+已发布的那块和消费端标记的那块, 剩余槽位里优先选消费端上一次没读的 (`surface_ring.h`
+`next_render_index_locked`); 消费端卡顿时它的槽位保持不动, 而不是两帧后被覆盖。帧节奏:
+`mpv_render_context_render` 默认阻塞到目标显示时间, 由 mpv 的音频时钟驱动; 没有调用
+`mpv_render_context_report_swap`, 因此 `video-sync=display-*` 不可用, 播放器使用 `video-sync=audio`。
+
+已知限制: D3D11 设备被移除 (驱动更新、GPU reset/TDR) 后不会恢复——mpv render context 与
+`ID3D11Device` 同生命周期, 播放中释放它会关闭视频 (render.h); `wait_for_gpu` 记录一次移除原因后
+不再发布帧, 视频黑屏直到重建播放器。
 
 本地开发 (无 Homebrew 等价物, 必须用本仓库构建的 patched libmpv):
 
