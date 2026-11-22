@@ -79,6 +79,24 @@ overrides what the scenarios are testing.
   Skiko fallbacks and missed expectations into failures. One scenario:
   `./gradlew :mediamp-mpv:renderPathTest_skia-igpu-mpv-dgpu`.
 
+## Hung scenarios
+
+A scenario normally ends within seconds. Its test body has its own timeouts, but a JVM stuck
+in native teardown or in JVM exit is past them: the test has usually passed by then and the
+process simply never ends. That is how a driver deadlock on thread or process exit shows up.
+
+- After two minutes the build writes the threads of the scenario's JVM to
+  `hang-java-stacks-<pid>.txt` (`jcmd Thread.print`) and `hang-native-stacks-<pid>.txt`
+  (`jhsdb jstack --mixed`, which reads the process from outside and adds native frames). They
+  land next to the scenario's other results, so they are in the artifact.
+- Gradle then kills the JVM and fails the scenario's task with `Timeout has been exceeded`.
+  With `--continue` the remaining scenarios still run.
+- The summary shows the scenario as `JVM hung`, or `PASS, then JVM hung` when the test body
+  finished first.
+
+The dump is the only evidence such a hang leaves, so read it before rerunning. The workflow
+job itself is limited to two hours.
+
 ## Reproducing a user's GPU environment
 
 The scenarios are built from switches that also work when diagnosing a user's machine

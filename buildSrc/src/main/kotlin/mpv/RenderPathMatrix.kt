@@ -17,7 +17,11 @@ import org.gradle.api.Project
 import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 import java.io.File
+import java.time.Duration
+import java.time.Instant
 import java.util.Properties
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * Hardware a scenario needs. Each tier includes the ones before it: `renderPathMatrix` runs
@@ -217,6 +221,11 @@ fun Project.configureRenderPathMatrix() {
             // The outcome depends on the machine's GPU and drivers, which are not task inputs.
             outputs.upToDateWhen { false }
             outputs.cacheIf { false }
+            // A test JVM stuck in native teardown or in JVM exit is beyond the test's own
+            // timeouts. Gradle kills it here, so the remaining scenarios still run and the
+            // runner is not held until the job's time limit.
+            timeout.set(SCENARIO_TIMEOUT)
+            var hangDump: Thread? = null
             doFirst {
                 outputDir.deleteRecursively()
                 scenario.windowsGpuPreference?.let { preference ->
@@ -224,7 +233,9 @@ fun Project.configureRenderPathMatrix() {
                     val java = javaLauncher.orNull?.executablePath?.asFile?.absolutePath ?: executable
                     WindowsGpuPreferences.set(java, preference, matrixDir.resolve(".gpu-preference-${scenario.name}"))
                 }
+                hangDump = dumpThreadsIfHung(this as Test, outputDir)
             }
+            doLast { hangDump?.interrupt() }
             restorePreference?.let { finalizedBy(it) }
             finalizedBy(report)
         }
@@ -237,6 +248,68 @@ fun Project.configureRenderPathMatrix() {
             "default ci) for this host; use --continue to run every scenario"
         dependsOn(scenarios.zip(scenarioTasks).filter { (scenario, _) -> scenario.tier <= selectedTier }.map { it.second })
     }
+}
+
+/** A healthy scenario ends within seconds, WARP within about half a minute. */
+private val SCENARIO_HANG_AFTER: Duration = Duration.ofMinutes(2)
+
+/** How long one stack dump tool may run against a hung test JVM. */
+private val HANG_DUMP_TOOL_TIMEOUT: Duration = Duration.ofSeconds(45)
+
+/** Leaves both dump tools their full time before Gradle kills the hung test JVM. */
+private val SCENARIO_TIMEOUT: Duration = SCENARIO_HANG_AFTER + HANG_DUMP_TOOL_TIMEOUT.multipliedBy(2) + Duration.ofSeconds(30)
+
+/**
+ * Records where the threads of a hung scenario are, as `hang-*.txt` next to the scenario's
+ * results, before the task timeout kills its JVM. The process is the only evidence such a hang
+ * leaves: the test body has usually passed by then, and the JVM is stuck in native code.
+ *
+ * `jcmd` gives the Java stacks while the JVM still answers. `jhsdb` reads the process from
+ * outside and adds native frames, which is what a hang during JVM exit needs.
+ */
+private fun dumpThreadsIfHung(task: Test, outputDir: File): Thread {
+    // Process start times are coarser than Instant.now() on some systems.
+    val startedAfter = Instant.now().minusSeconds(2)
+    val jdkBin = File(task.javaLauncher.orNull?.executablePath?.asFile?.absolutePath ?: task.executable).parentFile
+    return thread(isDaemon = true, name = "render-path-hang-dump-${task.name}") {
+        try {
+            Thread.sleep(SCENARIO_HANG_AFTER.toMillis())
+        } catch (_: InterruptedException) {
+            return@thread
+        }
+        if (!task.state.executing) return@thread
+        // Scenarios run one at a time, so a java process this build started after the task
+        // began is the scenario's test JVM.
+        val testJvms = ProcessHandle.current().descendants()
+            .filter { it.isAlive && it.info().startInstant().map { started -> started.isAfter(startedAfter) }.orElse(false) }
+            .filter { it.info().command().map { command -> File(command).nameWithoutExtension == "java" }.orElse(false) }
+            .toList()
+        task.logger.error(
+            "${task.path} is still running after ${SCENARIO_HANG_AFTER.toSeconds()} s. " +
+                "Dumping the threads of its JVM (pid ${testJvms.joinToString { it.pid().toString() }}) into $outputDir",
+        )
+        outputDir.mkdirs()
+        for (jvm in testJvms) {
+            val pid = jvm.pid().toString()
+            runDumpTool(jdkBin, outputDir.resolve("hang-java-stacks-$pid.txt"), "jcmd", pid, "Thread.print", "-l")
+            runDumpTool(jdkBin, outputDir.resolve("hang-native-stacks-$pid.txt"), "jhsdb", "jstack", "--mixed", "--pid", pid)
+        }
+    }
+}
+
+private fun runDumpTool(jdkBin: File, output: File, tool: String, vararg args: String) {
+    val executable = jdkBin.resolve(if (getOs() == Os.Windows) "$tool.exe" else tool)
+    if (!executable.isFile) {
+        output.writeText("$executable does not exist\n")
+        return
+    }
+    runCatching {
+        val process = ProcessBuilder(executable.absolutePath, *args).redirectErrorStream(true).redirectOutput(output).start()
+        if (!process.waitFor(HANG_DUMP_TOOL_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+            process.destroyForcibly().waitFor()
+            output.appendText("\n$tool did not finish within ${HANG_DUMP_TOOL_TIMEOUT.toSeconds()} s and was stopped\n")
+        }
+    }.onFailure { output.appendText("\n$tool could not run: $it\n") }
 }
 
 private fun renderPathReport(
@@ -260,8 +333,18 @@ private fun renderPathReport(
     for (scenario in scenarios) {
         val file = matrixDir.resolve("${scenario.name}/result.properties")
         val fresh = file.isFile && file.lastModified() >= buildStartMillis
+        // Written by dumpThreadsIfHung: the test JVM outlived the scenario and was killed.
+        val hung = file.parentFile.listFiles().orEmpty()
+            .any { it.name.startsWith("hang-") && it.lastModified() >= buildStartMillis }
+        val hangNote = "**JVM hung:** the test JVM was still running after ${SCENARIO_HANG_AFTER.toSeconds()} s and was " +
+            "killed. Its thread dumps are the `hang-*.txt` files of this scenario in the uploaded results."
         if (!fresh) {
-            if (scenario.tier <= selectedTier) {
+            if (hung) {
+                appendLine("| ${scenario.name} | ${scenario.tier.name.lowercase()} | | | | | | | JVM hung |")
+                details.appendLine("<details><summary>${scenario.name}</summary>").appendLine()
+                details.appendLine(hangNote).appendLine()
+                details.appendLine("</details>").appendLine()
+            } else if (scenario.tier <= selectedTier) {
                 appendLine("| ${scenario.name} | ${scenario.tier.name.lowercase()} | | | | | | | not run |")
             }
             continue
@@ -272,13 +355,15 @@ private fun renderPathReport(
         val skiko = get("actualApi") + (result.getProperty("redrawer")?.let { " ($it)" } ?: "")
         appendLine(
             "| ${scenario.name} | ${scenario.tier.name.lowercase()} | $skiko | ${get("mediampRenderer")} | " +
-                "${get("skiaAdapter")} | ${get("mpvAdapter")} | ${get("hwdec")} | ${get("droppedFrames")} | ${get("result")} |",
+                "${get("skiaAdapter")} | ${get("mpvAdapter")} | ${get("hwdec")} | ${get("droppedFrames")} | " +
+                "${get("result")}${if (hung) ", then JVM hung" else ""} |",
         )
         val failure = result.getProperty("failure")
         val log = result.getProperty("log").orEmpty()
-        if (failure != null || log.isNotBlank()) {
+        if (failure != null || hung || log.isNotBlank()) {
             details.appendLine("<details><summary>${scenario.name}</summary>").appendLine()
             failure?.let { details.appendLine("**Failure:** `${it.replace("`", "'")}`").appendLine() }
+            if (hung) details.appendLine(hangNote).appendLine()
             if (log.isNotBlank()) details.appendLine("```").appendLine(log).appendLine("```")
             details.appendLine("</details>").appendLine()
         }
