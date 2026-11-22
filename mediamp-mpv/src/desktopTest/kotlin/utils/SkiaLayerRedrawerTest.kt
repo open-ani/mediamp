@@ -23,7 +23,7 @@ class SkiaLayerRedrawerTest {
         SwingUtilities.invokeAndWait {
             val layer = SkiaLayer()
             val liveLayer = SkiaLayerRedrawer(layer)
-            if (SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }) {
+            if (SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }) {
                 try {
                     assertNull(liveLayer.redrawerOrNull)
                     assertFailsWith<IllegalStateException> { liveLayer.redrawer }
