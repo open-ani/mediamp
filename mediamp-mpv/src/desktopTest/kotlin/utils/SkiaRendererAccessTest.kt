@@ -85,7 +85,7 @@ class SkiaRendererAccessTest {
 
     @Test
     fun `runtime renderer context layouts are supported on every desktop platform`() {
-        val modern = SkiaLayer::class.java.methods.any { it.name == "getFrameDriver\$skiko" }
+        val modern = SkiaLayer::class.java.methods.any { it.name.startsWith("getFrameDriver\$") }
         val names = if (modern) {
             listOf("renderer.MetalRenderer", "renderer.Direct3DRenderer",
                 "renderer.LinuxOpenGLRenderer", "renderer.WindowsOpenGLRenderer")

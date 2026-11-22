@@ -13,7 +13,7 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
         google()
-        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev") // Compose Multiplatform pre-release versions
+        maven("https://packages.jetbrains.team/maven/p/cmp/dev") // Compose Multiplatform pre-release versions
     }
 }
 
