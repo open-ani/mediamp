@@ -41,7 +41,7 @@ Each MediaMP version is built against the following Compose Multiplatform (CMP) 
 
 | MediaMP version | CMP version |
 |:----------------|:------------|
-| 0.4.0–0.5.0 | 1.12.0 |
+| 0.4.0–0.5.3 | 1.12.0 |
 | 0.1.3–0.3.2 | 1.10.1 |
 | 0.0.1–0.1.2 | 1.7.1 |
 
