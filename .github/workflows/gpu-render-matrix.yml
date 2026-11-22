@@ -41,6 +41,7 @@ jobs:
       GIT_CONFIG_KEY_0: 'core.fsmonitor'
       GIT_CONFIG_VALUE_0: 'false'
     if: '${{ github.repository == ''open-ani/mediamp'' }}'
+    timeout-minutes: 120
     steps:
     - id: 'step-0'
       uses: 'actions/checkout@v4'

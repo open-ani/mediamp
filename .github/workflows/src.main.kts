@@ -565,6 +565,9 @@ workflow(
         // The runner is a personal machine with a signed-in desktop, so the repository's fork
         // pull request approval setting is what keeps unreviewed code off it.
         `if` = expr { github.isAnimekoRepository },
+        // A healthy run takes under half an hour, and Gradle bounds every scenario on its own.
+        // This only keeps the machine from being held for GitHub's default six hours.
+        timeoutMinutes = 120,
         // Keep the machine's global git config from starting fsmonitor daemons: they outlive the
         // job and hold its directories open.
         env = mapOf(

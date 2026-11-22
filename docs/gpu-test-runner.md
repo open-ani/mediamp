@@ -79,6 +79,32 @@ overrides what the scenarios are testing.
   Skiko fallbacks and missed expectations into failures. One scenario:
   `./gradlew :mediamp-mpv:renderPathTest_skia-igpu-mpv-dgpu`.
 
+## Hung scenarios
+
+A scenario normally ends within seconds. Its test body has its own timeouts, but a JVM stuck
+in native teardown or in JVM exit is past them: the test has usually passed by then and the
+process simply never ends. That is how a driver deadlock on thread or process exit shows up.
+
+- After two minutes the build writes the threads of the scenario's JVM into `hang-*.txt` files
+  next to the scenario's other results, so they are in the artifact:
+  - `hang-native-stacks-<pid>.txt`: complete native stacks of every thread, from
+    `ci-helper/stackdump.c`. Windows x64 only. The build compiles it on first use with the
+    MSYS2 gcc that also builds mpv.
+  - `hang-jhsdb-stacks-<pid>.txt`: `jhsdb jstack --mixed`. On Windows it shows a single frame
+    per native thread.
+  - `hang-java-stacks-<pid>.txt`: `jcmd Thread.print`. It cannot attach while a thread holds
+    the loader lock, because attaching starts a thread in the process.
+- Gradle then kills the JVM and fails the scenario's task with `Timeout has been exceeded`.
+  With `--continue` the remaining scenarios still run.
+- Frames of `mediampv.dll` come out as an offset from the nearest exported function. Resolve
+  them with `nm -n -C` on the DLL of the same build (`mediamp-mpv/build/mpv-output`), using
+  the module offset printed next to each frame.
+- The summary shows the scenario as `JVM hung`, or `PASS, then JVM hung` when the test body
+  finished first.
+
+The dump is the only evidence such a hang leaves, so read it before rerunning. The workflow
+job itself is limited to two hours.
+
 ## Reproducing a user's GPU environment
 
 The scenarios are built from switches that also work when diagnosing a user's machine
