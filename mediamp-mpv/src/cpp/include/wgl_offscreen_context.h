@@ -13,12 +13,11 @@
 
 #include <windows.h>
 
-#include <condition_variable>
-#include <mutex>
 #include <string>
-#include <thread>
 
 namespace mediampv {
+
+struct wgl_drawable;
 
 /**
  * A private OpenGL context for the Windows OpenGL fallback producer
@@ -39,10 +38,22 @@ namespace mediampv {
  * and a cross-thread sent message is only delivered while the owning thread is inside
  * message retrieval. The render thread spends its life in condition waits, mpv
  * rendering and JNI upcalls, so it must not own a window; the pump thread services it
- * at all times. Window and GDI operations (creation, pixel format, destruction) all
+ * at all times. Window and GDI operations (creation, pixel format) all
  * happen on the pump thread; the render thread only creates, uses and deletes the WGL
  * context (HDCs and HGLRCs are not thread-affine — a context is simply current on one
  * thread at a time).
+ *
+ * The window and its pump thread are never destroyed. destroy() deletes the context and
+ * parks the window for the next create() in this process. DestroyWindow on a window with
+ * a pixel format runs the OpenGL driver's own window hook, and NVIDIA's (576.02) creates
+ * a D3D11 device there while holding a driver lock, which needs the loader lock. A thread
+ * that exits at that moment holds the loader lock and waits for the same driver lock in
+ * the driver's DLL_THREAD_DETACH. The process then deadlocks with the loader lock taken:
+ * no thread can start or exit and no library can load afterwards. Player teardown is
+ * exactly when other threads exit (mpv's workers, the JVM's), and on a hybrid GPU laptop
+ * about one in eight teardowns of this fallback ended that way. Never destroying the
+ * window keeps the driver out of that hook. The cost is one idle 1x1 window and thread
+ * per fallback player that was open at the same time, kept until the process ends.
  *
  * Thread affinity: create() must run on the thread that will use the context (the
  * render thread). It leaves the context current on success. destroy() must run on that
@@ -51,9 +62,9 @@ namespace mediampv {
 class wgl_offscreen_context final {
 public:
     /**
-     * Starts the window thread (which creates the hidden window and picks a
-     * hardware-accelerated (ICD) pixel format), then creates the context on the
-     * calling thread — preferring a 3.3 core profile through
+     * Takes a parked window, or starts a window thread (which creates the hidden window
+     * and picks a hardware-accelerated (ICD) pixel format), then creates the context on
+     * the calling thread, preferring a 3.3 core profile through
      * wglCreateContextAttribsARB with a legacy wglCreateContext fallback. On success
      * the context is current on the calling thread. Returns null with *error set on
      * failure.
@@ -70,8 +81,8 @@ public:
     ~wgl_offscreen_context();
 
     /**
-     * Releases and deletes the context from the calling thread, then closes the
-     * window (on its pump thread, via WM_CLOSE) and joins the window thread.
+     * Releases and deletes the context from the calling thread and parks the window for
+     * reuse. The window is not destroyed, see the class comment.
      */
     void destroy();
 
@@ -87,23 +98,10 @@ public:
 
 private:
     wgl_offscreen_context() = default;
-    void window_thread_loop();
-    void shutdown_window_thread();
 
-    // Written by the window thread during startup (before the ready handshake),
-    // read-only afterwards.
-    HWND window_ = nullptr;
-    HDC device_context_ = nullptr;
-    std::string window_error_;
-
+    // The hidden window this context draws to, held from create() until destroy().
+    wgl_drawable *drawable_ = nullptr;
     HGLRC context_ = nullptr; // owned by the render thread
-    std::thread window_thread_;
-
-    // Startup handshake: create() waits until the window thread has either published
-    // window_/device_context_ (with the pixel format set) or failed.
-    std::mutex startup_mutex_;
-    std::condition_variable startup_cv_;
-    bool startup_done_ = false;
 };
 
 } // namespace mediampv

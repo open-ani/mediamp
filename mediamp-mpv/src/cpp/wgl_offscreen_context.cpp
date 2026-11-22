@@ -12,7 +12,11 @@
 
 #include <GL/gl.h> // glGetString, for logging what the driver actually gave us
 
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include "log.h"
 
@@ -48,8 +52,10 @@ constexpr int kContextAttributes[] = {
 };
 
 LRESULT CALLBACK producer_window_proc(HWND window, UINT message, WPARAM w_param, LPARAM l_param) {
-    // WM_CLOSE -> DefWindowProc -> DestroyWindow; ending the message loop on
-    // WM_DESTROY lets destroy() shut the window thread down with one PostMessage.
+    // The window is never destroyed (see wgl_offscreen_context). DefWindowProc would answer
+    // WM_CLOSE with DestroyWindow, so a close request from outside is dropped here.
+    if (message == WM_CLOSE) return 0;
+    // Should the window be destroyed regardless, its thread has nothing left to pump.
     if (message == WM_DESTROY) {
         PostQuitMessage(0);
         return 0;
@@ -205,47 +211,67 @@ HGLRC create_and_bind_context(HDC device_context, std::string *error) {
 
 namespace mediampv {
 
-// Runs on the dedicated window thread: creates the hidden window, sets its pixel
-// format, publishes the handles, then pumps messages until WM_DESTROY. GetMessageW
-// keeps the thread inside message retrieval at all times, so cross-thread sent
-// messages (activation/focus bookkeeping when other process windows close) are always
-// delivered promptly instead of deadlocking their sender.
-void wgl_offscreen_context::window_thread_loop() {
-    std::string error;
+// The hidden window of one context and the thread that pumps it. Never destroyed: between
+// two contexts it waits in idle_drawables().
+struct wgl_drawable {
+    // Written by the window thread during startup (before the ready handshake), read-only
+    // afterwards.
     HWND window = nullptr;
     HDC device_context = nullptr;
-    if (ensure_window_class(&error)) {
-        window = CreateWindowExW(
+    std::string error;
+
+    // Startup handshake: acquire_drawable() waits until the window thread has either
+    // published window/device_context (with the pixel format set) or failed.
+    std::mutex startup_mutex;
+    std::condition_variable startup_cv;
+    bool startup_done = false;
+
+    void thread_loop();
+};
+
+// Runs on the dedicated window thread: creates the hidden window, sets its pixel
+// format, publishes the handles, then pumps messages for the rest of the process.
+// GetMessageW keeps the thread inside message retrieval at all times, so cross-thread
+// sent messages (activation/focus bookkeeping when other process windows close) are always
+// delivered promptly instead of deadlocking their sender.
+void wgl_drawable::thread_loop() {
+    std::string startup_error;
+    HWND created_window = nullptr;
+    HDC created_device_context = nullptr;
+    if (ensure_window_class(&startup_error)) {
+        created_window = CreateWindowExW(
             0, kWindowClassName, L"", WS_POPUP, 0, 0, 1, 1,
             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-        if (!window) {
-            error = "CreateWindowExW for the GL fallback drawable failed";
+        if (!created_window) {
+            startup_error = "CreateWindowExW for the GL fallback drawable failed";
             LOGE("CreateWindowExW failed: GetLastError=%lu", GetLastError());
         }
     }
-    if (window) {
+    if (created_window) {
         // CS_OWNDC hands out the window's private DC; it stays valid until the window
         // is destroyed and must not be released separately.
-        device_context = GetDC(window);
-        if (!device_context) {
-            error = "GetDC for the GL fallback drawable failed";
-        } else if (!set_producer_pixel_format(device_context, &error)) {
-            device_context = nullptr;
+        created_device_context = GetDC(created_window);
+        if (!created_device_context) {
+            startup_error = "GetDC for the GL fallback drawable failed";
+        } else if (!set_producer_pixel_format(created_device_context, &startup_error)) {
+            created_device_context = nullptr;
         }
-        if (!device_context) {
-            DestroyWindow(window);
-            window = nullptr;
+        if (!created_device_context) {
+            // No pixel format was set, so no OpenGL driver is attached to this window yet.
+            DestroyWindow(created_window);
+            created_window = nullptr;
         }
     }
     {
-        std::lock_guard<std::mutex> lock(startup_mutex_);
-        window_ = window;
-        device_context_ = device_context;
-        window_error_ = error;
-        startup_done_ = true;
+        std::lock_guard<std::mutex> lock(startup_mutex);
+        window = created_window;
+        device_context = created_device_context;
+        error = startup_error;
+        startup_done = true;
     }
-    startup_cv_.notify_all();
-    if (!window) return;
+    startup_cv.notify_all();
+    // Past this point the starter may have deleted this object if no window was created.
+    if (!created_window) return;
 
     // This line doubles as a build marker: its presence in a log confirms the running
     // mediampv.dll has the dedicated window pump thread.
@@ -258,29 +284,74 @@ void wgl_offscreen_context::window_thread_loop() {
     LOGI("WGL fallback window pump thread exited");
 }
 
-wgl_offscreen_context *wgl_offscreen_context::create(std::string *error) {
-    auto *context = new wgl_offscreen_context();
-    context->window_thread_ = std::thread([context] { context->window_thread_loop(); });
+namespace {
+
+struct drawable_pool {
+    std::mutex mutex;
+    std::vector<wgl_drawable *> idle;
+};
+
+// Leaked on purpose, like the windows it holds: process exit must not destroy it under
+// threads that are still pumping.
+drawable_pool &idle_drawables() {
+    static auto *pool = new drawable_pool();
+    return *pool;
+}
+
+wgl_drawable *acquire_drawable(std::string *error) {
     {
-        std::unique_lock<std::mutex> lock(context->startup_mutex_);
-        context->startup_cv_.wait(lock, [context] { return context->startup_done_; });
+        drawable_pool &pool = idle_drawables();
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        while (!pool.idle.empty()) {
+            wgl_drawable *drawable = pool.idle.back();
+            pool.idle.pop_back();
+            // Nothing here destroys a window. One that is gone anyway is dropped, and its
+            // object leaked because its thread may still be leaving the loop.
+            if (IsWindow(drawable->window)) {
+                LOGI("WGL fallback window reused");
+                return drawable;
+            }
+        }
     }
-    if (!context->window_) {
-        if (error) *error = context->window_error_;
-        if (context->window_thread_.joinable()) context->window_thread_.join();
-        delete context;
+    auto *drawable = new wgl_drawable();
+    std::thread thread([drawable] { drawable->thread_loop(); });
+    {
+        std::unique_lock<std::mutex> lock(drawable->startup_mutex);
+        drawable->startup_cv.wait(lock, [drawable] { return drawable->startup_done; });
+    }
+    if (!drawable->window) {
+        if (error) *error = drawable->error;
+        // No window was created, so the thread is on its way out.
+        thread.join();
+        delete drawable;
         return nullptr;
     }
+    // The thread pumps the window until the process ends.
+    thread.detach();
+    return drawable;
+}
+
+void release_drawable(wgl_drawable *drawable) {
+    drawable_pool &pool = idle_drawables();
+    std::lock_guard<std::mutex> lock(pool.mutex);
+    pool.idle.push_back(drawable);
+}
+
+} // namespace
+
+wgl_offscreen_context *wgl_offscreen_context::create(std::string *error) {
+    wgl_drawable *drawable = acquire_drawable(error);
+    if (!drawable) return nullptr;
+    auto *context = new wgl_offscreen_context();
+    context->drawable_ = drawable;
 
     // The GL context itself belongs to the calling (render) thread. HDCs are not
     // thread-affine, so using the window's DC from here is fine.
-    context->context_ = create_and_bind_context(context->device_context_, error);
+    context->context_ = create_and_bind_context(drawable->device_context, error);
     if (!context->context_) {
-        context->shutdown_window_thread();
         delete context;
         return nullptr;
     }
-
     LOGI("WGL fallback context ready: %s / %s / GL %s",
          reinterpret_cast<const char *>(glGetString(GL_VENDOR)),
          reinterpret_cast<const char *>(glGetString(GL_RENDERER)),
@@ -292,24 +363,7 @@ wgl_offscreen_context::~wgl_offscreen_context() {
     destroy();
 }
 
-void wgl_offscreen_context::shutdown_window_thread() {
-    if (window_) {
-        // WM_CLOSE -> DefWindowProc -> DestroyWindow (on the window thread, as
-        // required) -> WM_DESTROY -> PostQuitMessage ends the pump loop.
-        LOGI("WGL fallback window pump: closing window");
-        PostMessageW(window_, WM_CLOSE, 0, 0);
-    }
-    if (window_thread_.joinable()) window_thread_.join();
-    LOGI("WGL fallback window pump thread joined");
-    window_ = nullptr;
-    device_context_ = nullptr;
-}
-
 void wgl_offscreen_context::destroy() {
-    if (!context_ && !window_) {
-        if (window_thread_.joinable()) window_thread_.join();
-        return;
-    }
     if (context_) {
         if (wglGetCurrentContext() == context_) {
             wglMakeCurrent(nullptr, nullptr);
@@ -318,7 +372,12 @@ void wgl_offscreen_context::destroy() {
         context_ = nullptr;
         LOGI("WGL fallback context deleted");
     }
-    shutdown_window_thread();
+    if (drawable_) {
+        // Parked, not destroyed: see the class comment.
+        release_drawable(drawable_);
+        drawable_ = nullptr;
+        LOGI("WGL fallback window parked for reuse");
+    }
 }
 
 void *wgl_offscreen_context::get_proc_address(const char *name) const {

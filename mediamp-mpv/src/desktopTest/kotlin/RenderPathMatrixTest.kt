@@ -59,7 +59,10 @@ import kotlin.time.TimeSource
  * JVM was started with (`skiko.renderApi` plus the scenario's other overrides, set by the
  * `renderPathTest_<scenario>` Gradle tasks, see buildSrc `RenderPathMatrix.kt`), playing a
  * known-colour clip through [MpvMediampPlayerSurface], checked against what the screen
- * actually shows.
+ * actually shows. Two players run one after the other, each in its own window: an
+ * application opens a new player for the next video in the same process, and the second one
+ * has to work with what the first left behind (the Windows OpenGL fallback, for one, parks
+ * its hidden window for reuse instead of destroying it).
  *
  * The headless suites drive the native producer alone. This is the check that frames reach
  * the screen through the consumer path chosen from Skiko's *actual* redrawer, including the
@@ -116,79 +119,97 @@ class RenderPathMatrixTest {
             }
         }
 
-        runBlocking {
-            val player = withContext(Dispatchers.Main) { MpvMediampPlayer(Any(), Dispatchers.Default) }
-            val layout = SceneLayout()
-            val window = withContext(Dispatchers.Main) {
-                ComposeWindow().apply {
-                    title = "mediamp render path matrix: $scenario"
-                    setContent { RenderPathScene(player, layout) }
-                    setBounds(32, 32, 960, 640)
-                    isAlwaysOnTop = true
-                    isVisible = true
-                }
+        try {
+            runBlocking {
+                playThroughOnePlayer(clip, result, notableLog, second = false)
+                playThroughOnePlayer(clip, result, notableLog, second = true)
             }
-            val screen = ScreenProbe(window, layout)
-            try {
-                // The surface creates mpv's producer once Skiko has a redrawer; a later Skiko
-                // switch can still move it, so the path is recorded again at the end.
-                withTimeoutOrNull(30.seconds) {
-                    while (player.ringBackend == null) delay(100.milliseconds)
-                } ?: throw AssertionError("the surface did not pick an mpv render path within 30s")
-                recordPath(window, player, result)
-                if (strict) {
-                    assertEquals(requestedApi, result.getProperty("actualApi"), "Skiko fell back from the requested API")
-                }
+        } finally {
+            MPVHandle.setLogHandler(null)
+        }
+    }
 
-                withContext(Dispatchers.Main) {
-                    val handle = player.impl as MPVHandle
-                    hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
-                    player.setMediaData(
-                        UriMediaData(clip.absolutePath, emptyMap(), MediaExtraFiles.EMPTY),
-                        playWhenReady = false,
-                    )
-                    // A render-context lifecycle may set hwdec while loading; mpv applies a
-                    // runtime change by reinitializing the decoder, before the seeks below.
-                    hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
-                    player.seekTo(1_000)
-                }
-                screen.await("segment-a", 30.seconds) { it.video.near(SEGMENT_A_RGB) && it.uiIntact() }
+    /**
+     * Opens a window with a new player, checks that the clip reaches the screen, and closes
+     * both. The [second] player's captures are saved as `second-player-<name>.png`.
+     */
+    @OptIn(InternalMediampApi::class)
+    private suspend fun playThroughOnePlayer(
+        clip: File,
+        result: Properties,
+        notableLog: MutableList<String>,
+        second: Boolean,
+    ) {
+        val player = withContext(Dispatchers.Main) { MpvMediampPlayer(Any(), Dispatchers.Default) }
+        val layout = SceneLayout()
+        val window = withContext(Dispatchers.Main) {
+            ComposeWindow().apply {
+                title = "mediamp render path matrix: $scenario" + if (second) " (second player)" else ""
+                setContent { RenderPathScene(player, layout) }
+                setBounds(32, 32, 960, 640)
+                isAlwaysOnTop = true
+                isVisible = true
+            }
+        }
+        val screen = ScreenProbe(window, layout, capturePrefix = if (second) "second-player-" else "")
+        try {
+            // The surface creates mpv's producer once Skiko has a redrawer; a later Skiko
+            // switch can still move it, so the path is recorded again at the end.
+            withTimeoutOrNull(30.seconds) {
+                while (player.ringBackend == null) delay(100.milliseconds)
+            } ?: throw AssertionError("the surface did not pick an mpv render path within 30s")
+            recordPath(window, player, result)
+            if (strict) {
+                assertEquals(requestedApi, result.getProperty("actualApi"), "Skiko fell back from the requested API")
+            }
 
-                // A second, different frame proves the path keeps presenting new frames,
-                // not just the first one.
-                withContext(Dispatchers.Main) { player.seekTo(4_500) }
-                screen.await("segment-b", 20.seconds) { it.video.near(SEGMENT_B_RGB) && it.uiIntact() }
+            withContext(Dispatchers.Main) {
+                val handle = player.impl as MPVHandle
+                hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
+                player.setMediaData(
+                    UriMediaData(clip.absolutePath, emptyMap(), MediaExtraFiles.EMPTY),
+                    playWhenReady = false,
+                )
+                // A render-context lifecycle may set hwdec while loading; mpv applies a
+                // runtime change by reinitializing the decoder, before the seeks below.
+                hwdecOverride?.let { handle.setPropertyString("hwdec", it) }
+                player.seekTo(1_000)
+            }
+            screen.await("segment-a", 30.seconds) { it.video.near(SEGMENT_A_RGB) && it.uiIntact() }
 
-                withContext(Dispatchers.Main) { player.play() }
-                withTimeoutOrNull(20.seconds) { player.currentPositionMillis.first { it >= 6_500 } }
-                    ?: throw AssertionError("playback did not advance past 6.5s; at ${player.currentPositionMillis.value}ms")
-                screen.await("playing", 10.seconds) { it.video.near(SEGMENT_B_RGB) && it.uiIntact() }
+            // A second, different frame proves the path keeps presenting new frames,
+            // not just the first one.
+            withContext(Dispatchers.Main) { player.seekTo(4_500) }
+            screen.await("segment-b", 20.seconds) { it.video.near(SEGMENT_B_RGB) && it.uiIntact() }
 
-                withContext(Dispatchers.Main) {
-                    val handle = player.impl as MPVHandle
-                    result.setProperty("hwdec", handle.getPropertyString("hwdec-current") ?: "unknown")
-                    result.setProperty("droppedFrames", handle.getPropertyLongOrNull("frame-drop-count")?.toString() ?: "?")
-                }
-                recordPath(window, player, result)
-                if (strict && expectedHwdec != null) {
-                    assertEquals(expectedHwdec, result.getProperty("hwdec"), "hwdec-current")
-                }
-                result.setProperty("result", "PASS")
-            } catch (e: Throwable) {
-                result.setProperty("result", "FAIL")
-                result.setProperty("failure", e.toString())
-                throw e
-            } finally {
-                val log = synchronized(notableLog) { notableLog.toList() }
-                result.setProperty("log", log.joinToString("\n"))
-                log.lastMatch(SKIA_ADAPTER)?.let { result.setProperty("skiaAdapter", it) }
-                log.lastMatch(MPV_ADAPTER)?.let { result.setProperty("mpvAdapter", it) }
-                outputDir.resolve("result.properties").writer().use { result.store(it, null) }
-                withContext(Dispatchers.Main) {
-                    window.dispose()
-                    player.close()
-                }
-                MPVHandle.setLogHandler(null)
+            withContext(Dispatchers.Main) { player.play() }
+            withTimeoutOrNull(20.seconds) { player.currentPositionMillis.first { it >= 6_500 } }
+                ?: throw AssertionError("playback did not advance past 6.5s; at ${player.currentPositionMillis.value}ms")
+            screen.await("playing", 10.seconds) { it.video.near(SEGMENT_B_RGB) && it.uiIntact() }
+
+            withContext(Dispatchers.Main) {
+                val handle = player.impl as MPVHandle
+                result.setProperty("hwdec", handle.getPropertyString("hwdec-current") ?: "unknown")
+                result.setProperty("droppedFrames", handle.getPropertyLongOrNull("frame-drop-count")?.toString() ?: "?")
+            }
+            recordPath(window, player, result)
+            if (strict && expectedHwdec != null) {
+                assertEquals(expectedHwdec, result.getProperty("hwdec"), "hwdec-current")
+            }
+            result.setProperty("result", "PASS")
+        } catch (e: Throwable) {
+            result.setProperty("result", "FAIL")
+            result.setProperty("failure", if (second) "second player: $e" else e.toString())
+            throw e
+        } finally {
+            val log = synchronized(notableLog) { notableLog.toList() }
+            result.setProperty("log", log.joinToString("\n"))
+            log.lastMatch(SKIA_ADAPTER)?.let { result.setProperty("skiaAdapter", it) }
+            log.lastMatch(MPV_ADAPTER)?.let { result.setProperty("mpvAdapter", it) }
+            outputDir.resolve("result.properties").writer().use { result.store(it, null) }
+            withContext(Dispatchers.Main) {
+                window.dispose()
+                player.close()
             }
         }
     }
@@ -250,12 +271,16 @@ class RenderPathMatrixTest {
             "background=${background.hex()} video=${video.hex()} overlay=${overlay.hex()}"
     }
 
-    private inner class ScreenProbe(private val window: ComposeWindow, private val layout: SceneLayout) {
+    private inner class ScreenProbe(
+        private val window: ComposeWindow,
+        private val layout: SceneLayout,
+        private val capturePrefix: String,
+    ) {
         private val robot = if (hostOs == OS.Windows) null else Robot()
 
         /**
          * Captures until [accept] holds or [timeout] passes; the last capture is saved as
-         * `<name>.png` either way, so a failing cell shows what was on screen.
+         * `<capturePrefix><name>.png` either way, so a failing cell shows what was on screen.
          */
         suspend fun await(name: String, timeout: Duration, accept: (Samples) -> Boolean): Samples {
             val deadline = TimeSource.Monotonic.markNow() + timeout
@@ -263,7 +288,7 @@ class RenderPathMatrixTest {
                 val (image, samples) = capture()
                 val accepted = samples != null && accept(samples)
                 if (accepted || deadline.hasPassedNow()) {
-                    image?.let { ImageIO.write(it, "png", outputDir.resolve("$name.png")) }
+                    image?.let { ImageIO.write(it, "png", outputDir.resolve("$capturePrefix$name.png")) }
                     if (accepted) return samples!!
                     throw AssertionError("$name: screen did not match within $timeout; last capture: ${samples ?: "none"}")
                 }
@@ -334,7 +359,9 @@ class RenderPathMatrixTest {
         const val TOLERANCE = 48
 
         /** Log lines worth keeping in the matrix report besides errors. */
-        val NOTABLE_LOG = listOf("adapter", " surface", "Fallback", "hwdec", "readback", "overrides", "D3D11CreateDevice")
+        val NOTABLE_LOG = listOf(
+            "adapter", " surface", "Fallback", "hwdec", "readback", "overrides", "D3D11CreateDevice", "WGL fallback window",
+        )
 
         /** The native producer's adapter log lines (render_d3d11.cpp), including the mismatch error. */
         val SKIA_ADAPTER = Regex("""Skia(?:'s)? D3D12 device (?:is )?on adapter '([^']*)'""")
